@@ -1,0 +1,47 @@
+import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
+import { electronAPI } from '@electron-toolkit/preload'
+
+const terminal = {
+  spawn: (id: number, cols: number, rows: number, cwd?: string): void => {
+    ipcRenderer.send('pty:spawn', { id, cols, rows, cwd })
+  },
+  write: (id: number, data: string): void => {
+    ipcRenderer.send('pty:write', { id, data })
+  },
+  resize: (id: number, cols: number, rows: number): void => {
+    ipcRenderer.send('pty:resize', { id, cols, rows })
+  },
+  kill: (id: number): void => {
+    ipcRenderer.send('pty:kill', { id })
+  },
+  onData: (callback: (id: number, data: string) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: { id: number; data: string }): void =>
+      callback(payload.id, payload.data)
+    ipcRenderer.on('pty:data', listener)
+    return () => ipcRenderer.removeListener('pty:data', listener)
+  },
+  onExit: (callback: (id: number, exitCode: number) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: { id: number; exitCode: number }): void =>
+      callback(payload.id, payload.exitCode)
+    ipcRenderer.on('pty:exit', listener)
+    return () => ipcRenderer.removeListener('pty:exit', listener)
+  }
+}
+
+const api = { terminal }
+
+export type Api = typeof api
+
+if (process.contextIsolated) {
+  try {
+    contextBridge.exposeInMainWorld('electron', electronAPI)
+    contextBridge.exposeInMainWorld('api', api)
+  } catch (error) {
+    console.error(error)
+  }
+} else {
+  // @ts-ignore (define in dts)
+  window.electron = electronAPI
+  // @ts-ignore (define in dts)
+  window.api = api
+}
