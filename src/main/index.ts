@@ -3,6 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerPtyHandlers, disposeAllPty } from './pty'
+import { registerGitHandlers } from './git'
 
 function createWindow(): void {
   // Create the browser window.
@@ -55,6 +56,9 @@ app.whenReady().then(() => {
 
   // Register pseudo-terminal (node-pty) IPC handlers.
   registerPtyHandlers()
+
+  // Register git info IPC handlers; each call carries the repo cwd.
+  registerGitHandlers()
 
   createWindow()
 

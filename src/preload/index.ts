@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+import type { GitLog, GitStatus } from '../main/git'
 
 const terminal = {
   spawn: (id: number, cols: number, rows: number, cwd?: string): void => {
@@ -28,7 +29,13 @@ const terminal = {
   }
 }
 
-const api = { terminal }
+const git = {
+  isRepo: (cwd?: string): Promise<boolean> => ipcRenderer.invoke('git:isRepo', cwd),
+  log: (cwd?: string): Promise<GitLog> => ipcRenderer.invoke('git:log', cwd),
+  status: (cwd?: string): Promise<GitStatus> => ipcRenderer.invoke('git:status', cwd)
+}
+
+const api = { terminal, git }
 
 export type Api = typeof api
 

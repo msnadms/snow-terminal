@@ -5,12 +5,26 @@ import '@xterm/xterm/css/xterm.css'
 
 let nextTerminalId = 1
 
-interface TerminalProps {
-  cwd?: string
+function parseOsc7(payload: string): string | null {
+  const match = /^file:\/\/[^/]*(\/.*)$/.exec(payload)
+  if (!match) return null
+  let path = decodeURIComponent(match[1])
+  if (/^\/[A-Za-z]:/.test(path)) path = path.slice(1)
+  return path
 }
 
-function Terminal({ cwd }: TerminalProps): React.JSX.Element {
+interface TerminalProps {
+  cwd?: string
+  onCwd?: (cwd: string) => void
+}
+
+function Terminal({ cwd, onCwd }: TerminalProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
+  const onCwdRef = useRef(onCwd)
+
+  useEffect(() => {
+    onCwdRef.current = onCwd
+  }, [onCwd])
 
   useEffect(() => {
     const container = containerRef.current
@@ -36,6 +50,12 @@ function Terminal({ cwd }: TerminalProps): React.JSX.Element {
     fitAddon.fit()
 
     window.api.terminal.spawn(id, term.cols, term.rows, cwd)
+
+    const oscDisposable = term.parser.registerOscHandler(7, (payload) => {
+      const next = parseOsc7(payload)
+      if (next) onCwdRef.current?.(next)
+      return true
+    })
 
     const offData = window.api.terminal.onData((incomingId, data) => {
       if (incomingId === id) term.write(data)
@@ -66,6 +86,7 @@ function Terminal({ cwd }: TerminalProps): React.JSX.Element {
 
     return () => {
       resizeObserver.disconnect()
+      oscDisposable.dispose()
       offData()
       offExit()
       inputDisposable.dispose()

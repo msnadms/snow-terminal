@@ -1,7 +1,7 @@
 import { ipcMain, WebContents } from 'electron'
 import { spawn, IPty } from 'node-pty'
 import os from 'os'
-import process from 'process'
+import { shellSpec } from './shellIntegration'
 
 interface PtySession {
   pty: IPty
@@ -10,26 +10,19 @@ interface PtySession {
 
 const sessions = new Map<number, PtySession>()
 
-function defaultShell(): string {
-  if (process.platform === 'win32') {
-    return 'powershell.exe'
-  }
-  return process.env.SHELL || '/bin/bash'
-}
-
 export function registerPtyHandlers(): void {
   ipcMain.on(
     'pty:spawn',
     (event, { id, cols, rows, cwd }: { id: number; cols: number; rows: number; cwd?: string }) => {
       sessions.get(id)?.pty.kill()
 
-      const shell = defaultShell()
-      const pty = spawn(shell, [], {
+      const spec = shellSpec()
+      const pty = spawn(spec.file, spec.args, {
         name: 'xterm-256color',
         cols: cols || 80,
         rows: rows || 24,
         cwd: cwd || os.homedir(),
-        env: process.env as Record<string, string>
+        env: spec.env
       })
 
       const webContents = event.sender
