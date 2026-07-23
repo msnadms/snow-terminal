@@ -117,10 +117,12 @@ function RepoSection({ repo, multi, lanes, maxCommits }: RepoSectionProps): Reac
     const offChanged = window.api.git.onChanged((changedCwd) => {
       if (changedCwd === cwd) load()
     })
+    const offSnowignore = window.api.snowignore.onChanged(() => load())
 
     return () => {
       cancelled = true
       offChanged()
+      offSnowignore()
       window.api.git.unwatch(cwd)
     }
   }, [cwd, maxCommits])
@@ -131,7 +133,8 @@ function RepoSection({ repo, multi, lanes, maxCommits }: RepoSectionProps): Reac
     return <div className="git-empty">{error}</div>
   }
 
-  const changed = status?.changed ?? 0
+  const changed = status?.stageable ?? 0
+  const snowignored = (status?.changed ?? 0) - changed
 
   const commits = log?.commits ?? []
   const graphWidth = PADX + (log?.laneCount ?? 1) * LANE
@@ -149,6 +152,7 @@ function RepoSection({ repo, multi, lanes, maxCommits }: RepoSectionProps): Reac
         </span>
       )}
       {changed > 0 && <span className="git-dirty">{changed} changed</span>}
+      {snowignored > 0 && <span className="git-snowignored">{snowignored} ignored</span>}
     </>
   )
 

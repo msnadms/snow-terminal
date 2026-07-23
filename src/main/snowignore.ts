@@ -3,6 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import ignore, { Ignore } from 'ignore'
 import { configDir } from './config'
+import { log } from './log'
 
 export interface SnowignoreResult {
   patterns: string[]
@@ -89,6 +90,11 @@ function watchSnowignore(): void {
         timer = null
         matcher = null
         const result = readSnowignore()
+        log(result.error ? 'error' : 'info', 'snowignore', 'reloaded', {
+          path: result.path,
+          patterns: result.patterns.length,
+          error: result.error
+        })
         for (const window of BrowserWindow.getAllWindows()) {
           if (!window.webContents.isDestroyed())
             window.webContents.send('snowignore:changed', result)

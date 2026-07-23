@@ -23,6 +23,8 @@ body {
 }
 
 .actionbar {
+  position: relative;
+  z-index: 10;
   flex: 0 0 auto;
   height: 34px;
   display: flex;
@@ -74,6 +76,11 @@ body {
   border: 1px solid #313244;
   border-radius: 4px;
   cursor: pointer;
+  transition:
+    color 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease,
+    opacity 160ms ease;
   -webkit-app-region: no-drag;
 }
 
@@ -87,16 +94,179 @@ body {
   cursor: default;
 }
 
-.actionbar-status {
+.branch-select {
+  position: relative;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
+}
+
+.branch-button {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  height: 22px;
+  padding: 0 8px;
+  font: inherit;
+  color: #cdd6f4;
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease,
+    opacity 160ms ease;
+}
+
+.branch-button:hover:not(:disabled) {
+  border-color: #45475a;
+  color: #d8c07a;
+}
+
+.branch-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.flash-ok,
+.flash-ok:hover:not(:disabled),
+.flash-ok:disabled {
+  color: #a6e3a1;
+  background: #1b2a20;
+  border-color: #40704a;
+  opacity: 1;
+  transition: none;
+}
+
+.flash-error,
+.flash-error:hover:not(:disabled),
+.flash-error:disabled {
+  color: #f38ba8;
+  background: #2c1b22;
+  border-color: #7a3a4c;
+  opacity: 1;
+  transition: none;
+}
+
+.branch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-caret {
+  flex: 0 0 auto;
+  color: #6c7086;
+  font-size: 10px;
+}
+
+.branch-menu {
+  -webkit-app-region: no-drag;
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  max-width: 320px;
+  max-height: 320px;
+  padding: 4px;
+  background: #181825;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+}
+
+.branch-list {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.branch-item {
+  flex: 0 0 auto;
+  text-align: left;
+  padding: 5px 8px;
+  font: inherit;
   color: #a6adc8;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: pointer;
 }
 
-.actionbar-status-error {
-  color: #c3a865;
+.branch-item:hover {
+  color: #cdd6f4;
+  background: #313244;
+}
+
+.branch-item-current {
+  color: #d8c07a;
+}
+
+.branch-create {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid #313244;
+}
+
+.branch-create-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  font: inherit;
+  color: #cdd6f4;
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  outline: none;
+  user-select: text;
+}
+
+.branch-create-input:focus {
+  border-color: #45475a;
+}
+
+.branch-create-input::placeholder {
+  color: #5f5878;
+}
+
+.branch-create-button {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font: inherit;
+  color: #cdd6f4;
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.branch-create-button:hover:not(:disabled) {
+  border-color: #45475a;
+  color: #d8c07a;
+}
+
+.branch-create-button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .content {
@@ -472,6 +642,15 @@ body {
 .git-dirty {
   color: var(--git-dirty, #c3a865);
   margin-left: auto;
+}
+
+.git-snowignored {
+  color: var(--git-muted, #5f5878);
+  margin-left: auto;
+}
+
+.git-dirty + .git-snowignored {
+  margin-left: 6px;
 }
 
 .git-log {

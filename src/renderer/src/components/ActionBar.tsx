@@ -1,19 +1,21 @@
 import { useEffect, useState } from 'react'
+import BranchSelect from './BranchSelect'
+import { flashClass, useFlash } from '@renderer/useFlash'
 
 interface ActionBarProps {
   cwd?: string
 }
 
-interface ActionStatus {
-  ok: boolean
-  text: string
-}
-
 function ActionBar({ cwd }: ActionBarProps): React.JSX.Element {
   const [ready, setReady] = useState(false)
+  const [isRepo, setIsRepo] = useState(false)
   const [message, setMessage] = useState('')
   const [pending, setPending] = useState(false)
-  const [status, setStatus] = useState<ActionStatus | null>(null)
+  const [syncing, setSyncing] = useState(false)
+  const [pushFlash, flashPush] = useFlash()
+  const [syncFlash, flashSync] = useFlash()
+  const [pushError, setPushError] = useState('')
+  const [syncError, setSyncError] = useState('')
   const [refreshKey, setRefreshKey] = useState(0)
 
   useEffect(() => {
@@ -21,8 +23,10 @@ function ActionBar({ cwd }: ActionBarProps): React.JSX.Element {
 
     const check = async (): Promise<void> => {
       const repo = cwd ? await window.api.git.isRepo(cwd) : false
+      if (cancelled) return
+      setIsRepo(repo)
       if (!repo) {
-        if (!cancelled) setReady(false)
+        setReady(false)
         return
       }
       try {
@@ -44,20 +48,37 @@ function ActionBar({ cwd }: ActionBarProps): React.JSX.Element {
     }
   }, [cwd, refreshKey])
 
-  const canSubmit = ready && !pending && message.trim() !== ''
+  const busy = pending || syncing
+  const canSubmit = ready && !busy && message.trim() !== ''
 
   const submit = async (): Promise<void> => {
     if (!canSubmit) return
     setPending(true)
-    setStatus(null)
     const result = await window.api.git.commitPush(cwd, message.trim())
     setPending(false)
     setRefreshKey((key) => key + 1)
     if (result.ok) {
       setMessage('')
-      setStatus({ ok: true, text: 'Pushed' })
+      setPushError('')
+      flashPush('ok')
     } else {
-      setStatus({ ok: false, text: result.error ?? 'git command failed' })
+      setPushError(result.error ?? 'git command failed')
+      flashPush('error')
+    }
+  }
+
+  const syncDefault = async (): Promise<void> => {
+    if (!isRepo || busy) return
+    setSyncing(true)
+    const result = await window.api.git.syncDefault(cwd)
+    setSyncing(false)
+    setRefreshKey((key) => key + 1)
+    if (result.ok) {
+      setSyncError('')
+      flashSync('ok')
+    } else {
+      setSyncError(result.error ?? 'git command failed')
+      flashSync('error')
     }
   }
 
@@ -67,25 +88,29 @@ function ActionBar({ cwd }: ActionBarProps): React.JSX.Element {
         className="actionbar-input"
         placeholder="Commit message"
         value={message}
-        disabled={!ready || pending}
-        onChange={(e) => {
-          setMessage(e.target.value)
-          setStatus(null)
-        }}
+        disabled={!ready || busy}
+        onChange={(e) => setMessage(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') submit()
         }}
       />
-      <button className="actionbar-button" disabled={!canSubmit} onClick={submit}>
+      <button
+        className={`actionbar-button${flashClass(pushFlash)}`}
+        disabled={!canSubmit}
+        onClick={submit}
+        title={pushError || undefined}
+      >
         {pending ? 'Working…' : 'Add, Commit, Push'}
       </button>
-      {status && (
-        <span
-          className={status.ok ? 'actionbar-status' : 'actionbar-status actionbar-status-error'}
-        >
-          {status.text}
-        </span>
-      )}
+      <button
+        className={`actionbar-button${flashClass(syncFlash)}`}
+        disabled={!isRepo || busy}
+        onClick={syncDefault}
+        title={syncError || "Fetch and check out origin's default branch"}
+      >
+        {syncing ? 'Syncing…' : 'Sync Default'}
+      </button>
+      <BranchSelect key={cwd ?? 'none'} cwd={cwd} />
     </div>
   )
 }

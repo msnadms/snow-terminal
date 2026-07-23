@@ -3,6 +3,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { configDir } from './config'
+import { log } from './log'
 
 export interface Preset {
   name: string
@@ -109,6 +110,10 @@ function watchSnowconfig(): void {
       timer = setTimeout(() => {
         timer = null
         const result = readSnowconfig()
+        log(result.error ? 'error' : 'info', 'snowconfig', 'reloaded', {
+          path: result.path,
+          error: result.error
+        })
         for (const window of BrowserWindow.getAllWindows()) {
           if (!window.webContents.isDestroyed())
             window.webContents.send('snowconfig:changed', result)

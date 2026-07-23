@@ -7,6 +7,10 @@ import { registerGitHandlers, disposeGitWatchers } from './git'
 import { registerThemeHandlers, disposeThemeWatcher } from './theme'
 import { registerSnowignoreHandlers, disposeSnowignoreWatcher } from './snowignore'
 import { registerSnowconfigHandlers, disposeSnowconfigWatcher } from './snowconfig'
+import { initLogging, closeLogging, log, logPath, watchRenderer } from './log'
+import { configDir } from './config'
+
+initLogging()
 
 function createWindow(): void {
   // Create the browser window.
@@ -23,9 +27,14 @@ function createWindow(): void {
     }
   })
 
+  watchRenderer(mainWindow.webContents)
+
   mainWindow.on('ready-to-show', () => {
+    log('info', 'window', 'shown', { id: mainWindow.id })
     mainWindow.show()
   })
+
+  mainWindow.on('closed', () => log('info', 'window', 'closed'))
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -73,6 +82,8 @@ app.whenReady().then(() => {
   // Load ~/.config/snow/.snowconfig and watch it for edits.
   registerSnowconfigHandlers()
 
+  log('info', 'app', 'ready', { log: logPath(), config: configDir() })
+
   createWindow()
 
   app.on('activate', function () {
@@ -98,6 +109,7 @@ app.on('will-quit', () => {
   disposeThemeWatcher()
   disposeSnowignoreWatcher()
   disposeSnowconfigWatcher()
+  closeLogging()
 })
 
 // In this file you can include the rest of your app's specific main process

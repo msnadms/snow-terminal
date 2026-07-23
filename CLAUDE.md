@@ -50,8 +50,9 @@ Key files:
 
 ### User config
 
-Both config files live in `~/.config/snow/` (`$XDG_CONFIG_HOME/snow/` when set); `configDir()` in
-`src/main/config.ts` is the single place that resolves the directory.
+All config files live in `~/.config/snow/` (`$XDG_CONFIG_HOME/snow/` when set); `configDir()` in
+`src/main/config.ts` is the single place that resolves the directory. The log (`snow.log`) is written
+there too; each watcher filters `fs.watch` events by basename, so log writes never retrigger them.
 
 #### `theme.json`
 
@@ -92,6 +93,25 @@ every window in sync. `useSnowconfig` (`src/renderer/src/useSnowconfig.ts`) is t
 `HomePage` renders each preset with a default checkbox (radio-like via `setDefault`) plus an add form.
 Opening a preset calls `App`'s `addSession(cwd)`, which seeds the session's cwd (so git/tab-label are
 correct before the shell's first OSC 7) and passes it to both terminals' spawn.
+
+#### `snow.log`
+
+`src/main/log.ts` owns it. `initLogging()` runs at the top of `src/main/index.ts` — before
+`app.whenReady()`, so nothing registered later escapes it — and does three things: opens an append
+stream to `snow.log` (rotated to `snow.log.1` past 5 MB), tees main-process `console.*` into it, and
+monkey-patches `ipcMain.handle`/`ipcMain.on` so **every** IPC call is logged with its args, result or
+thrown error, and duration. That wrapper is why `git.ts` needs no logging code of its own. Lines are
+`ISO-timestamp LEVEL [scope] message`, and values are JSON-serialized then truncated at 400 chars.
+
+Two sets of exclusions. Terminal content: `pty:write` and `pty:resize` are in `quietChannels`
+(logging keystrokes would make this a keylogger and swamp the file), and `pty:data` flows
+main→renderer so it is never seen by the wrapper. PTY *lifecycle* is still logged explicitly in
+`pty.ts` (`spawn` with pid/shell/cwd, `exit` with code). Presets: the `snowconfig:*` channels are in
+`redactedChannels`, so the call and its duration are logged but the args/result payload is not.
+
+Renderer output reaches the file through `watchRenderer(webContents)` in `createWindow`, which
+forwards `console-message`, `render-process-gone`, `did-fail-load`, and `preload-error` — so the
+renderer needs no logging API and gets no new privilege. `closeLogging()` on `will-quit` flushes.
 
 ## Session tabs
 

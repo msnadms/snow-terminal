@@ -2,6 +2,7 @@ import { ipcMain, WebContents } from 'electron'
 import { spawn, IPty } from 'node-pty'
 import os from 'os'
 import { shellSpec } from './shellIntegration'
+import { log } from './log'
 
 interface PtySession {
   pty: IPty
@@ -43,6 +44,16 @@ export function registerPtyHandlers(): void {
         env: spec.env
       })
 
+      log('info', 'pty', 'spawn', {
+        id,
+        pid: pty.pid,
+        file: spec.file,
+        cwd: cwd || os.homedir(),
+        cols: cols || 80,
+        rows: rows || 24,
+        startupCommand
+      })
+
       if (startupCommand) {
         pty.write(`${startupCommand}\r`)
       }
@@ -63,6 +74,7 @@ export function registerPtyHandlers(): void {
       })
 
       pty.onExit(({ exitCode }) => {
+        log('info', 'pty', 'exit', { id, pid: pty.pid, exitCode })
         safeSend('pty:exit', { id, exitCode })
         if (sessions.get(id)?.pty === pty) sessions.delete(id)
       })

@@ -2,6 +2,7 @@ import { ipcMain, BrowserWindow } from 'electron'
 import fs from 'fs'
 import path from 'path'
 import { configDir } from './config'
+import { log } from './log'
 
 export interface GitColors {
   background: string
@@ -132,6 +133,10 @@ function watchTheme(): void {
       timer = setTimeout(() => {
         timer = null
         const result = readTheme()
+        log(result.error ? 'error' : 'info', 'theme', 'reloaded', {
+          path: result.path,
+          error: result.error
+        })
         for (const window of BrowserWindow.getAllWindows()) {
           if (!window.webContents.isDestroyed()) window.webContents.send('theme:changed', result)
         }

@@ -31,6 +31,22 @@ export interface GitCommitPushResult {
   error?: string
 }
 
+export interface GitBranches {
+  current: string | null
+  branches: string[]
+}
+
+export interface GitCheckoutResult {
+  ok: boolean
+  error?: string
+}
+
+export interface GitSyncDefaultResult {
+  ok: boolean
+  branch?: string
+  error?: string
+}
+
 export interface GitStatus {
   current: string | null
   tracking: string | null
@@ -142,6 +158,28 @@ async function worktreeRoot(cwd?: string): Promise<string | null> {
   } catch {
     return null
   }
+}
+
+async function defaultBranch(cwd?: string): Promise<string | null> {
+  const git = gitFor(cwd)
+
+  const fromLocalRef = async (): Promise<string | null> => {
+    try {
+      const ref = (await git.raw(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).trim()
+      return ref ? ref.replace(/^origin\//, '') : null
+    } catch {
+      return null
+    }
+  }
+
+  try {
+    await git.raw(['fetch', 'origin'])
+    await git.raw(['remote', 'set-head', 'origin', '--auto'])
+  } catch {
+    /* empty */
+  }
+
+  return fromLocalRef()
 }
 
 async function isRepoDir(dir: string): Promise<boolean> {
@@ -258,6 +296,62 @@ export function registerGitHandlers(): void {
       conflicted: status.conflicted,
       changed: status.files.length,
       stageable: filterPaths(status.files.map((f) => f.path)).length
+    }
+  })
+
+  ipcMain.handle('git:branches', async (_event, cwd?: string): Promise<GitBranches> => {
+    try {
+      const summary = await gitFor(cwd).branchLocal()
+      return { current: summary.current || null, branches: summary.all }
+    } catch {
+      return { current: null, branches: [] }
+    }
+  })
+
+  ipcMain.handle(
+    'git:checkout',
+    async (_event, cwd: string | undefined, branch: string): Promise<GitCheckoutResult> => {
+      if (!branch) return { ok: false, error: 'Branch required' }
+      try {
+        await gitFor(cwd).checkout(branch)
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, error: errorText(error) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'git:createBranch',
+    async (_event, cwd: string | undefined, branch: string): Promise<GitCheckoutResult> => {
+      const name = (branch ?? '').trim()
+      if (!name) return { ok: false, error: 'Branch name required' }
+      try {
+        await gitFor(cwd).checkoutLocalBranch(name)
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, error: errorText(error) }
+      }
+    }
+  )
+
+  ipcMain.handle('git:syncDefault', async (_event, cwd?: string): Promise<GitSyncDefaultResult> => {
+    const git = gitFor(cwd)
+    const branch = await defaultBranch(cwd)
+    if (!branch) return { ok: false, error: 'No default branch on origin' }
+
+    try {
+      const status = await git.status()
+      if (status.current === branch) {
+        await git.raw(['fetch', 'origin', branch])
+        await git.raw(['merge', '--ff-only', `origin/${branch}`])
+        return { ok: true, branch }
+      }
+      await git.raw(['fetch', 'origin', `${branch}:${branch}`])
+      await git.checkout(branch)
+      return { ok: true, branch }
+    } catch (error) {
+      return { ok: false, branch, error: errorText(error) }
     }
   })
 

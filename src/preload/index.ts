@@ -1,6 +1,14 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
-import type { GitCommitPushResult, GitLog, GitRepo, GitStatus } from '../main/git'
+import type {
+  GitBranches,
+  GitCheckoutResult,
+  GitCommitPushResult,
+  GitLog,
+  GitRepo,
+  GitStatus,
+  GitSyncDefaultResult
+} from '../main/git'
 import type { ThemeResult } from '../main/theme'
 import type { SnowignoreResult } from '../main/snowignore'
 import type { SnowconfigResult } from '../main/snowconfig'
@@ -38,8 +46,15 @@ const git = {
   log: (cwd?: string, maxCount?: number): Promise<GitLog> =>
     ipcRenderer.invoke('git:log', cwd, maxCount),
   status: (cwd?: string): Promise<GitStatus> => ipcRenderer.invoke('git:status', cwd),
+  branches: (cwd?: string): Promise<GitBranches> => ipcRenderer.invoke('git:branches', cwd),
+  checkout: (cwd: string | undefined, branch: string): Promise<GitCheckoutResult> =>
+    ipcRenderer.invoke('git:checkout', cwd, branch),
+  createBranch: (cwd: string | undefined, branch: string): Promise<GitCheckoutResult> =>
+    ipcRenderer.invoke('git:createBranch', cwd, branch),
   commitPush: (cwd: string | undefined, message: string): Promise<GitCommitPushResult> =>
     ipcRenderer.invoke('git:commitPush', cwd, message),
+  syncDefault: (cwd?: string): Promise<GitSyncDefaultResult> =>
+    ipcRenderer.invoke('git:syncDefault', cwd),
   watch: (cwd?: string): Promise<void> => ipcRenderer.invoke('git:watch', cwd),
   unwatch: (cwd?: string): Promise<void> => ipcRenderer.invoke('git:unwatch', cwd),
   onChanged: (callback: (cwd: string | null) => void): (() => void) => {
