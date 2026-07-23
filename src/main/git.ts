@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { ipcMain, WebContents } from 'electron'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -18,6 +18,11 @@ export interface GitCommit {
 export interface GitLog {
   commits: GitCommit[]
   laneCount: number
+}
+
+export interface GitRepo {
+  path: string
+  name: string
 }
 
 export interface GitStatus {
@@ -72,12 +77,22 @@ function layout(
     lanes[col] = null
 
     commits.push({ ...commit, col, row })
-    laneCount = Math.max(laneCount, lanes.length)
 
     commit.parents.forEach((parent, i) => {
-      if (i === 0) lanes[col] = parent
-      else claim(parent)
+      if (i !== 0) {
+        claim(parent)
+        return
+      }
+      const existing = lanes.indexOf(parent)
+      if (existing === -1) {
+        lanes[col] = parent
+      } else if (col < existing) {
+        lanes[existing] = null
+        lanes[col] = parent
+      }
     })
+
+    laneCount = Math.max(laneCount, lanes.length)
   })
 
   return { commits, laneCount: Math.max(laneCount, 1) }
@@ -112,16 +127,79 @@ async function worktreeRoot(cwd?: string): Promise<string | null> {
   }
 }
 
+async function isRepoDir(dir: string): Promise<boolean> {
+  try {
+    await fs.promises.access(path.join(dir, '.git'))
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function discoverRepos(cwd?: string): Promise<GitRepo[]> {
+  const dir = cwd || os.homedir()
+
+  const root = await worktreeRoot(dir)
+  if (root) return [{ path: root, name: path.basename(root) }]
+
+  let entries: fs.Dirent[]
+  try {
+    entries = await fs.promises.readdir(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+
+  const found: GitRepo[] = []
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue
+    const child = path.join(dir, entry.name)
+    if (await isRepoDir(child)) found.push({ path: child, name: entry.name })
+  }
+  return found.sort((a, b) => a.name.localeCompare(b.name))
+}
+
 const ignoredWorktreeEntry = /(^|[\\/])(\.git|node_modules)([\\/]|$)/
 const transientGitEntry = /\.lock$/
 const notifyQuietMs = 150
 const notifyMaxWaitMs = 1000
 
-const watchers = new Map<number, () => void>()
+interface GitWatcher {
+  wcId: number
+  close: () => void
+}
+
+const watchers = new Map<string, GitWatcher>()
+const generations = new Map<string, number>()
+const destroyHooked = new WeakSet<WebContents>()
+
+function watcherKey(wcId: number, cwd?: string): string {
+  return `${wcId}\u0000${cwd ?? ''}`
+}
+
+function nextGeneration(key: string): number {
+  const next = (generations.get(key) ?? 0) + 1
+  generations.set(key, next)
+  return next
+}
+
+function closeWatcher(key: string): void {
+  watchers.get(key)?.close()
+  watchers.delete(key)
+}
+
+function closeWatchersFor(wcId: number): void {
+  for (const [key, watcher] of watchers) {
+    if (watcher.wcId !== wcId) continue
+    nextGeneration(key)
+    watcher.close()
+    watchers.delete(key)
+  }
+}
 
 export function disposeGitWatchers(): void {
-  for (const close of watchers.values()) close()
+  for (const { close } of watchers.values()) close()
   watchers.clear()
+  generations.clear()
 }
 
 export function registerGitHandlers(): void {
@@ -133,8 +211,12 @@ export function registerGitHandlers(): void {
     }
   })
 
-  ipcMain.handle('git:log', async (_event, cwd?: string): Promise<GitLog> => {
-    const log = await gitFor(cwd).log({ format: commitFormat, '--all': null, '--max-count': 200 })
+  ipcMain.handle('git:log', async (_event, cwd?: string, maxCount = 200): Promise<GitLog> => {
+    const log = await gitFor(cwd).log({
+      format: commitFormat,
+      '--all': null,
+      '--max-count': maxCount
+    })
     const raw = log.all.map((c) => ({
       hash: c.hash,
       parents: c.parents ? c.parents.split(' ').filter(Boolean) : [],
@@ -160,10 +242,20 @@ export function registerGitHandlers(): void {
     }
   })
 
+  ipcMain.handle('git:discover', (_event, cwd?: string): Promise<GitRepo[]> => discoverRepos(cwd))
+
+  ipcMain.handle('git:unwatch', (event, cwd?: string): void => {
+    const key = watcherKey(event.sender.id, cwd)
+    nextGeneration(key)
+    closeWatcher(key)
+  })
+
   ipcMain.handle('git:watch', async (event, cwd?: string): Promise<void> => {
-    const wcId = event.sender.id
-    watchers.get(wcId)?.()
-    watchers.delete(wcId)
+    const sender = event.sender
+    const wcId = sender.id
+    const key = watcherKey(wcId, cwd)
+    const generation = nextGeneration(key)
+    closeWatcher(key)
 
     const dir = await gitDir(cwd)
     if (!dir) return
@@ -178,7 +270,7 @@ export function registerGitHandlers(): void {
       timer = setTimeout(() => {
         timer = null
         burstStart = 0
-        if (!event.sender.isDestroyed()) event.sender.send('git:changed')
+        if (!sender.isDestroyed()) sender.send('git:changed', cwd ?? null)
       }, wait)
     }
 
@@ -224,10 +316,17 @@ export function registerGitHandlers(): void {
       for (const c of closers) c()
       if (timer) clearTimeout(timer)
     }
-    watchers.set(wcId, close)
-    event.sender.once('destroyed', () => {
+
+    if (generations.get(key) !== generation || sender.isDestroyed()) {
       close()
-      watchers.delete(wcId)
-    })
+      return
+    }
+
+    watchers.set(key, { wcId, close })
+
+    if (!destroyHooked.has(sender)) {
+      destroyHooked.add(sender)
+      sender.once('destroyed', () => closeWatchersFor(wcId))
+    }
   })
 }

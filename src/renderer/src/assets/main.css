@@ -81,13 +81,63 @@ body {
   color: var(--git-muted, #5f5878);
 }
 
+.git-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.git-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.git-repo {
+  display: flex;
+  flex-direction: column;
+}
+
 .git-header {
-  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
+  background: var(--git-bg, #1e1e2e);
   border-bottom: 1px solid var(--git-border, #2f2b40);
+}
+
+.git-header-toggle {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--git-border, #2f2b40);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  appearance: none;
+}
+
+.git-header-toggle:hover .git-repo-name {
+  color: var(--git-hash-hover, #d8c07a);
+}
+
+.git-caret {
+  flex: 0 0 auto;
+  display: inline-block;
+  color: var(--git-muted, #5f5878);
+  transition: transform 120ms ease;
+}
+
+.git-caret-open {
+  transform: rotate(90deg);
+}
+
+.git-repo-name {
+  min-width: 0;
+  color: var(--git-repo, #8fbf9f);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .git-branch {
@@ -105,15 +155,7 @@ body {
 }
 
 .git-log {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
   padding: 6px 0;
-  scrollbar-width: none;
-}
-
-.git-log::-webkit-scrollbar {
-  display: none;
 }
 
 .git-graph {

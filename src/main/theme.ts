@@ -8,6 +8,7 @@ export interface GitColors {
   border: string
   text: string
   muted: string
+  repo: string
   branch: string
   track: string
   dirty: string
@@ -37,6 +38,7 @@ const defaultTheme: Theme = {
     border: '#2f2b40',
     text: '#b8b3cc',
     muted: '#5f5878',
+    repo: '#8fbf9f',
     branch: '#c7b06b',
     track: '#7791c5',
     dirty: '#c3a865',
@@ -82,6 +84,7 @@ function mergeGit(raw: unknown): GitColors {
     border: color(g.border, base.border),
     text: color(g.text, base.text),
     muted: color(g.muted, base.muted),
+    repo: color(g.repo, base.repo),
     branch: color(g.branch, base.branch),
     track: color(g.track, base.track),
     dirty: color(g.dirty, base.dirty),

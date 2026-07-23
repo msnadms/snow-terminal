@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
-import type { GitLog, GitStatus } from '../main/git'
+import type { GitLog, GitRepo, GitStatus } from '../main/git'
 import type { ThemeResult } from '../main/theme'
 
 const terminal = {
@@ -32,11 +32,14 @@ const terminal = {
 
 const git = {
   isRepo: (cwd?: string): Promise<boolean> => ipcRenderer.invoke('git:isRepo', cwd),
-  log: (cwd?: string): Promise<GitLog> => ipcRenderer.invoke('git:log', cwd),
+  discover: (cwd?: string): Promise<GitRepo[]> => ipcRenderer.invoke('git:discover', cwd),
+  log: (cwd?: string, maxCount?: number): Promise<GitLog> =>
+    ipcRenderer.invoke('git:log', cwd, maxCount),
   status: (cwd?: string): Promise<GitStatus> => ipcRenderer.invoke('git:status', cwd),
   watch: (cwd?: string): Promise<void> => ipcRenderer.invoke('git:watch', cwd),
-  onChanged: (callback: () => void): (() => void) => {
-    const listener = (): void => callback()
+  unwatch: (cwd?: string): Promise<void> => ipcRenderer.invoke('git:unwatch', cwd),
+  onChanged: (callback: (cwd: string | null) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, cwd: string | null): void => callback(cwd)
     ipcRenderer.on('git:changed', listener)
     return () => ipcRenderer.removeListener('git:changed', listener)
   }

@@ -9,6 +9,15 @@ interface PtySession {
 }
 
 const sessions = new Map<number, PtySession>()
+const destroyHooked = new WeakSet<WebContents>()
+
+function disposePtyFor(wcId: number): void {
+  for (const [id, session] of sessions) {
+    if (session.webContents.id !== wcId) continue
+    session.pty.kill()
+    sessions.delete(id)
+  }
+}
 
 export function registerPtyHandlers(): void {
   ipcMain.on(
@@ -55,15 +64,16 @@ export function registerPtyHandlers(): void {
 
       pty.onExit(({ exitCode }) => {
         safeSend('pty:exit', { id, exitCode })
-        sessions.delete(id)
-      })
-
-      webContents.once('destroyed', () => {
-        sessions.get(id)?.pty.kill()
-        sessions.delete(id)
+        if (sessions.get(id)?.pty === pty) sessions.delete(id)
       })
 
       sessions.set(id, { pty, webContents })
+
+      if (!destroyHooked.has(webContents)) {
+        destroyHooked.add(webContents)
+        const wcId = webContents.id
+        webContents.once('destroyed', () => disposePtyFor(wcId))
+      }
     }
   )
 

@@ -8,6 +8,7 @@ const cssVars: Record<Exclude<keyof GitColors, 'lanes'>, string> = {
   border: '--git-border',
   text: '--git-text',
   muted: '--git-muted',
+  repo: '--git-repo',
   branch: '--git-branch',
   track: '--git-track',
   dirty: '--git-dirty',
