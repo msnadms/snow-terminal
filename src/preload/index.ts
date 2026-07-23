@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { GitCommitPushResult, GitLog, GitRepo, GitStatus } from '../main/git'
 import type { ThemeResult } from '../main/theme'
+import type { SnowignoreResult } from '../main/snowignore'
 
 const terminal = {
   spawn: (id: number, cols: number, rows: number, cwd?: string, startupCommand?: string): void => {
@@ -56,7 +57,16 @@ const theme = {
   }
 }
 
-const api = { terminal, git, theme }
+const snowignore = {
+  get: (): Promise<SnowignoreResult> => ipcRenderer.invoke('snowignore:get'),
+  onChanged: (callback: (result: SnowignoreResult) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, result: SnowignoreResult): void => callback(result)
+    ipcRenderer.on('snowignore:changed', listener)
+    return () => ipcRenderer.removeListener('snowignore:changed', listener)
+  }
+}
+
+const api = { terminal, git, theme, snowignore }
 
 export type Api = typeof api
 

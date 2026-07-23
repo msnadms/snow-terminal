@@ -43,13 +43,19 @@ IPC channels (all defined in `src/main/pty.ts` and mirrored in `src/preload/inde
 `pty:spawn`, `pty:write`, `pty:resize`, `pty:kill` (renderer→main) and `pty:data`, `pty:exit` (main→renderer).
 
 Key files:
+
 - `src/main/pty.ts` — `PtySession` map keyed by id; spawns/writes/resizes/kills PTYs and bridges I/O. Sends to the renderer are guarded (`safeSend`) and each PTY is killed on `webContents 'destroyed'` and on app `will-quit`, so reloads/crashes/quit don't leak shells.
 - `src/preload/index.ts` — defines `window.api.terminal`; its `onData`/`onExit` return unsubscribe functions. `export type Api` is consumed by `src/preload/index.d.ts` to type `window.api`.
 - `src/renderer/src/components/Terminal.tsx` — one xterm pane per component; a `ResizeObserver` refits and resizes the PTY.
 
-### User theme config
+### User config
 
-Colors live in `~/.config/snow/theme.json` (`$XDG_CONFIG_HOME/snow/theme.json` when set), currently
+Both config files live in `~/.config/snow/` (`$XDG_CONFIG_HOME/snow/` when set); `configDir()` in
+`src/main/config.ts` is the single place that resolves the directory.
+
+#### `theme.json`
+
+Colors are currently
 scoped to the git view. `src/main/theme.ts` owns it: it writes the defaults on first launch, reads and
 validates on `theme:get`, and `fs.watch`es the directory to broadcast `theme:changed` on edit. Unknown
 or malformed values fall back to the defaults per key, so a bad edit degrades instead of breaking.
@@ -58,9 +64,24 @@ or malformed values fall back to the defaults per key, so a bad edit degrades in
 as a `--git-*` custom property that `main.css` consumes with the default as its fallback; `lanes` is
 returned to `GitPanel` since SVG strokes need the value in JS.
 
+#### `.snowignore`
+
+Paths the action bar must never touch, in `.gitignore` syntax, applied to every repo.
+`src/main/snowignore.ts` mirrors `theme.ts`'s lifecycle (default written with `flag: 'wx'` on first
+launch, directory `fs.watch` broadcasting `snowignore:changed`, `snowignore:get` handler) and matches
+with the `ignore` package. Its `filterPaths()` expects repo-root-relative forward-slash paths — what
+`git status --porcelain` emits, even when run from a subdirectory.
+
+`git.ts` consults it in two places: `git:commitPush` stages an explicit filtered file list instead of
+`git add -A`, and `git:status` reports `stageable` (the filtered count) alongside the unfiltered
+`changed`. `ActionBar` gates its button on `stageable` and re-checks on `snowignore:changed`;
+`GitPanel` still uses `changed`, so the dirty indicator reflects real repo state. A matched file that
+is already staged is left alone — snow only filters what it adds.
+
 ## node-pty (native module) constraints
 
 `node-pty` is a native module and must **not** be bundled:
+
 - `electron.vite.config.ts` externalizes it via `externalizeDepsPlugin` in the `main` config.
 - `electron-builder.yml` lists `**/node_modules/node-pty/**` under `asarUnpack` so its `.node` binaries load from disk in packaged builds.
 - It ships N-API prebuilds (ABI-stable), so no native rebuild is needed across Node/Electron versions.

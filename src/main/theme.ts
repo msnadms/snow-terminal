@@ -1,7 +1,7 @@
 import { ipcMain, BrowserWindow } from 'electron'
 import fs from 'fs'
-import os from 'os'
 import path from 'path'
+import { configDir } from './config'
 
 export interface GitColors {
   background: string
@@ -54,9 +54,7 @@ const defaultTheme: Theme = {
 }
 
 export function themePath(): string {
-  const xdg = process.env.XDG_CONFIG_HOME
-  const base = xdg && path.isAbsolute(xdg) ? xdg : path.join(os.homedir(), '.config')
-  return path.join(base, 'snow', 'theme.json')
+  return path.join(configDir(), 'theme.json')
 }
 
 const hexColor = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i

@@ -131,12 +131,7 @@ function RepoSection({ repo, multi, lanes, maxCommits }: RepoSectionProps): Reac
     return <div className="git-empty">{error}</div>
   }
 
-  const changed = status
-    ? status.staged.length +
-      status.modified.length +
-      status.not_added.length +
-      status.conflicted.length
-    : 0
+  const changed = status?.changed ?? 0
 
   const commits = log?.commits ?? []
   const graphWidth = PADX + (log?.laneCount ?? 1) * LANE

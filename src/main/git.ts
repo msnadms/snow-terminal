@@ -3,6 +3,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { simpleGit, SimpleGit } from 'simple-git'
+import { filterPaths } from './snowignore'
 
 export interface GitCommit {
   hash: string
@@ -39,6 +40,8 @@ export interface GitStatus {
   modified: string[]
   not_added: string[]
   conflicted: string[]
+  changed: number
+  stageable: number
 }
 
 const commitFormat = {
@@ -252,7 +255,9 @@ export function registerGitHandlers(): void {
       staged: status.staged,
       modified: status.modified,
       not_added: status.not_added,
-      conflicted: status.conflicted
+      conflicted: status.conflicted,
+      changed: status.files.length,
+      stageable: filterPaths(status.files.map((f) => f.path)).length
     }
   })
 
@@ -266,7 +271,11 @@ export function registerGitHandlers(): void {
 
       const git = gitFor(cwd)
       try {
-        await git.add(['-A'])
+        const pending = await git.status()
+        const paths = filterPaths(pending.files.map((f) => f.path))
+        if (paths.length === 0) return { ok: false, error: 'Nothing to commit' }
+        const root = await worktreeRoot(cwd)
+        await git.add(root ? paths.map((p) => path.join(root, p)) : paths)
         await git.commit(subject)
       } catch (error) {
         return { ok: false, error: errorText(error) }
