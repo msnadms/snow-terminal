@@ -71,12 +71,23 @@ export interface GitCheckoutResult {
   ok: boolean
   branch?: string
   error?: string
+  detail?: string
 }
 
 export interface GitSyncDefaultResult {
   ok: boolean
   branch?: string
   error?: string
+}
+
+export interface GitUpdateDefaultResult {
+  ok: boolean
+  branch?: string
+  from?: string
+  updated?: boolean
+  conflicted?: string[]
+  error?: string
+  detail?: string
 }
 
 export interface GitStatus {
@@ -241,6 +252,15 @@ function errorText(error: unknown): string {
   return line || 'git command failed'
 }
 
+function errorDetail(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error)
+  return raw
+    .split('\n')
+    .map((l) => l.trimEnd())
+    .join('\n')
+    .trim()
+}
+
 async function gitDir(cwd?: string): Promise<string | null> {
   try {
     const dir = (await gitFor(cwd).revparse(['--git-dir'])).trim()
@@ -393,6 +413,7 @@ export function registerGitHandlers(): void {
     const log = await gitFor(cwd).log({
       format: commitFormat,
       '--all': null,
+      '--topo-order': null,
       '--max-count': maxCount
     })
     const raw = log.all.map((c) => ({
@@ -495,7 +516,7 @@ export function registerGitHandlers(): void {
         await gitFor(cwd).checkout(branch)
         return { ok: true }
       } catch (error) {
-        return { ok: false, error: errorText(error) }
+        return { ok: false, error: errorText(error), detail: errorDetail(error) }
       }
     }
   )
@@ -521,7 +542,7 @@ export function registerGitHandlers(): void {
         }
         return { ok: true, branch: local }
       } catch (error) {
-        return { ok: false, error: errorText(error) }
+        return { ok: false, error: errorText(error), detail: errorDetail(error) }
       }
     }
   )
@@ -535,7 +556,7 @@ export function registerGitHandlers(): void {
         await gitFor(cwd).checkoutLocalBranch(name)
         return { ok: true }
       } catch (error) {
-        return { ok: false, error: errorText(error) }
+        return { ok: false, error: errorText(error), detail: errorDetail(error) }
       }
     }
   )
@@ -560,6 +581,81 @@ export function registerGitHandlers(): void {
       return { ok: false, branch, error: errorText(error) }
     }
   })
+
+  ipcMain.handle(
+    'git:updateFromDefault',
+    async (_event, cwd?: string): Promise<GitUpdateDefaultResult> => {
+      const git = gitFor(cwd)
+      const target = await defaultBranch(cwd)
+      if (!target) return { ok: false, error: 'No default branch on remote' }
+      const { remote, branch } = target
+      const from = `${remote}/${branch}`
+
+      let head: string
+      let dirty: string[]
+      try {
+        const status = await git.status()
+        if (!status.current) return { ok: false, error: 'HEAD is detached' }
+        dirty = status.files
+          .filter((f) => f.index !== '?' || f.working_dir !== '?')
+          .map((f) => f.path)
+        head = (await git.revparse(['HEAD'])).trim()
+      } catch (error) {
+        return { ok: false, branch, error: errorText(error), detail: errorDetail(error) }
+      }
+
+      if (dirty.length > 0) {
+        return {
+          ok: false,
+          branch,
+          from,
+          error: 'Commit or stash your changes first',
+          detail: dirty.join('\n')
+        }
+      }
+
+      try {
+        await git.raw(['fetch', remote, branch])
+      } catch (error) {
+        return { ok: false, branch, from, error: errorText(error), detail: errorDetail(error) }
+      }
+
+      try {
+        await git.raw(['merge', '--no-edit', from])
+      } catch (error) {
+        let conflicted: string[] = []
+        try {
+          conflicted = (await git.status()).conflicted
+        } catch {
+          /* empty */
+        }
+        if (conflicted.length > 0) {
+          return {
+            ok: false,
+            branch,
+            from,
+            conflicted,
+            error: `Conflicts merging ${from}`,
+            detail: [
+              'Merge left in progress. Resolve these files, then commit:',
+              '',
+              ...conflicted,
+              '',
+              'Or run: git merge --abort'
+            ].join('\n')
+          }
+        }
+        return { ok: false, branch, from, error: errorText(error), detail: errorDetail(error) }
+      }
+
+      try {
+        const after = (await git.revparse(['HEAD'])).trim()
+        return { ok: true, branch, from, updated: after !== head }
+      } catch {
+        return { ok: true, branch, from, updated: true }
+      }
+    }
+  )
 
   ipcMain.handle('git:discover', (_event, cwd?: string): Promise<GitRepo[]> => discoverRepos(cwd))
 

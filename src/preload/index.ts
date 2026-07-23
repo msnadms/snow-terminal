@@ -9,7 +9,8 @@ import type {
   GitLog,
   GitRepo,
   GitStatus,
-  GitSyncDefaultResult
+  GitSyncDefaultResult,
+  GitUpdateDefaultResult
 } from '../main/git'
 import type { ThemeResult } from '../main/theme'
 import type { SnowignoreResult } from '../main/snowignore'
@@ -63,6 +64,8 @@ const git = {
     ipcRenderer.invoke('git:commitPush', cwd, message),
   syncDefault: (cwd?: string): Promise<GitSyncDefaultResult> =>
     ipcRenderer.invoke('git:syncDefault', cwd),
+  updateFromDefault: (cwd?: string): Promise<GitUpdateDefaultResult> =>
+    ipcRenderer.invoke('git:updateFromDefault', cwd),
   watch: (cwd?: string): Promise<void> => ipcRenderer.invoke('git:watch', cwd),
   unwatch: (cwd?: string): Promise<void> => ipcRenderer.invoke('git:unwatch', cwd),
   onChanged: (callback: (cwd: string | null) => void): (() => void) => {

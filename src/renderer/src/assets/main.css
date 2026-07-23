@@ -325,6 +325,77 @@ body {
   cursor: default;
 }
 
+.git-dialog-backdrop {
+  -webkit-app-region: no-drag;
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 96px;
+  background: rgba(17, 17, 27, 0.6);
+}
+
+.git-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(520px, calc(100vw - 64px));
+  padding: 16px;
+  text-align: left;
+  background: #181825;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+.git-dialog-title {
+  color: #cdd6f4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.git-dialog-detail {
+  max-height: 220px;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  font: inherit;
+  color: #a6adc8;
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.git-dialog-detail::-webkit-scrollbar {
+  width: 8px;
+}
+
+.git-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.git-dialog-button {
+  height: 24px;
+  padding: 0 14px;
+  font: inherit;
+  color: #cdd6f4;
+  background: #1e1e2e;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.git-dialog-button:hover {
+  color: #d8c07a;
+  border-color: #585b70;
+}
+
 .content {
   flex: 1 1 auto;
   min-height: 0;
@@ -846,8 +917,8 @@ body {
 
   --diff-background-color: transparent;
   --diff-text-color: var(--git-text, #b8b3cc);
-  --diff-font-family: 'Hack Nerd Font Mono', 'Hack Nerd Font', Menlo, Consolas, 'Cascadia Code',
-    monospace;
+  --diff-font-family:
+    'Hack Nerd Font Mono', 'Hack Nerd Font', Menlo, Consolas, 'Cascadia Code', monospace;
   --diff-selection-background-color: #45475a;
   --diff-gutter-insert-background-color: var(--git-diff-add-gutter, #21402c);
   --diff-gutter-delete-background-color: var(--git-diff-del-gutter, #452630);

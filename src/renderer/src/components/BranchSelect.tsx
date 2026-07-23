@@ -18,8 +18,10 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
   const [error, setError] = useState('')
   const [flash, trigger] = useFlash()
   const [newName, setNewName] = useState('')
+  const [failure, setFailure] = useState<{ title: string; detail: string } | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+  const dismissRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -63,6 +65,19 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
     }
   }, [open])
 
+  useEffect(() => {
+    if (!failure) return
+
+    dismissRef.current?.focus()
+
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape' || e.key === 'Enter') setFailure(null)
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [failure])
+
   if (!current) return null
 
   const toggle = (): void => {
@@ -71,12 +86,16 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
   }
 
   const finish = (
-    result: { ok: boolean; branch?: string; error?: string },
+    result: { ok: boolean; branch?: string; error?: string; detail?: string },
     branch: string
   ): void => {
     setPending(false)
     if (!result.ok) {
-      setError(result.error ?? 'git command failed')
+      const title = result.error ?? 'git command failed'
+      const lines = (result.detail ?? '').split('\n')
+      const body = lines[0]?.trim() === title ? lines.slice(1) : lines
+      setError(title)
+      setFailure({ title, detail: body.join('\n').trim() })
       trigger('error')
       return
     }
@@ -182,6 +201,23 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
               </button>
             </form>
           )}
+        </div>
+      )}
+      {failure && (
+        <div className="git-dialog-backdrop" onPointerDown={() => setFailure(null)}>
+          <div className="git-dialog" onPointerDown={(e) => e.stopPropagation()}>
+            <div className="git-dialog-title">{failure.title}</div>
+            {failure.detail && <pre className="git-dialog-detail">{failure.detail}</pre>}
+            <div className="git-dialog-actions">
+              <button
+                ref={dismissRef}
+                className="git-dialog-button"
+                onClick={() => setFailure(null)}
+              >
+                OK
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

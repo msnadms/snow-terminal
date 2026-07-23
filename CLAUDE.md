@@ -105,7 +105,7 @@ thrown error, and duration. That wrapper is why `git.ts` needs no logging code o
 
 Two sets of exclusions. Terminal content: `pty:write` and `pty:resize` are in `quietChannels`
 (logging keystrokes would make this a keylogger and swamp the file), and `pty:data` flows
-main→renderer so it is never seen by the wrapper. PTY *lifecycle* is still logged explicitly in
+main→renderer so it is never seen by the wrapper. PTY _lifecycle_ is still logged explicitly in
 `pty.ts` (`spawn` with pid/shell/cwd, `exit` with code). Presets: the `snowconfig:*` channels are in
 `redactedChannels`, so the call and its duration are logged but the args/result payload is not.
 
