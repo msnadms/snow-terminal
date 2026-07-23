@@ -17,11 +17,22 @@ interface TerminalProps {
   cwd?: string
   onCwd?: (cwd: string) => void
   startupCommand?: string
+  active?: boolean
+  focusOnActivate?: boolean
 }
 
-function Terminal({ cwd, onCwd, startupCommand }: TerminalProps): React.JSX.Element {
+function Terminal({
+  cwd,
+  onCwd,
+  startupCommand,
+  active = true,
+  focusOnActivate
+}: TerminalProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const onCwdRef = useRef(onCwd)
+  const fitAddonRef = useRef<FitAddon | null>(null)
+  const termRef = useRef<XTerm | null>(null)
+  const idRef = useRef<number | null>(null)
 
   useEffect(() => {
     onCwdRef.current = onCwd
@@ -50,6 +61,10 @@ function Terminal({ cwd, onCwd, startupCommand }: TerminalProps): React.JSX.Elem
     term.open(container)
     fitAddon.fit()
 
+    fitAddonRef.current = fitAddon
+    termRef.current = term
+    idRef.current = id
+
     window.api.terminal.spawn(id, term.cols, term.rows, cwd, startupCommand)
 
     const oscDisposable = term.parser.registerOscHandler(7, (payload) => {
@@ -73,6 +88,7 @@ function Terminal({ cwd, onCwd, startupCommand }: TerminalProps): React.JSX.Elem
     })
 
     const resize = (): void => {
+      if (!container.clientWidth || !container.clientHeight) return
       try {
         fitAddon.fit()
         window.api.terminal.resize(id, term.cols, term.rows)
@@ -83,8 +99,6 @@ function Terminal({ cwd, onCwd, startupCommand }: TerminalProps): React.JSX.Elem
     const resizeObserver = new ResizeObserver(resize)
     resizeObserver.observe(container)
 
-    term.focus()
-
     return () => {
       resizeObserver.disconnect()
       oscDisposable.dispose()
@@ -93,8 +107,31 @@ function Terminal({ cwd, onCwd, startupCommand }: TerminalProps): React.JSX.Elem
       inputDisposable.dispose()
       window.api.terminal.kill(id)
       term.dispose()
+      fitAddonRef.current = null
+      termRef.current = null
+      idRef.current = null
     }
   }, [cwd, startupCommand])
+
+  useEffect(() => {
+    if (!active) return
+    const raf = requestAnimationFrame(() => {
+      const fit = fitAddonRef.current
+      const term = termRef.current
+      const id = idRef.current
+      const container = containerRef.current
+      if (!fit || !term || id == null || !container) return
+      if (!container.clientWidth || !container.clientHeight) return
+      try {
+        fit.fit()
+        window.api.terminal.resize(id, term.cols, term.rows)
+        if (focusOnActivate) term.focus()
+      } catch {
+        // pane detached
+      }
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [active, focusOnActivate])
 
   return <div className="terminal-pane" ref={containerRef} />
 }
