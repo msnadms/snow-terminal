@@ -184,12 +184,68 @@ body {
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
 }
 
+.branch-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.branch-tab {
+  flex: 1 1 0;
+  height: 22px;
+  padding: 0 8px;
+  font: inherit;
+  color: #6c7086;
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.branch-tab:hover {
+  color: #cdd6f4;
+}
+
+.branch-tab-active {
+  color: #d8c07a;
+  border-color: #45475a;
+}
+
+.branch-search {
+  flex: 0 0 auto;
+  min-width: 0;
+  height: 22px;
+  margin-bottom: 4px;
+  padding: 0 6px;
+  font: inherit;
+  color: #cdd6f4;
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  outline: none;
+  user-select: text;
+}
+
+.branch-search:focus {
+  border-color: #45475a;
+}
+
+.branch-search::placeholder {
+  color: #5f5878;
+}
+
 .branch-list {
   flex: 0 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+}
+
+.branch-none {
+  padding: 5px 8px;
+  color: #5f5878;
 }
 
 .branch-item {

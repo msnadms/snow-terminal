@@ -55,6 +55,8 @@ const git = {
   branches: (cwd?: string): Promise<GitBranches> => ipcRenderer.invoke('git:branches', cwd),
   checkout: (cwd: string | undefined, branch: string): Promise<GitCheckoutResult> =>
     ipcRenderer.invoke('git:checkout', cwd, branch),
+  checkoutRemote: (cwd: string | undefined, ref: string): Promise<GitCheckoutResult> =>
+    ipcRenderer.invoke('git:checkoutRemote', cwd, ref),
   createBranch: (cwd: string | undefined, branch: string): Promise<GitCheckoutResult> =>
     ipcRenderer.invoke('git:createBranch', cwd, branch),
   commitPush: (cwd: string | undefined, message: string): Promise<GitCommitPushResult> =>

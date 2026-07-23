@@ -64,10 +64,12 @@ export interface GitCommitPushResult {
 export interface GitBranches {
   current: string | null
   branches: string[]
+  remotes: string[]
 }
 
 export interface GitCheckoutResult {
   ok: boolean
+  branch?: string
   error?: string
 }
 
@@ -256,26 +258,51 @@ async function worktreeRoot(cwd?: string): Promise<string | null> {
   }
 }
 
-async function defaultBranch(cwd?: string): Promise<string | null> {
+async function remoteName(cwd?: string): Promise<string | null> {
   const git = gitFor(cwd)
 
-  const fromLocalRef = async (): Promise<string | null> => {
-    try {
-      const ref = (await git.raw(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).trim()
-      return ref ? ref.replace(/^origin\//, '') : null
-    } catch {
-      return null
-    }
+  let remotes: string[]
+  try {
+    remotes = (await git.raw(['remote']))
+      .split('\n')
+      .map((r) => r.trim())
+      .filter(Boolean)
+  } catch {
+    return null
   }
+  if (remotes.length === 0) return null
 
   try {
-    await git.raw(['fetch', 'origin'])
-    await git.raw(['remote', 'set-head', 'origin', '--auto'])
+    const branch = (await git.raw(['symbolic-ref', '--short', 'HEAD'])).trim()
+    const tracked = (await git.raw(['config', '--get', `branch.${branch}.remote`])).trim()
+    if (tracked && remotes.includes(tracked)) return tracked
   } catch {
     /* empty */
   }
 
-  return fromLocalRef()
+  return remotes.includes('origin') ? 'origin' : remotes[0]
+}
+
+async function defaultBranch(cwd?: string): Promise<{ remote: string; branch: string } | null> {
+  const git = gitFor(cwd)
+  const remote = await remoteName(cwd)
+  if (!remote) return null
+
+  try {
+    await git.raw(['fetch', remote])
+    await git.raw(['remote', 'set-head', remote, '--auto'])
+  } catch {
+    /* empty */
+  }
+
+  try {
+    const ref = (await git.raw(['symbolic-ref', '--short', `refs/remotes/${remote}/HEAD`])).trim()
+    const prefix = `${remote}/`
+    const branch = ref.startsWith(prefix) ? ref.slice(prefix.length) : ref
+    return branch ? { remote, branch } : null
+  } catch {
+    return null
+  }
 }
 
 async function isRepoDir(dir: string): Promise<boolean> {
@@ -437,12 +464,27 @@ export function registerGitHandlers(): void {
   })
 
   ipcMain.handle('git:branches', async (_event, cwd?: string): Promise<GitBranches> => {
+    const git = gitFor(cwd)
+    let current: string | null = null
+    let branches: string[] = []
+    let remotes: string[] = []
+
     try {
-      const summary = await gitFor(cwd).branchLocal()
-      return { current: summary.current || null, branches: summary.all }
+      const summary = await git.branchLocal()
+      current = summary.current || null
+      branches = summary.all
     } catch {
-      return { current: null, branches: [] }
+      return { current: null, branches: [], remotes: [] }
     }
+
+    try {
+      const summary = await git.branch(['-r'])
+      remotes = summary.all.filter((name) => !name.includes('->'))
+    } catch {
+      remotes = []
+    }
+
+    return { current, branches, remotes }
   })
 
   ipcMain.handle(
@@ -452,6 +494,32 @@ export function registerGitHandlers(): void {
       try {
         await gitFor(cwd).checkout(branch)
         return { ok: true }
+      } catch (error) {
+        return { ok: false, error: errorText(error) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'git:checkoutRemote',
+    async (_event, cwd: string | undefined, ref: string): Promise<GitCheckoutResult> => {
+      const remoteRef = (ref ?? '').trim()
+      if (!remoteRef) return { ok: false, error: 'Branch required' }
+      const git = gitFor(cwd)
+
+      try {
+        const remotes = await git.getRemotes(false)
+        const remote = remotes.find((r) => remoteRef.startsWith(`${r.name}/`))
+        const local = remote ? remoteRef.slice(remote.name.length + 1) : remoteRef
+        if (!local) return { ok: false, error: 'Branch required' }
+
+        const existing = await git.branchLocal()
+        if (existing.all.includes(local)) {
+          await git.checkout(local)
+        } else {
+          await git.checkout(['--track', remoteRef])
+        }
+        return { ok: true, branch: local }
       } catch (error) {
         return { ok: false, error: errorText(error) }
       }
@@ -474,17 +542,18 @@ export function registerGitHandlers(): void {
 
   ipcMain.handle('git:syncDefault', async (_event, cwd?: string): Promise<GitSyncDefaultResult> => {
     const git = gitFor(cwd)
-    const branch = await defaultBranch(cwd)
-    if (!branch) return { ok: false, error: 'No default branch on origin' }
+    const target = await defaultBranch(cwd)
+    if (!target) return { ok: false, error: 'No default branch on remote' }
+    const { remote, branch } = target
 
     try {
       const status = await git.status()
       if (status.current === branch) {
-        await git.raw(['fetch', 'origin', branch])
-        await git.raw(['merge', '--ff-only', `origin/${branch}`])
+        await git.raw(['fetch', remote, branch])
+        await git.raw(['merge', '--ff-only', `${remote}/${branch}`])
         return { ok: true, branch }
       }
-      await git.raw(['fetch', 'origin', `${branch}:${branch}`])
+      await git.raw(['fetch', remote, `${branch}:${branch}`])
       await git.checkout(branch)
       return { ok: true, branch }
     } catch (error) {
@@ -517,7 +586,8 @@ export function registerGitHandlers(): void {
         if (status.tracking || !status.current) {
           await git.push()
         } else {
-          await git.push(['--set-upstream', 'origin', status.current])
+          const remote = (await remoteName(cwd)) ?? 'origin'
+          await git.push(['--set-upstream', remote, status.current])
         }
       } catch (error) {
         return { ok: false, error: `Committed, push failed: ${errorText(error)}` }

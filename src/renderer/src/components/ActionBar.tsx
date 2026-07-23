@@ -106,7 +106,7 @@ function ActionBar({ cwd }: ActionBarProps): React.JSX.Element {
         className={`actionbar-button${flashClass(syncFlash)}`}
         disabled={!isRepo || busy}
         onClick={syncDefault}
-        title={syncError || "Fetch and check out origin's default branch"}
+        title={syncError || "Fetch and check out the remote's default branch"}
       >
         {syncing ? 'Syncing…' : 'Sync Default'}
       </button>

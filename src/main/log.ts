@@ -5,7 +5,7 @@ import { configDir } from './config'
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
-const maxBytes = 5 * 1024 * 1024
+const maxBytes = 100_000
 const maxValueChars = 400
 const quietChannels = new Set(['pty:write', 'pty:resize'])
 const redactedChannels = new Set([
@@ -43,12 +43,11 @@ function openStream(): void {
   }
 }
 
-function rotate(): void {
-  const file = logPath()
+function reset(): void {
   stream?.end()
   stream = null
   try {
-    fs.renameSync(file, `${file}.1`)
+    fs.unlinkSync(logPath())
   } catch {
     /* empty */
   }
@@ -72,7 +71,7 @@ function format(value: unknown): string {
 
 export function log(level: LogLevel, scope: string, ...parts: unknown[]): void {
   if (!stream) return
-  if (bytes >= maxBytes) rotate()
+  if (bytes >= maxBytes) reset()
   if (!stream) return
   const body = parts.map(format).join(' ')
   const line = `${new Date().toISOString()} ${level.toUpperCase().padEnd(5)} [${scope}] ${body}\n`

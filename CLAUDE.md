@@ -98,7 +98,7 @@ correct before the shell's first OSC 7) and passes it to both terminals' spawn.
 
 `src/main/log.ts` owns it. `initLogging()` runs at the top of `src/main/index.ts` — before
 `app.whenReady()`, so nothing registered later escapes it — and does three things: opens an append
-stream to `snow.log` (rotated to `snow.log.1` past 5 MB), tees main-process `console.*` into it, and
+stream to `snow.log` (deleted and recreated past 100k), tees main-process `console.*` into it, and
 monkey-patches `ipcMain.handle`/`ipcMain.on` so **every** IPC call is logged with its args, result or
 thrown error, and duration. That wrapper is why `git.ts` needs no logging code of its own. Lines are
 `ISO-timestamp LEVEL [scope] message`, and values are JSON-serialized then truncated at 400 chars.
