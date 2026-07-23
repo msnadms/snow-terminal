@@ -1,8 +1,10 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type {
+  GitBlame,
   GitBranches,
   GitCheckoutResult,
+  GitCommitDetail,
   GitCommitPushResult,
   GitLog,
   GitRepo,
@@ -42,9 +44,13 @@ const terminal = {
 
 const git = {
   isRepo: (cwd?: string): Promise<boolean> => ipcRenderer.invoke('git:isRepo', cwd),
+  blame: (cwd: string | undefined, rev: string, filePath: string): Promise<GitBlame> =>
+    ipcRenderer.invoke('git:blame', cwd, rev, filePath),
   discover: (cwd?: string): Promise<GitRepo[]> => ipcRenderer.invoke('git:discover', cwd),
   log: (cwd?: string, maxCount?: number): Promise<GitLog> =>
     ipcRenderer.invoke('git:log', cwd, maxCount),
+  show: (cwd: string | undefined, hash: string): Promise<GitCommitDetail> =>
+    ipcRenderer.invoke('git:show', cwd, hash),
   status: (cwd?: string): Promise<GitStatus> => ipcRenderer.invoke('git:status', cwd),
   branches: (cwd?: string): Promise<GitBranches> => ipcRenderer.invoke('git:branches', cwd),
   checkout: (cwd: string | undefined, branch: string): Promise<GitCheckoutResult> =>

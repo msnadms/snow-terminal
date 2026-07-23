@@ -776,6 +776,252 @@ body {
   font-size: 11px;
 }
 
+.commit-view {
+  height: 100%;
+  width: 100%;
+  overflow-y: auto;
+  scrollbar-width: none;
+  padding: 12px 14px 40px;
+  background: #1e1e2e;
+  color: var(--git-text, #b8b3cc);
+  font-family: 'Menlo', 'Consolas', monospace;
+  font-size: 12px;
+  user-select: text;
+
+  --diff-background-color: transparent;
+  --diff-text-color: var(--git-text, #b8b3cc);
+  --diff-font-family: 'Hack Nerd Font Mono', 'Hack Nerd Font', Menlo, Consolas, 'Cascadia Code',
+    monospace;
+  --diff-selection-background-color: #45475a;
+  --diff-gutter-insert-background-color: var(--git-diff-add-gutter, #21402c);
+  --diff-gutter-delete-background-color: var(--git-diff-del-gutter, #452630);
+  --diff-code-insert-background-color: var(--git-diff-add-bg, #18291f);
+  --diff-code-delete-background-color: var(--git-diff-del-bg, #2c1d23);
+  --diff-code-insert-edit-background-color: var(--git-diff-add-gutter, #21402c);
+  --diff-code-delete-edit-background-color: var(--git-diff-del-gutter, #452630);
+}
+
+.commit-view::-webkit-scrollbar {
+  display: none;
+}
+
+.commit-empty {
+  padding: 14px;
+  color: var(--git-muted, #5f5878);
+}
+
+.commit-header {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--git-border, #2f2b40);
+}
+
+.commit-subject {
+  color: #cdd6f4;
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.commit-body {
+  margin: 8px 0 0;
+  color: var(--git-text, #b8b3cc);
+  font: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.commit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 6px;
+  color: var(--git-muted, #5f5878);
+}
+
+.commit-hash {
+  color: var(--git-hash, #6b9dc0);
+}
+
+.commit-author {
+  color: var(--git-author, #a396c2);
+}
+
+.commit-refs {
+  color: var(--git-branch, #c7b06b);
+}
+
+.commit-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.commit-count {
+  color: var(--git-muted, #5f5878);
+}
+
+.commit-toggle {
+  display: flex;
+  gap: 4px;
+}
+
+.commit-toggle-button {
+  height: 22px;
+  padding: 0 10px;
+  font: inherit;
+  color: #cdd6f4;
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    border-color 160ms ease;
+}
+
+.commit-toggle-button:hover {
+  border-color: #45475a;
+  color: #d8c07a;
+}
+
+.commit-toggle-active {
+  color: #d8c07a;
+  border-color: #45475a;
+}
+
+.commit-files {
+  display: flex;
+  flex-direction: column;
+  margin-top: 10px;
+  border: 1px solid var(--git-border, #2f2b40);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.commit-file-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 10px;
+  font: inherit;
+  color: var(--git-text, #b8b3cc);
+  background: transparent;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.commit-file-row:hover {
+  background: #26263a;
+}
+
+.commit-file-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-file-old {
+  color: var(--git-muted, #5f5878);
+}
+
+.commit-file-stat {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+}
+
+.commit-add {
+  color: var(--git-diff-add-text, #8fbf9f);
+}
+
+.commit-del {
+  color: var(--git-diff-del-text, #c98c96);
+}
+
+.commit-file-binary {
+  flex: 0 0 auto;
+  color: var(--git-muted, #5f5878);
+}
+
+.commit-file-section {
+  margin-top: 14px;
+  border: 1px solid var(--git-border, #2f2b40);
+  border-radius: 4px;
+  overflow: hidden;
+  scroll-margin-top: 12px;
+}
+
+.commit-file-title {
+  padding: 5px 10px;
+  color: #cdd6f4;
+  background: #191926;
+  border-bottom: 1px solid var(--git-border, #2f2b40);
+  word-break: break-all;
+}
+
+.commit-file-empty {
+  padding: 8px 10px;
+  color: var(--git-muted, #5f5878);
+}
+
+.commit-view .diff-gutter {
+  cursor: default;
+}
+
+.commit-view .diff-blame .diff-gutter-col:first-child {
+  width: 30ch;
+}
+
+.commit-view .diff-blame .diff-gutter:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.commit-blame {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.commit-blame:hover .commit-blame-hash {
+  color: var(--git-hash-hover, #d8c07a);
+}
+
+.commit-blame-hash {
+  flex: 0 0 auto;
+  color: var(--git-hash, #6b9dc0);
+}
+
+.commit-blame-author {
+  min-width: 0;
+  color: var(--git-muted, #5f5878);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-view .diff-hunk-header,
+.commit-view .diff-decoration-content {
+  padding: 2px 10px;
+  color: var(--git-muted, #5f5878);
+  background: #191926;
+}
+
+.commit-truncated {
+  margin-top: 14px;
+  padding: 8px 10px;
+  color: var(--git-dirty, #c3a865);
+  border: 1px solid var(--git-border, #2f2b40);
+  border-radius: 4px;
+}
+
 .terminal-pane {
   height: 100%;
   width: 100%;

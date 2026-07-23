@@ -26,6 +26,36 @@ export interface GitRepo {
   name: string
 }
 
+export interface GitCommitFile {
+  path: string
+  oldPath: string | null
+  additions: number
+  deletions: number
+  binary: boolean
+}
+
+export interface GitBlameLine {
+  hash: string
+  author: string
+  date: string
+}
+
+export type GitBlame = Record<number, GitBlameLine>
+
+export interface GitCommitDetail {
+  hash: string
+  parents: string[]
+  author: string
+  email: string
+  date: string
+  subject: string
+  body: string
+  refs: string
+  files: GitCommitFile[]
+  patch: string
+  truncated: boolean
+}
+
 export interface GitCommitPushResult {
   ok: boolean
   error?: string
@@ -67,6 +97,72 @@ const commitFormat = {
   date: '%aI',
   subject: '%s',
   refs: '%D'
+}
+
+const detailFormat = ['%H', '%P', '%an', '%ae', '%aI', '%s', '%D', '%b'].join('%x1f')
+
+const maxPatchChars = 2_000_000
+
+function capPatch(patch: string): { patch: string; truncated: boolean } {
+  if (patch.length <= maxPatchChars) return { patch, truncated: false }
+  const head = patch.slice(0, maxPatchChars)
+  const boundary = head.lastIndexOf('\ndiff --git ')
+  return { patch: boundary > 0 ? head.slice(0, boundary + 1) : '', truncated: true }
+}
+
+function parseNumstat(raw: string): GitCommitFile[] {
+  const tokens = raw.split('\0')
+  const files: GitCommitFile[] = []
+  for (let i = 0; i < tokens.length; i++) {
+    const parts = tokens[i].split('\t')
+    if (parts.length < 3) continue
+    const [adds, dels, rest] = parts
+    let oldPath: string | null = null
+    let filePath = rest
+    if (rest === '') {
+      oldPath = tokens[++i] ?? ''
+      filePath = tokens[++i] ?? ''
+    }
+    if (!filePath) continue
+    files.push({
+      path: filePath,
+      oldPath: oldPath || null,
+      additions: Number(adds) || 0,
+      deletions: Number(dels) || 0,
+      binary: adds === '-' && dels === '-'
+    })
+  }
+  return files
+}
+
+const blameHeader = /^([0-9a-f]{40}) \d+ (\d+)/
+
+function parseBlame(raw: string): GitBlame {
+  const blame: GitBlame = {}
+  let hash = ''
+  let line = 0
+  let author = ''
+  let time = 0
+
+  for (const text of raw.split('\n')) {
+    if (text.startsWith('\t')) {
+      if (line > 0) {
+        blame[line] = { hash, author, date: time ? new Date(time * 1000).toISOString() : '' }
+      }
+      line = 0
+      continue
+    }
+    const header = blameHeader.exec(text)
+    if (header) {
+      hash = header[1]
+      line = Number(header[2])
+      continue
+    }
+    if (text.startsWith('author ')) author = text.slice(7)
+    else if (text.startsWith('author-time ')) time = Number(text.slice(12))
+  }
+
+  return blame
 }
 
 function layout(
@@ -282,6 +378,47 @@ export function registerGitHandlers(): void {
     }))
     return layout(raw)
   })
+
+  ipcMain.handle(
+    'git:show',
+    async (_event, cwd: string | undefined, hash: string): Promise<GitCommitDetail> => {
+      const git = gitFor(cwd)
+      const meta = (await git.raw(['show', '-s', `--format=${detailFormat}`, hash])).split('\x1f')
+      const parents = (meta[1] ?? '').split(' ').filter(Boolean)
+      const range = parents.length > 0 ? ['diff', parents[0], hash] : ['show', '--format=', hash]
+
+      const [numstat, raw] = await Promise.all([
+        git.raw([...range, '-M', '--numstat', '-z']),
+        git.raw([...range, '-M', '--patch', '--no-color'])
+      ])
+      const { patch, truncated } = capPatch(raw)
+
+      return {
+        hash: meta[0] ?? hash,
+        parents,
+        author: meta[2] ?? '',
+        email: meta[3] ?? '',
+        date: meta[4] ?? '',
+        subject: meta[5] ?? '',
+        refs: meta[6] ?? '',
+        body: (meta[7] ?? '').trim(),
+        files: parseNumstat(numstat),
+        patch,
+        truncated
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'git:blame',
+    async (_event, cwd: string | undefined, rev: string, filePath: string): Promise<GitBlame> => {
+      try {
+        return parseBlame(await gitFor(cwd).raw(['blame', '--line-porcelain', rev, '--', filePath]))
+      } catch {
+        return {}
+      }
+    }
+  )
 
   ipcMain.handle('git:status', async (_event, cwd?: string): Promise<GitStatus> => {
     const status = await gitFor(cwd).status()

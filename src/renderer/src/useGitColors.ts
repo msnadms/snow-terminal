@@ -18,7 +18,13 @@ const cssVars: Record<Exclude<keyof GitColors, 'lanes'>, string> = {
   tooltipBackground: '--git-tooltip-bg',
   tooltipBorder: '--git-tooltip-border',
   tooltipText: '--git-tooltip-text',
-  tooltipMuted: '--git-tooltip-muted'
+  tooltipMuted: '--git-tooltip-muted',
+  diffAddBackground: '--git-diff-add-bg',
+  diffDeleteBackground: '--git-diff-del-bg',
+  diffAddGutter: '--git-diff-add-gutter',
+  diffDeleteGutter: '--git-diff-del-gutter',
+  diffAddText: '--git-diff-add-text',
+  diffDeleteText: '--git-diff-del-text'
 }
 
 function applyCssVars(colors: GitColors): void {

@@ -9,6 +9,8 @@ const maxBytes = 5 * 1024 * 1024
 const maxValueChars = 400
 const quietChannels = new Set(['pty:write', 'pty:resize'])
 const redactedChannels = new Set([
+  'git:blame',
+  'git:show',
   'snowconfig:get',
   'snowconfig:addPreset',
   'snowconfig:setDefault',

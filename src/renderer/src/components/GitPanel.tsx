@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { shortHash } from '../format'
 import { useGitColors } from '../useGitColors'
 
 type GitLog = Awaited<ReturnType<typeof window.api.git.log>>
@@ -20,10 +21,6 @@ const fallbackLanes = ['#917ec8', '#7791c5', '#c7b06b', '#a387c9']
 
 function laneColor(lanes: string[], col: number): string {
   return lanes[col % lanes.length]
-}
-
-function shortHash(hash: string): string {
-  return hash.slice(0, 7)
 }
 
 function laneX(col: number): number {
@@ -75,14 +72,23 @@ interface Tip {
   y: number
 }
 
+type OpenCommit = (cwd: string, hash: string) => void
+
 interface RepoSectionProps {
   repo: GitRepo
   multi: boolean
   lanes: string[]
   maxCommits: number
+  onOpenCommit?: OpenCommit
 }
 
-function RepoSection({ repo, multi, lanes, maxCommits }: RepoSectionProps): React.JSX.Element {
+function RepoSection({
+  repo,
+  multi,
+  lanes,
+  maxCommits,
+  onOpenCommit
+}: RepoSectionProps): React.JSX.Element {
   const [status, setStatus] = useState<GitStatus | null>(null)
   const [log, setLog] = useState<GitLog | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -144,7 +150,7 @@ function RepoSection({ repo, multi, lanes, maxCommits }: RepoSectionProps): Reac
     <>
       {multi && <span className={open ? 'git-caret git-caret-open' : 'git-caret'}>▸</span>}
       {multi && <span className="git-repo-name">{repo.name}</span>}
-      <span className="git-branch">{status?.current ?? '—'}</span>
+      <span className="git-branch">{status?.current ?? '-'}</span>
       {status && (status.ahead > 0 || status.behind > 0) && (
         <span className="git-track">
           {status.ahead > 0 && `↑${status.ahead}`}
@@ -227,6 +233,7 @@ function RepoSection({ repo, multi, lanes, maxCommits }: RepoSectionProps): Reac
                     setTip({ commit: c, x: r.right + 8, y: r.top })
                   }}
                   onMouseLeave={() => setTip(null)}
+                  onClick={() => onOpenCommit?.(cwd, c.hash)}
                 />
                 <span className="git-row-text" style={{ paddingLeft: graphWidth }}>
                   <span className="git-author">{c.author}</span>
@@ -257,7 +264,12 @@ function RepoSection({ repo, multi, lanes, maxCommits }: RepoSectionProps): Reac
   )
 }
 
-function GitPanel({ cwd }: { cwd?: string }): React.JSX.Element {
+interface GitPanelProps {
+  cwd?: string
+  onOpenCommit?: OpenCommit
+}
+
+function GitPanel({ cwd, onOpenCommit }: GitPanelProps): React.JSX.Element {
   const [repos, setRepos] = useState<GitRepo[] | null>(null)
   const colors = useGitColors()
   const lanes = colors?.lanes ?? fallbackLanes
@@ -299,6 +311,7 @@ function GitPanel({ cwd }: { cwd?: string }): React.JSX.Element {
             multi={repos.length > 1}
             lanes={lanes}
             maxCommits={repos.length > 1 ? MULTI_REPO_COMMITS : SINGLE_REPO_COMMITS}
+            onOpenCommit={onOpenCommit}
           />
         ))}
       </div>

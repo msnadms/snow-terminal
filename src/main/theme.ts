@@ -20,6 +20,12 @@ export interface GitColors {
   tooltipBorder: string
   tooltipText: string
   tooltipMuted: string
+  diffAddBackground: string
+  diffDeleteBackground: string
+  diffAddGutter: string
+  diffDeleteGutter: string
+  diffAddText: string
+  diffDeleteText: string
   lanes: string[]
 }
 
@@ -50,6 +56,12 @@ const defaultTheme: Theme = {
     tooltipBorder: '#34304a',
     tooltipText: '#cdc8dd',
     tooltipMuted: '#6e6690',
+    diffAddBackground: '#18291f',
+    diffDeleteBackground: '#2c1d23',
+    diffAddGutter: '#21402c',
+    diffDeleteGutter: '#452630',
+    diffAddText: '#8fbf9f',
+    diffDeleteText: '#c98c96',
     lanes: ['#917ec8', '#7791c5', '#c7b06b', '#a387c9', '#6797c1', '#c3a865', '#8177c5', '#6eb0c4']
   }
 }
@@ -94,6 +106,12 @@ function mergeGit(raw: unknown): GitColors {
     tooltipBorder: color(g.tooltipBorder, base.tooltipBorder),
     tooltipText: color(g.tooltipText, base.tooltipText),
     tooltipMuted: color(g.tooltipMuted, base.tooltipMuted),
+    diffAddBackground: color(g.diffAddBackground, base.diffAddBackground),
+    diffDeleteBackground: color(g.diffDeleteBackground, base.diffDeleteBackground),
+    diffAddGutter: color(g.diffAddGutter, base.diffAddGutter),
+    diffDeleteGutter: color(g.diffDeleteGutter, base.diffDeleteGutter),
+    diffAddText: color(g.diffAddText, base.diffAddText),
+    diffDeleteText: color(g.diffDeleteText, base.diffDeleteText),
     lanes: laneList(g.lanes, base.lanes)
   }
 }
