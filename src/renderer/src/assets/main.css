@@ -225,6 +225,142 @@ body {
   font-size: 13px;
 }
 
+.home-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  width: 340px;
+  max-width: 80%;
+}
+
+.home-preset {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: #181825;
+  border: 1px solid #313244;
+  border-radius: 6px;
+}
+
+.home-preset:hover {
+  border-color: #45475a;
+}
+
+.home-preset-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0;
+  text-align: left;
+  color: #cdd6f4;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+}
+
+.home-preset-default {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  accent-color: #d8c07a;
+  cursor: pointer;
+}
+
+.home-preset-name {
+  color: #d8c07a;
+  font-size: 13px;
+}
+
+.home-preset-cwd {
+  color: #6c7086;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-add {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+  width: 340px;
+  max-width: 80%;
+}
+
+.home-add-input {
+  flex: 0 1 100px;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  color: #cdd6f4;
+  background: #181825;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  outline: none;
+  font: inherit;
+  user-select: text;
+}
+
+.home-add-input:focus {
+  border-color: #45475a;
+}
+
+.home-add-input::placeholder {
+  color: #5f5878;
+}
+
+.home-add-choose {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  text-align: left;
+  color: #cdd6f4;
+  background: #181825;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-add-choose:hover {
+  border-color: #45475a;
+}
+
+.home-add-choose-empty {
+  color: #5f5878;
+}
+
+.home-add-button {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 10px;
+  color: #cdd6f4;
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.home-add-button:hover:not(:disabled) {
+  border-color: #45475a;
+  color: #d8c07a;
+}
+
+.home-add-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .terminal-host {
   height: 100%;
   width: 100%;

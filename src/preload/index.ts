@@ -3,6 +3,7 @@ import { electronAPI } from '@electron-toolkit/preload'
 import type { GitCommitPushResult, GitLog, GitRepo, GitStatus } from '../main/git'
 import type { ThemeResult } from '../main/theme'
 import type { SnowignoreResult } from '../main/snowignore'
+import type { SnowconfigResult } from '../main/snowconfig'
 
 const terminal = {
   spawn: (id: number, cols: number, rows: number, cwd?: string, startupCommand?: string): void => {
@@ -66,7 +67,21 @@ const snowignore = {
   }
 }
 
-const api = { terminal, git, theme, snowignore }
+const snowconfig = {
+  get: (): Promise<SnowconfigResult> => ipcRenderer.invoke('snowconfig:get'),
+  addPreset: (preset: { name: string; cwd: string }): Promise<SnowconfigResult> =>
+    ipcRenderer.invoke('snowconfig:addPreset', preset),
+  setDefault: (index: number): Promise<SnowconfigResult> =>
+    ipcRenderer.invoke('snowconfig:setDefault', index),
+  chooseDir: (): Promise<string | null> => ipcRenderer.invoke('snowconfig:chooseDir'),
+  onChanged: (callback: (result: SnowconfigResult) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, result: SnowconfigResult): void => callback(result)
+    ipcRenderer.on('snowconfig:changed', listener)
+    return () => ipcRenderer.removeListener('snowconfig:changed', listener)
+  }
+}
+
+const api = { terminal, git, theme, snowignore, snowconfig }
 
 export type Api = typeof api
 

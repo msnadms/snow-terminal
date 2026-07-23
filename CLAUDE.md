@@ -78,6 +78,31 @@ with the `ignore` package. Its `filterPaths()` expects repo-root-relative forwar
 `GitPanel` still uses `changed`, so the dirty indicator reflects real repo state. A matched file that
 is already staged is left alone — snow only filters what it adds.
 
+#### `.snowconfig`
+
+Session presets for the home tab, as JSON. `src/main/snowconfig.ts` mirrors `theme.ts`'s lifecycle
+(default written with `flag: 'wx'` on first launch, directory `fs.watch` broadcasting
+`snowconfig:changed`). Shape is `{ presets: { name, cwd, default? }[] }`; entries missing a string
+`name`/`cwd` are dropped, and a leading `~` in `cwd` is expanded to the home dir **only on read**, so
+the renderer gets absolute paths while the file keeps the raw `~`. Beyond `snowconfig:get` it exposes
+two write handlers — `snowconfig:addPreset` and `snowconfig:setDefault(index)` (index `-1` clears the
+default) — that mutate the raw parsed presets and rewrite the file; the fs.watch broadcast then keeps
+every window in sync. `useSnowconfig` (`src/renderer/src/useSnowconfig.ts`) is the single subscription;
+`App` reads it so the tab strip's `+` button opens the `default` preset's cwd (home dir if none), and
+`HomePage` renders each preset with a default checkbox (radio-like via `setDefault`) plus an add form.
+Opening a preset calls `App`'s `addSession(cwd)`, which seeds the session's cwd (so git/tab-label are
+correct before the shell's first OSC 7) and passes it to both terminals' spawn.
+
+## Session tabs
+
+`App.tsx` owns the tab model: `sessions` (each `{ id, cwd? }`), `activeId` (`number | 'home'`), and a
+per-session `cwds` map fed by each session's bottom-terminal OSC 7. The active session's cwd drives
+`ActionBar` and `GitPanel` exactly as a single `cwd` prop did before. `Session` renders the Claude
+(top) + shell (bottom) pair; all sessions stay mounted and inactive ones are hidden with
+`display:none` so their PTYs survive tab switches (they die only on close/unmount). `Terminal` takes
+an `active` prop and re-fits via `requestAnimationFrame` on activation; its fit/resize is guarded on a
+non-zero container size so a hidden (0×0) pane is never shrunk to `FitAddon`'s minimum columns.
+
 ## node-pty (native module) constraints
 
 `node-pty` is a native module and must **not** be bundled:

@@ -6,6 +6,7 @@ import { registerPtyHandlers, disposeAllPty } from './pty'
 import { registerGitHandlers, disposeGitWatchers } from './git'
 import { registerThemeHandlers, disposeThemeWatcher } from './theme'
 import { registerSnowignoreHandlers, disposeSnowignoreWatcher } from './snowignore'
+import { registerSnowconfigHandlers, disposeSnowconfigWatcher } from './snowconfig'
 
 function createWindow(): void {
   // Create the browser window.
@@ -69,6 +70,9 @@ app.whenReady().then(() => {
   // Load ~/.config/snow/.snowignore and watch it for edits.
   registerSnowignoreHandlers()
 
+  // Load ~/.config/snow/.snowconfig and watch it for edits.
+  registerSnowconfigHandlers()
+
   createWindow()
 
   app.on('activate', function () {
@@ -93,6 +97,7 @@ app.on('will-quit', () => {
   disposeGitWatchers()
   disposeThemeWatcher()
   disposeSnowignoreWatcher()
+  disposeSnowconfigWatcher()
 })
 
 // In this file you can include the rest of your app's specific main process

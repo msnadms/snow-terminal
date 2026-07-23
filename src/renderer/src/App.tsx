@@ -4,11 +4,13 @@ import GitPanel from './components/GitPanel'
 import Session from './components/Session'
 import TabBar from './components/TabBar'
 import HomePage from './components/HomePage'
+import { useSnowconfig } from './useSnowconfig'
 
 type ActiveId = number | 'home'
 
 interface SessionMeta {
   id: number
+  cwd?: string
 }
 
 function basename(path: string): string {
@@ -21,6 +23,7 @@ function App(): React.JSX.Element {
   const [activeId, setActiveId] = useState<ActiveId>('home')
   const [cwds, setCwds] = useState<Record<number, string | undefined>>({})
   const nextIdRef = useRef(1)
+  const presets = useSnowconfig()
 
   const cwd = typeof activeId === 'number' ? cwds[activeId] : undefined
 
@@ -33,9 +36,10 @@ function App(): React.JSX.Element {
     return result
   }, [sessions, cwds])
 
-  const addSession = (): void => {
+  const addSession = (cwd?: string): void => {
     const id = nextIdRef.current++
-    setSessions((prev) => [...prev, { id }])
+    setSessions((prev) => [...prev, { id, cwd }])
+    if (cwd) setCwds((prev) => ({ ...prev, [id]: cwd }))
     setActiveId(id)
   }
 
@@ -66,14 +70,17 @@ function App(): React.JSX.Element {
             labels={labels}
             onSelect={setActiveId}
             onClose={closeSession}
-            onAdd={addSession}
+            onAdd={() => addSession(presets.find((p) => p.default)?.cwd)}
           />
           <div className="terminal-stack">
-            {activeId === 'home' && <HomePage />}
-            {sessions.map(({ id }) => (
+            {activeId === 'home' && (
+              <HomePage presets={presets} onOpenPreset={(dir) => addSession(dir)} />
+            )}
+            {sessions.map(({ id, cwd }) => (
               <Session
                 key={id}
                 active={activeId === id}
+                cwd={cwd}
                 onCwd={(next) => setCwds((prev) => ({ ...prev, [id]: next }))}
               />
             ))}
