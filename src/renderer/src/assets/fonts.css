@@ -1,0 +1,31 @@
+@font-face {
+  font-family: 'Hack Nerd Font Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./fonts/HackNerdFontMono-Regular.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Hack Nerd Font Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url('./fonts/HackNerdFontMono-Bold.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Hack Nerd Font Mono';
+  font-style: italic;
+  font-weight: 400;
+  font-display: block;
+  src: url('./fonts/HackNerdFontMono-Italic.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Hack Nerd Font Mono';
+  font-style: italic;
+  font-weight: 700;
+  font-display: block;
+  src: url('./fonts/HackNerdFontMono-BoldItalic.ttf') format('truetype');
+}

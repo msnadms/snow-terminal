@@ -117,6 +117,6 @@ The default shell is `powershell.exe` on Windows, `$SHELL` (or `/bin/bash`) else
 
 - Do not write comments. Let the code speak for itself.
 - Do not vertically align text with uneven spacing (no padding names/values with extra spaces to line up columns).
-- Renderer terminal font is **Hack Nerd Font Mono** (system-installed) so Starship glyphs render aligned; the stack falls back to Menlo/Consolas/Cascadia/monospace.
+- Renderer terminal font is **Hack Nerd Font Mono**, bundled so Starship glyphs render aligned without a system install: the four Mono weights live in `src/renderer/src/assets/fonts/`, are declared as `@font-face` in `assets/fonts.css`, and `main.tsx` awaits `document.fonts.load` for each weight before mounting `App` so xterm's canvas measures real glyph metrics. The stack still falls back to Menlo/Consolas/Cascadia/monospace.
 - `@renderer` path alias maps to `src/renderer/src/` (see `electron.vite.config.ts` and `tsconfig.web.json`).
 - New privileged capabilities follow the same pattern: add an `ipcMain` handler in main, expose a wrapper in preload's `api`, never give the renderer direct Node access.
