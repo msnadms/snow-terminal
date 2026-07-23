@@ -25,6 +25,11 @@ export interface GitRepo {
   name: string
 }
 
+export interface GitCommitPushResult {
+  ok: boolean
+  error?: string
+}
+
 export interface GitStatus {
   current: string | null
   tracking: string | null
@@ -108,6 +113,15 @@ function gitFor(cwd?: string): SimpleGit {
     gitByPath.set(dir, git)
   }
   return git
+}
+
+function errorText(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error)
+  const line = raw
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l.length > 0)
+  return line || 'git command failed'
 }
 
 async function gitDir(cwd?: string): Promise<string | null> {
@@ -243,6 +257,35 @@ export function registerGitHandlers(): void {
   })
 
   ipcMain.handle('git:discover', (_event, cwd?: string): Promise<GitRepo[]> => discoverRepos(cwd))
+
+  ipcMain.handle(
+    'git:commitPush',
+    async (_event, cwd: string | undefined, message: string): Promise<GitCommitPushResult> => {
+      const subject = (message ?? '').trim()
+      if (!subject) return { ok: false, error: 'Commit message required' }
+
+      const git = gitFor(cwd)
+      try {
+        await git.add(['-A'])
+        await git.commit(subject)
+      } catch (error) {
+        return { ok: false, error: errorText(error) }
+      }
+
+      try {
+        const status = await git.status()
+        if (status.tracking || !status.current) {
+          await git.push()
+        } else {
+          await git.push(['--set-upstream', 'origin', status.current])
+        }
+      } catch (error) {
+        return { ok: false, error: `Committed, push failed: ${errorText(error)}` }
+      }
+
+      return { ok: true }
+    }
+  )
 
   ipcMain.handle('git:unwatch', (event, cwd?: string): void => {
     const key = watcherKey(event.sender.id, cwd)

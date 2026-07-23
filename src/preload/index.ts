@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
-import type { GitLog, GitRepo, GitStatus } from '../main/git'
+import type { GitCommitPushResult, GitLog, GitRepo, GitStatus } from '../main/git'
 import type { ThemeResult } from '../main/theme'
 
 const terminal = {
@@ -36,6 +36,8 @@ const git = {
   log: (cwd?: string, maxCount?: number): Promise<GitLog> =>
     ipcRenderer.invoke('git:log', cwd, maxCount),
   status: (cwd?: string): Promise<GitStatus> => ipcRenderer.invoke('git:status', cwd),
+  commitPush: (cwd: string | undefined, message: string): Promise<GitCommitPushResult> =>
+    ipcRenderer.invoke('git:commitPush', cwd, message),
   watch: (cwd?: string): Promise<void> => ipcRenderer.invoke('git:watch', cwd),
   unwatch: (cwd?: string): Promise<void> => ipcRenderer.invoke('git:unwatch', cwd),
   onChanged: (callback: (cwd: string | null) => void): (() => void) => {

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import ActionBar from './components/ActionBar'
 import Terminal from './components/Terminal'
 import GitPanel from './components/GitPanel'
 
@@ -7,7 +8,7 @@ function App(): React.JSX.Element {
 
   return (
     <div className="app">
-      <div className="titlebar">snow - terminal</div>
+      <ActionBar cwd={cwd} />
       <div className="content">
         <div className="terminal-host">
           <div className="terminal-main">
