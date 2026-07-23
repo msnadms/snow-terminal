@@ -1,10 +1,11 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { GitLog, GitStatus } from '../main/git'
+import type { ThemeResult } from '../main/theme'
 
 const terminal = {
-  spawn: (id: number, cols: number, rows: number, cwd?: string): void => {
-    ipcRenderer.send('pty:spawn', { id, cols, rows, cwd })
+  spawn: (id: number, cols: number, rows: number, cwd?: string, startupCommand?: string): void => {
+    ipcRenderer.send('pty:spawn', { id, cols, rows, cwd, startupCommand })
   },
   write: (id: number, data: string): void => {
     ipcRenderer.send('pty:write', { id, data })
@@ -32,10 +33,25 @@ const terminal = {
 const git = {
   isRepo: (cwd?: string): Promise<boolean> => ipcRenderer.invoke('git:isRepo', cwd),
   log: (cwd?: string): Promise<GitLog> => ipcRenderer.invoke('git:log', cwd),
-  status: (cwd?: string): Promise<GitStatus> => ipcRenderer.invoke('git:status', cwd)
+  status: (cwd?: string): Promise<GitStatus> => ipcRenderer.invoke('git:status', cwd),
+  watch: (cwd?: string): Promise<void> => ipcRenderer.invoke('git:watch', cwd),
+  onChanged: (callback: () => void): (() => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('git:changed', listener)
+    return () => ipcRenderer.removeListener('git:changed', listener)
+  }
 }
 
-const api = { terminal, git }
+const theme = {
+  get: (): Promise<ThemeResult> => ipcRenderer.invoke('theme:get'),
+  onChanged: (callback: (result: ThemeResult) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, result: ThemeResult): void => callback(result)
+    ipcRenderer.on('theme:changed', listener)
+    return () => ipcRenderer.removeListener('theme:changed', listener)
+  }
+}
+
+const api = { terminal, git, theme }
 
 export type Api = typeof api
 

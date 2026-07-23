@@ -47,6 +47,17 @@ Key files:
 - `src/preload/index.ts` — defines `window.api.terminal`; its `onData`/`onExit` return unsubscribe functions. `export type Api` is consumed by `src/preload/index.d.ts` to type `window.api`.
 - `src/renderer/src/components/Terminal.tsx` — one xterm pane per component; a `ResizeObserver` refits and resizes the PTY.
 
+### User theme config
+
+Colors live in `~/.config/snow/theme.json` (`$XDG_CONFIG_HOME/snow/theme.json` when set), currently
+scoped to the git view. `src/main/theme.ts` owns it: it writes the defaults on first launch, reads and
+validates on `theme:get`, and `fs.watch`es the directory to broadcast `theme:changed` on edit. Unknown
+or malformed values fall back to the defaults per key, so a bad edit degrades instead of breaking.
+
+`useGitColors` (`src/renderer/src/useGitColors.ts`) pushes each color onto `document.documentElement`
+as a `--git-*` custom property that `main.css` consumes with the default as its fallback; `lanes` is
+returned to `GitPanel` since SVG strokes need the value in JS.
+
 ## node-pty (native module) constraints
 
 `node-pty` is a native module and must **not** be bundled:

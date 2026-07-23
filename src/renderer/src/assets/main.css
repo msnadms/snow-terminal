@@ -46,8 +46,21 @@ body {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
   padding: 6px;
+  gap: 6px;
   background: #1e1e2e;
+}
+
+.terminal-main {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.terminal-secondary {
+  flex: 0 0 15%;
+  min-height: 0;
 }
 
 .git-panel {
@@ -55,17 +68,17 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: #181825;
-  border-left: 1px solid #313244;
+  background: var(--git-bg, #1e1e2e);
+  border-left: 1px solid var(--git-border, #2f2b40);
   font-family: 'Menlo', 'Consolas', monospace;
   font-size: 12px;
-  color: #cdd6f4;
+  color: var(--git-text, #b8b3cc);
   overflow: hidden;
 }
 
 .git-empty {
   padding: 14px;
-  color: #6c7086;
+  color: var(--git-muted, #5f5878);
 }
 
 .git-header {
@@ -74,20 +87,20 @@ body {
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  border-bottom: 1px solid #313244;
+  border-bottom: 1px solid var(--git-border, #2f2b40);
 }
 
 .git-branch {
-  color: #a6e3a1;
+  color: var(--git-branch, #c7b06b);
   font-weight: 600;
 }
 
 .git-track {
-  color: #89b4fa;
+  color: var(--git-track, #7791c5);
 }
 
 .git-dirty {
-  color: #f9e2af;
+  color: var(--git-dirty, #c3a865);
   margin-left: auto;
 }
 
@@ -96,51 +109,130 @@ body {
   min-height: 0;
   overflow-y: auto;
   padding: 6px 0;
+  scrollbar-width: none;
 }
 
-.git-commit {
+.git-log::-webkit-scrollbar {
+  display: none;
+}
+
+.git-graph {
+  position: relative;
+}
+
+.git-graph-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.git-edge {
+  opacity: 0.5;
+}
+
+.git-edge-glow {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 4px currentColor) drop-shadow(0 0 9px currentColor);
+  animation-name: git-edge-glow;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+@keyframes git-edge-glow {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: var(--glow-period);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .git-edge-glow {
+    display: none;
+  }
+
+  .git-edge {
+    opacity: 1;
+  }
+}
+
+.git-row {
+  position: relative;
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 5px 12px;
+  align-items: center;
 }
 
-.git-commit:hover {
-  background: #1e1e2e;
-}
-
-.git-dot {
-  flex: 0 0 auto;
-  width: 8px;
-  height: 8px;
-  margin-top: 3px;
+.git-node {
+  position: absolute;
+  top: 50%;
   border-radius: 50%;
-  background: #89b4fa;
-  box-shadow: 0 0 0 2px #181825;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 2px var(--git-bg, #1e1e2e);
+  cursor: pointer;
+  z-index: 1;
 }
 
-.git-commit-body {
+.git-node:hover {
+  box-shadow:
+    0 0 0 2px var(--git-bg, #1e1e2e),
+    0 0 0 4px currentColor;
+}
+
+.git-row-text {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: baseline;
+  gap: 8px;
   min-width: 0;
+  padding-right: 12px;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
-.git-subject {
-  white-space: nowrap;
+.git-hash {
+  flex: 0 0 auto;
+  color: var(--git-hash, #6b9dc0);
+  cursor: pointer;
+}
+
+.git-hash:hover {
+  color: var(--git-hash-hover, #d8c07a);
+}
+
+.git-author {
+  min-width: 0;
+  color: var(--git-author, #a396c2);
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.git-meta {
-  display: flex;
-  gap: 8px;
-  color: #6c7086;
-  font-size: 11px;
+.git-tooltip {
+  position: fixed;
+  z-index: 10;
+  max-width: 320px;
+  padding: 6px 10px;
+  background: var(--git-tooltip-bg, #191926);
+  border: 1px solid var(--git-tooltip-border, #34304a);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(10, 6, 30, 0.6);
+  pointer-events: none;
 }
 
-.git-hash {
-  color: #f5c2e7;
+.git-tooltip-subject {
+  color: var(--git-tooltip-text, #cdc8dd);
+  white-space: normal;
+  word-break: break-word;
+}
+
+.git-tooltip-meta {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--git-tooltip-muted, #6e6690);
+  font-size: 11px;
 }
 
 .terminal-pane {
@@ -152,4 +244,13 @@ body {
 .terminal-pane .xterm,
 .terminal-pane .xterm-viewport {
   height: 100%;
+}
+
+.terminal-pane .xterm .xterm-viewport {
+  background-color: #1e1e2e;
+  scrollbar-width: none;
+}
+
+.terminal-pane .xterm .xterm-viewport::-webkit-scrollbar {
+  display: none;
 }

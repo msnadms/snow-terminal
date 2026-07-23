@@ -3,7 +3,8 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerPtyHandlers, disposeAllPty } from './pty'
-import { registerGitHandlers } from './git'
+import { registerGitHandlers, disposeGitWatchers } from './git'
+import { registerThemeHandlers, disposeThemeWatcher } from './theme'
 
 function createWindow(): void {
   // Create the browser window.
@@ -60,6 +61,9 @@ app.whenReady().then(() => {
   // Register git info IPC handlers; each call carries the repo cwd.
   registerGitHandlers()
 
+  // Load ~/.config/snow/theme.json and watch it for edits.
+  registerThemeHandlers()
+
   createWindow()
 
   app.on('activate', function () {
@@ -81,6 +85,8 @@ app.on('window-all-closed', () => {
 // Ensure all PTY processes are terminated when the app quits.
 app.on('will-quit', () => {
   disposeAllPty()
+  disposeGitWatchers()
+  disposeThemeWatcher()
 })
 
 // In this file you can include the rest of your app's specific main process

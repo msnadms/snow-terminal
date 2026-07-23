@@ -13,7 +13,16 @@ const sessions = new Map<number, PtySession>()
 export function registerPtyHandlers(): void {
   ipcMain.on(
     'pty:spawn',
-    (event, { id, cols, rows, cwd }: { id: number; cols: number; rows: number; cwd?: string }) => {
+    (
+      event,
+      {
+        id,
+        cols,
+        rows,
+        cwd,
+        startupCommand
+      }: { id: number; cols: number; rows: number; cwd?: string; startupCommand?: string }
+    ) => {
       sessions.get(id)?.pty.kill()
 
       const spec = shellSpec()
@@ -24,6 +33,10 @@ export function registerPtyHandlers(): void {
         cwd: cwd || os.homedir(),
         env: spec.env
       })
+
+      if (startupCommand) {
+        pty.write(`${startupCommand}\r`)
+      }
 
       const webContents = event.sender
 

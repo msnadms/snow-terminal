@@ -16,9 +16,10 @@ function parseOsc7(payload: string): string | null {
 interface TerminalProps {
   cwd?: string
   onCwd?: (cwd: string) => void
+  startupCommand?: string
 }
 
-function Terminal({ cwd, onCwd }: TerminalProps): React.JSX.Element {
+function Terminal({ cwd, onCwd, startupCommand }: TerminalProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const onCwdRef = useRef(onCwd)
 
@@ -49,7 +50,7 @@ function Terminal({ cwd, onCwd }: TerminalProps): React.JSX.Element {
     term.open(container)
     fitAddon.fit()
 
-    window.api.terminal.spawn(id, term.cols, term.rows, cwd)
+    window.api.terminal.spawn(id, term.cols, term.rows, cwd, startupCommand)
 
     const oscDisposable = term.parser.registerOscHandler(7, (payload) => {
       const next = parseOsc7(payload)
@@ -93,7 +94,7 @@ function Terminal({ cwd, onCwd }: TerminalProps): React.JSX.Element {
       window.api.terminal.kill(id)
       term.dispose()
     }
-  }, [cwd])
+  }, [cwd, startupCommand])
 
   return <div className="terminal-pane" ref={containerRef} />
 }

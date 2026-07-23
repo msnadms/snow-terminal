@@ -10,7 +10,12 @@ function App(): React.JSX.Element {
       <div className="titlebar">snow - terminal</div>
       <div className="content">
         <div className="terminal-host">
-          <Terminal onCwd={setCwd} />
+          <div className="terminal-main">
+            <Terminal startupCommand="claude" />
+          </div>
+          <div className="terminal-secondary">
+            <Terminal onCwd={setCwd} />
+          </div>
         </div>
         <GitPanel cwd={cwd} />
       </div>
