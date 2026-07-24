@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import FailureDialog from './FailureDialog'
 import { type Failure } from '@renderer/format'
 import { useGitAction } from '@renderer/useGitAction'
+import { useLatestRun } from '@renderer/useLatestRun'
 
 type WorkflowList = Awaited<ReturnType<typeof window.api.workflow.list>>
 type WorkflowEntry = WorkflowList['workflows'][number]
@@ -36,20 +37,20 @@ function WorkflowSelect({ cwd }: WorkflowSelectProps): React.JSX.Element | null 
   const [failure, setFailure] = useState<Failure | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+  const latestRun = useLatestRun()
+  const [refreshKey, setRefreshKey] = useState(0)
+
   const action = useGitAction<WorkflowResult>({
     onFailure: setFailure,
-    onSettled: () => {
-      window.api.workflow.list(cwd).then(setList)
-    }
+    onSettled: () => setRefreshKey((key) => key + 1)
   })
 
   useEffect(() => {
-    let cancelled = false
-
     const load = async (): Promise<void> => {
       if (!cwd) return
+      const isCurrent = latestRun()
       const result = await window.api.workflow.list(cwd)
-      if (cancelled) return
+      if (!isCurrent()) return
       if (result.error) console.error(`snow: failed to read workflows: ${result.error}`)
       setList(result)
     }
@@ -59,11 +60,10 @@ function WorkflowSelect({ cwd }: WorkflowSelectProps): React.JSX.Element | null 
     const offWorkflow = window.api.workflow.onChanged(() => load())
 
     return () => {
-      cancelled = true
       offGit()
       offWorkflow()
     }
-  }, [cwd])
+  }, [cwd, refreshKey, latestRun])
 
   useEffect(() => {
     if (!open) return

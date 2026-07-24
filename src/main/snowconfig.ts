@@ -137,13 +137,15 @@ export function registerSnowconfigHandlers(): void {
       const name = String(preset?.name ?? '').trim()
       const cwd = String(preset?.cwd ?? '').trim()
       if (!name || !cwd) return readSnowconfig()
-      const presets = rawPresets().presets
+      const { presets, error } = rawPresets()
+      if (error) return readSnowconfig()
       presets.push({ name, cwd })
       return writePresets(presets)
     }
   )
   ipcMain.handle('snowconfig:setDefault', (_e, index: number): SnowconfigResult => {
-    const presets = rawPresets().presets
+    const { presets, error } = rawPresets()
+    if (error) return readSnowconfig()
     presets.forEach((p, i) => {
       if (i === index) p.default = true
       else delete p.default

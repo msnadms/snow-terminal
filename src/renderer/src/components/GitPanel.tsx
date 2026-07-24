@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { shortHash } from '../format'
 import { useGitColors } from '../useGitColors'
+import { useLatestRun } from '../useLatestRun'
 
 type GitLog = Awaited<ReturnType<typeof window.api.git.log>>
 type GitStatus = Awaited<ReturnType<typeof window.api.git.status>>
@@ -186,24 +187,24 @@ function RepoSection({
   const [tip, setTip] = useState<Tip | null>(null)
   const [expanded, setExpanded] = useState(true)
   const [showFiles, setShowFiles] = useState(false)
+  const latestRun = useLatestRun()
   const cwd = repo.path
   const open = !multi || expanded
 
   useEffect(() => {
-    let cancelled = false
-
     const load = async (): Promise<void> => {
+      const isCurrent = latestRun()
       try {
         const [s, l] = await Promise.all([
           window.api.git.status(cwd),
           window.api.git.log(cwd, maxCommits)
         ])
-        if (cancelled) return
+        if (!isCurrent()) return
         setStatus(s)
         setLog(l)
         setError(null)
       } catch {
-        if (cancelled) return
+        if (!isCurrent()) return
         setError('Not a git repository')
         setStatus(null)
         setLog(null)
@@ -218,12 +219,11 @@ function RepoSection({
     const offSnowignore = window.api.snowignore.onChanged(() => load())
 
     return () => {
-      cancelled = true
       offChanged()
       offSnowignore()
       window.api.git.unwatch(cwd)
     }
-  }, [cwd, maxCommits])
+  }, [cwd, maxCommits, latestRun])
 
   const edges = useMemo(() => (log ? buildEdges(log.commits, lanes) : []), [log, lanes])
   const labels = useMemo(() => fileLabels((status?.files ?? []).map((f) => f.path)), [status])

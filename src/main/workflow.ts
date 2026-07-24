@@ -8,6 +8,7 @@ import {
   parkedFiles,
   stashEntries,
   switchBranch,
+  withRepoLock,
   worktreeRoot,
   type GitCheckoutResult
 } from './git'
@@ -115,7 +116,9 @@ export function registerWorkflowHandlers(): void {
     async (_event, cwd: string | undefined, branch: string): Promise<WorkflowResult> => {
       const name = (branch ?? '').trim()
       if (!name) return { ok: false, error: 'Workflow required' }
-      return switchBranch(cwd, name, (git) => git.checkout(name))
+      return withRepoLock(cwd, () => switchBranch(cwd, name, (git) => git.checkout(name))).catch(
+        (error) => ({ ok: false, error: errorText(error), detail: errorDetail(error) })
+      )
     }
   )
 
@@ -128,32 +131,33 @@ export function registerWorkflowHandlers(): void {
       const repo = await worktreeRoot(cwd)
       if (!repo) return { ok: false, error: 'Not a git repository' }
 
-      const git = gitFor(cwd)
-      try {
-        const existing = await git.branchLocal()
-        if (existing.all.includes(name)) return { ok: false, error: 'Branch already exists' }
-      } catch (error) {
-        return { ok: false, error: errorText(error), detail: errorDetail(error) }
-      }
-
-      const target = await defaultBranch(cwd)
-      const base = target ? `${target.remote}/${target.branch}` : 'HEAD'
-
-      const result = await switchBranch(cwd, name, (g) =>
-        g.raw(['checkout', '-b', name, '--no-track', base])
-      )
-      if (!result.ok) return result
-
-      const failed = addRecord(repo, name)
-      if (failed)
-        return {
-          ...result,
-          ok: false,
-          error: `Switched to ${name}, but could not register it in ${workflowsPath()}`,
-          detail: failed
+      return withRepoLock(cwd, async () => {
+        try {
+          const existing = await gitFor(cwd).branchLocal()
+          if (existing.all.includes(name)) return { ok: false, error: 'Branch already exists' }
+        } catch (error) {
+          return { ok: false, error: errorText(error), detail: errorDetail(error) }
         }
 
-      return result
+        const target = await defaultBranch(cwd)
+        const base = target ? `${target.remote}/${target.branch}` : 'HEAD'
+
+        const result = await switchBranch(cwd, name, (g) =>
+          g.raw(['checkout', '-b', name, '--no-track', base])
+        )
+        if (!result.ok) return result
+
+        const failed = addRecord(repo, name)
+        if (failed)
+          return {
+            ...result,
+            ok: false,
+            error: `Switched to ${name}, but could not register it in ${workflowsPath()}`,
+            detail: failed
+          }
+
+        return result
+      }).catch((error) => ({ ok: false, error: errorText(error), detail: errorDetail(error) }))
     }
   )
 }

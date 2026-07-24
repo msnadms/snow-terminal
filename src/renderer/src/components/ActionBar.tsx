@@ -4,6 +4,7 @@ import FailureDialog from './FailureDialog'
 import WorkflowSelect from './WorkflowSelect'
 import { type Failure } from '@renderer/format'
 import { useGitAction } from '@renderer/useGitAction'
+import { useLatestRun } from '@renderer/useLatestRun'
 
 interface ActionBarProps {
   cwd?: string
@@ -52,9 +53,16 @@ function ActionBar({ cwd, frozen, onFreeze }: ActionBarProps): React.JSX.Element
   const [isRepo, setIsRepo] = useState(false)
   const [status, setStatus] = useState<GitStatus | null>(null)
   const [defaultName, setDefaultName] = useState<string | null>(null)
-  const [message, setMessage] = useState('')
-  const [failure, setFailure] = useState<Failure | null>(null)
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [raised, setRaised] = useState<{ cwd?: string; failure: Failure } | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  const latestRun = useLatestRun()
+
+  const message = drafts[cwd ?? ''] ?? ''
+  const failure = raised && raised.cwd === cwd ? raised.failure : null
+
+  const setMessage = (next: string): void => setDrafts((prev) => ({ ...prev, [cwd ?? '']: next }))
+  const setFailure = (next: Failure | null): void => setRaised(next ? { cwd, failure: next } : null)
 
   const bump = (): void => setRefreshKey((key) => key + 1)
   const refresh = { onFailure: setFailure, onSettled: bump }
@@ -67,11 +75,18 @@ function ActionBar({ cwd, frozen, onFreeze }: ActionBarProps): React.JSX.Element
   const actions = [commit, syncDefault, update, sync, undo, pullRequest]
 
   useEffect(() => {
-    let cancelled = false
+    if (!frozen || !cwd) return
+    window.api.git.watch(cwd)
+    return () => {
+      window.api.git.unwatch(cwd)
+    }
+  }, [frozen, cwd])
 
+  useEffect(() => {
     const check = async (): Promise<void> => {
+      const isCurrent = latestRun()
       const repo = cwd ? await window.api.git.isRepo(cwd) : false
-      if (cancelled) return
+      if (!isCurrent()) return
       setIsRepo(repo)
       if (!repo) {
         setStatus(null)
@@ -83,11 +98,11 @@ function ActionBar({ cwd, frozen, onFreeze }: ActionBarProps): React.JSX.Element
           window.api.git.status(cwd),
           window.api.git.defaultBranch(cwd)
         ])
-        if (cancelled) return
+        if (!isCurrent()) return
         setStatus(gitStatus)
         setDefaultName(name)
       } catch {
-        if (cancelled) return
+        if (!isCurrent()) return
         setStatus(null)
         setDefaultName(null)
       }
@@ -98,17 +113,17 @@ function ActionBar({ cwd, frozen, onFreeze }: ActionBarProps): React.JSX.Element
     const offIgnore = window.api.snowignore.onChanged(() => check())
 
     return () => {
-      cancelled = true
       offChanged()
       offIgnore()
     }
-  }, [cwd, refreshKey])
+  }, [cwd, refreshKey, latestRun])
 
   const current = status?.current ?? null
   const tracking = status?.tracking ?? null
   const ahead = status?.ahead ?? 0
   const behind = status?.behind ?? 0
   const ready = (status?.stageable ?? 0) > 0
+  const ignoreError = status?.ignoreError ?? null
   const onDefault = defaultName !== null && current === defaultName
 
   const busy = actions.some((action) => action.pending)
@@ -142,6 +157,7 @@ function ActionBar({ cwd, frozen, onFreeze }: ActionBarProps): React.JSX.Element
       <input
         className="actionbar-input"
         placeholder="Commit message"
+        title={ignoreError ?? undefined}
         value={message}
         disabled={!ready || busy}
         onChange={(e) => setMessage(e.target.value)}
@@ -153,7 +169,7 @@ function ActionBar({ cwd, frozen, onFreeze }: ActionBarProps): React.JSX.Element
         className={`actionbar-button${commit.className}`}
         disabled={!canSubmit}
         onClick={submit}
-        title={commit.error || 'Add, Commit, Push'}
+        title={commit.error || ignoreError || 'Add, Commit, Push'}
       >
         <div className="nerd-glyph">{glyphs.commit}</div>
       </button>

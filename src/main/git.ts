@@ -1,10 +1,11 @@
-import { ipcMain, shell, WebContents } from 'electron'
+import { ipcMain, WebContents } from 'electron'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { simpleGit, SimpleGit, StatusResult } from 'simple-git'
 import { filterPaths } from './snowignore'
 import { registeredFor, workflowsPath } from './registry'
+import { isExternalUrl, openExternal } from './external'
 
 export interface GitCommit {
   hash: string
@@ -64,6 +65,7 @@ export interface GitCommitDetail {
 
 export interface GitWorkingDiff {
   branch: string | null
+  base: string
   files: GitCommitFile[]
   patch: string
   truncated: boolean
@@ -72,6 +74,7 @@ export interface GitWorkingDiff {
 export interface GitCommitPushResult {
   ok: boolean
   error?: string
+  detail?: string
 }
 
 export interface GitBranches {
@@ -152,6 +155,7 @@ export interface GitStatus {
   files: GitStatusFile[]
   changed: number
   stageable: number
+  ignoreError: string | null
 }
 
 const commitFormat = {
@@ -407,18 +411,20 @@ function webUrl(raw: string): URL | null {
   const scp = !text.includes('://') ? scpLike.exec(text) : null
   const normalized = scp ? `https://${scp[1]}/${scp[2]}` : text
 
-  let url: URL
+  let parsed: URL
   try {
-    url = new URL(normalized)
+    parsed = new URL(normalized)
   } catch {
     return null
   }
-  if (!url.hostname) return null
+  if (!parsed.hostname) return null
 
-  url.protocol = 'https:'
-  url.username = ''
-  url.password = ''
-  url.port = ''
+  let url: URL
+  try {
+    url = new URL(`https://${parsed.hostname}${parsed.pathname}`)
+  } catch {
+    return null
+  }
 
   const azureSsh = /^\/v3\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(url.pathname)
   if (azureSsh) {
@@ -639,6 +645,20 @@ async function parkPreview(cwd?: string): Promise<{ branch: string; files: numbe
   return current && parked ? { branch: current, files: parked } : null
 }
 
+const repoLocks = new Map<string, Promise<unknown>>()
+
+export async function withRepoLock<T>(cwd: string | undefined, op: () => Promise<T>): Promise<T> {
+  const key = (await worktreeRoot(cwd)) ?? cwd ?? os.homedir()
+  const previous = repoLocks.get(key) ?? Promise.resolve()
+  const run = previous.then(op, op)
+  repoLocks.set(key, run)
+  try {
+    return await run
+  } finally {
+    if (repoLocks.get(key) === run) repoLocks.delete(key)
+  }
+}
+
 export async function switchBranch(
   cwd: string | undefined,
   target: string,
@@ -714,6 +734,7 @@ interface GitWatcher {
 
 const watchers = new Map<string, GitWatcher>()
 const generations = new Map<string, number>()
+const watchRefs = new Map<string, { wcId: number; count: number }>()
 const destroyHooked = new WeakSet<WebContents>()
 
 function watcherKey(wcId: number, cwd?: string): string {
@@ -732,6 +753,9 @@ function closeWatcher(key: string): void {
 }
 
 function closeWatchersFor(wcId: number): void {
+  for (const [key, ref] of watchRefs) {
+    if (ref.wcId === wcId) watchRefs.delete(key)
+  }
   for (const [key, watcher] of watchers) {
     if (watcher.wcId !== wcId) continue
     nextGeneration(key)
@@ -744,6 +768,7 @@ export function disposeGitWatchers(): void {
   for (const { close } of watchers.values()) close()
   watchers.clear()
   generations.clear()
+  watchRefs.clear()
 }
 
 export function registerGitHandlers(): void {
@@ -806,18 +831,18 @@ export function registerGitHandlers(): void {
   ipcMain.handle('git:diff', async (_event, cwd?: string): Promise<GitWorkingDiff> => {
     const git = gitFor(cwd)
     const root = (await worktreeRoot(cwd)) ?? cwd ?? os.homedir()
-    const [branch, hasHead] = await Promise.all([
+    const [branch, head] = await Promise.all([
       git
         .raw(['rev-parse', '--abbrev-ref', 'HEAD'])
         .then((name) => name.trim())
         .catch(() => ''),
       git
         .raw(['rev-parse', '--verify', '--quiet', 'HEAD'])
-        .then(() => true)
-        .catch(() => false)
+        .then((sha) => sha.trim())
+        .catch(() => '')
     ])
 
-    const base = hasHead ? 'HEAD' : emptyTree
+    const base = head || emptyTree
     const indexFile = path.join(os.tmpdir(), `snow-diff-${process.pid}-${++scratchIndexCount}`)
     const scratch = simpleGit(root).env('GIT_OPTIONAL_LOCKS', '0').env('GIT_INDEX_FILE', indexFile)
 
@@ -834,6 +859,7 @@ export function registerGitHandlers(): void {
 
       return {
         branch: branch && branch !== 'HEAD' ? branch : null,
+        base,
         files: parseNumstat(numstat),
         patch,
         truncated
@@ -861,7 +887,14 @@ export function registerGitHandlers(): void {
 
   ipcMain.handle('git:status', async (_event, cwd?: string): Promise<GitStatus> => {
     const status = await gitFor(cwd).status()
-    const stageable = filterPaths(status.files.map((f) => f.path))
+    let stageable: string[]
+    let ignoreError: string | null = null
+    try {
+      stageable = filterPaths(status.files.map((f) => f.path))
+    } catch (error) {
+      stageable = []
+      ignoreError = errorText(error)
+    }
     const keep = new Set(stageable)
     return {
       current: status.current,
@@ -880,7 +913,8 @@ export function registerGitHandlers(): void {
         ignored: !keep.has(f.path)
       })),
       changed: status.files.length,
-      stageable: stageable.length
+      stageable: stageable.length,
+      ignoreError
     }
   })
 
@@ -917,7 +951,9 @@ export function registerGitHandlers(): void {
     'git:checkout',
     async (_event, cwd: string | undefined, branch: string): Promise<GitCheckoutResult> => {
       if (!branch) return { ok: false, error: 'Branch required' }
-      return switchBranch(cwd, branch, (git) => git.checkout(branch))
+      return withRepoLock(cwd, () =>
+        switchBranch(cwd, branch, (git) => git.checkout(branch))
+      ).catch(fail)
     }
   )
 
@@ -927,21 +963,23 @@ export function registerGitHandlers(): void {
       const remoteRef = (ref ?? '').trim()
       if (!remoteRef) return { ok: false, error: 'Branch required' }
 
-      let local: string
-      try {
-        const remotes = await gitFor(cwd).getRemotes(false)
-        const remote = remotes.find((r) => remoteRef.startsWith(`${r.name}/`))
-        local = remote ? remoteRef.slice(remote.name.length + 1) : remoteRef
-        if (!local) return { ok: false, error: 'Branch required' }
-      } catch (error) {
-        return { ok: false, error: errorText(error), detail: errorDetail(error) }
-      }
+      return withRepoLock(cwd, async () => {
+        let local: string
+        try {
+          const remotes = await gitFor(cwd).getRemotes(false)
+          const remote = remotes.find((r) => remoteRef.startsWith(`${r.name}/`))
+          local = remote ? remoteRef.slice(remote.name.length + 1) : remoteRef
+          if (!local) return { ok: false, error: 'Branch required' }
+        } catch (error) {
+          return { ok: false, error: errorText(error), detail: errorDetail(error) }
+        }
 
-      return switchBranch(cwd, local, async (git) => {
-        const existing = await git.branchLocal()
-        if (existing.all.includes(local)) await git.checkout(local)
-        else await git.checkout(['--track', remoteRef])
-      })
+        return switchBranch(cwd, local, async (git) => {
+          const existing = await git.branchLocal()
+          if (existing.all.includes(local)) await git.checkout(local)
+          else await git.checkout(['--track', remoteRef])
+        })
+      }).catch(fail)
     }
   )
 
@@ -955,13 +993,15 @@ export function registerGitHandlers(): void {
     ): Promise<GitCheckoutResult> => {
       const name = (branch ?? '').trim()
       if (!name) return { ok: false, error: 'Branch name required' }
-      if (!carry) return switchBranch(cwd, name, (git) => git.checkoutLocalBranch(name))
-      try {
-        await gitFor(cwd).checkoutLocalBranch(name)
-        return { ok: true, branch: name }
-      } catch (error) {
-        return { ok: false, error: errorText(error), detail: errorDetail(error) }
-      }
+      return withRepoLock(cwd, async () => {
+        if (!carry) return switchBranch(cwd, name, (git) => git.checkoutLocalBranch(name))
+        try {
+          await gitFor(cwd).checkoutLocalBranch(name)
+          return { ok: true, branch: name }
+        } catch (error) {
+          return { ok: false, error: errorText(error), detail: errorDetail(error) }
+        }
+      }).catch(fail)
     }
   )
 
@@ -976,40 +1016,41 @@ export function registerGitHandlers(): void {
     }
   )
 
-  ipcMain.handle('git:syncDefault', async (_event, cwd?: string): Promise<GitSyncDefaultResult> => {
-    const git = gitFor(cwd)
-    const target = await defaultBranch(cwd)
-    if (!target) return { ok: false, error: 'No default branch on remote' }
-    const { remote, branch } = target
+  ipcMain.handle('git:syncDefault', (_event, cwd?: string): Promise<GitSyncDefaultResult> => {
+    return withRepoLock(cwd, async () => {
+      const git = gitFor(cwd)
+      const target = await defaultBranch(cwd)
+      if (!target) return { ok: false, error: 'No default branch on remote' }
+      const { remote, branch } = target
 
-    try {
-      const status = await git.status()
-      if (status.current === branch) {
-        await git.raw(['fetch', remote, branch])
-        await git.raw(['merge', '--ff-only', `${remote}/${branch}`])
-        return { ok: true, branch }
+      try {
+        const status = await git.status()
+        if (status.current === branch) {
+          await git.raw(['fetch', remote, branch])
+          await git.raw(['merge', '--ff-only', `${remote}/${branch}`])
+          return { ok: true, branch }
+        }
+        await git.raw(['fetch', remote, `${branch}:${branch}`])
+      } catch (error) {
+        return { ok: false, branch, error: errorText(error), detail: errorDetail(error) }
       }
-      await git.raw(['fetch', remote, `${branch}:${branch}`])
-    } catch (error) {
-      return { ok: false, branch, error: errorText(error), detail: errorDetail(error) }
-    }
 
-    const result = await switchBranch(cwd, branch, (g) => g.checkout(branch))
-    if (result.ok) return { ok: true, branch }
-    const note = result.conflicted
-      ? ''
-      : `${branch} was updated from ${remote}, but the switch failed.`
-    return {
-      ok: false,
-      branch,
-      error: result.error,
-      detail: [result.detail, note].filter(Boolean).join('\n\n')
-    }
+      const result = await switchBranch(cwd, branch, (g) => g.checkout(branch))
+      if (result.ok) return { ok: true, branch }
+      const note = result.conflicted
+        ? ''
+        : `${branch} was updated from ${remote}, but the switch failed.`
+      return {
+        ok: false,
+        branch,
+        error: result.error,
+        detail: [result.detail, note].filter(Boolean).join('\n\n')
+      }
+    }).catch(fail)
   })
 
-  ipcMain.handle(
-    'git:updateFromDefault',
-    async (_event, cwd?: string): Promise<GitUpdateDefaultResult> => {
+  ipcMain.handle('git:updateFromDefault', (_event, cwd?: string): Promise<GitUpdateDefaultResult> =>
+    withRepoLock(cwd, async () => {
       const git = gitFor(cwd)
       const target = await defaultBranch(cwd)
       if (!target) return { ok: false, error: 'No default branch on remote' }
@@ -1079,125 +1120,128 @@ export function registerGitHandlers(): void {
       } catch {
         return { ok: true, branch, from, updated: true }
       }
-    }
+    }).catch(fail)
   )
 
-  ipcMain.handle('git:sync', async (_event, cwd?: string): Promise<GitSyncResult> => {
-    const git = gitFor(cwd)
+  ipcMain.handle('git:sync', (_event, cwd?: string): Promise<GitSyncResult> => {
+    return withRepoLock(cwd, async () => {
+      const git = gitFor(cwd)
 
-    let status: StatusResult
-    let remote: string | null
-    try {
-      ;[status, remote] = await Promise.all([git.status(), remoteName(cwd)])
-    } catch (error) {
-      return fail(error)
-    }
-
-    const branch = status.current
-    if (!branch) return { ok: false, error: 'HEAD is detached' }
-    if (!remote) return { ok: false, branch, error: 'No remote configured' }
-
-    if (status.ahead > 0 && status.behind > 0) {
-      return {
-        ok: false,
-        branch,
-        error: `${branch} has diverged from ${status.tracking}`,
-        detail: [
-          `${branch} is ${status.ahead} ahead and ${status.behind} behind ${status.tracking}.`,
-          '',
-          'Snow will not pick a merge or a rebase for you. Reconcile it with one of:',
-          `  git pull --rebase`,
-          `  git merge ${status.tracking}`
-        ].join('\n')
-      }
-    }
-
-    const action: GitSyncAction =
-      !status.tracking || status.ahead > 0 ? 'push' : status.behind > 0 ? 'pull' : 'fetch'
-
-    try {
-      if (action === 'push') {
-        if (status.tracking) await git.push()
-        else await git.push(['--set-upstream', remote, branch])
-      } else if (action === 'pull') {
-        await git.raw(['pull', '--ff-only'])
-      } else {
-        await git.raw(['fetch', remote])
-      }
-    } catch (error) {
-      return { ...fail(error), action, branch }
-    }
-
-    return { ok: true, action, branch }
-  })
-
-  ipcMain.handle('git:undoCommit', async (_event, cwd?: string): Promise<GitUndoResult> => {
-    const git = gitFor(cwd)
-
-    let status: StatusResult
-    let dir: string | null
-    try {
-      ;[status, dir] = await Promise.all([git.status(), gitDir(cwd)])
-    } catch (error) {
-      return fail(error)
-    }
-
-    if (!status.current) return { ok: false, error: 'HEAD is detached' }
-
-    if (dir) {
+      let status: StatusResult
+      let remote: string | null
       try {
-        await fs.promises.access(path.join(dir, 'MERGE_HEAD'))
-        return { ok: false, error: 'Finish or abort the merge first' }
-      } catch {
-        /* empty */
+        ;[status, remote] = await Promise.all([git.status(), remoteName(cwd)])
+      } catch (error) {
+        return fail(error)
       }
-    }
 
-    try {
-      await git.raw(['rev-parse', '--verify', '--quiet', 'HEAD'])
-    } catch {
-      return { ok: false, error: 'Nothing to undo: no commits yet' }
-    }
+      const branch = status.current
+      if (!branch) return { ok: false, error: 'HEAD is detached' }
+      if (!remote) return { ok: false, branch, error: 'No remote configured' }
 
-    let parents: string[]
-    let subject: string
-    let body: string
-    try {
-      const meta = await git.raw(['show', '-s', '--format=%P%x1f%s%x1f%b', 'HEAD'])
-      const [rawParents, rawSubject, rawBody] = meta.split('\x1f')
-      parents = (rawParents ?? '').split(' ').filter(Boolean)
-      subject = (rawSubject ?? '').trim()
-      body = (rawBody ?? '').trim()
-    } catch (error) {
-      return fail(error)
-    }
-
-    if (parents.length === 0) {
-      return { ok: false, error: 'Nothing to undo: this is the first commit' }
-    }
-    if (parents.length > 1) {
-      return {
-        ok: false,
-        error: 'The last commit is a merge',
-        detail: 'Undoing a merge is not a soft reset. Do it by hand if you meant to.'
+      if (status.ahead > 0 && status.behind > 0) {
+        return {
+          ok: false,
+          branch,
+          error: `${branch} has diverged from ${status.tracking}`,
+          detail: [
+            `${branch} is ${status.ahead} ahead and ${status.behind} behind ${status.tracking}.`,
+            '',
+            'Snow will not pick a merge or a rebase for you. Reconcile it with one of:',
+            `  git pull --rebase`,
+            `  git merge ${status.tracking}`
+          ].join('\n')
+        }
       }
-    }
-    if (status.tracking && status.ahead === 0) {
-      return { ok: false, error: `HEAD is already pushed to ${status.tracking}` }
-    }
 
-    try {
-      await git.raw(['reset', '--soft', 'HEAD~1'])
-    } catch (error) {
-      return fail(error)
-    }
+      const action: GitSyncAction =
+        !status.tracking || status.ahead > 0 ? 'push' : status.behind > 0 ? 'pull' : 'fetch'
 
-    return { ok: true, subject, body }
+      try {
+        if (action === 'push') {
+          if (status.tracking) await git.push()
+          else await git.push(['--set-upstream', remote, branch])
+        } else if (action === 'pull') {
+          await git.raw(['pull', '--ff-only'])
+        } else {
+          await git.raw(['fetch', remote])
+        }
+      } catch (error) {
+        return { ...fail(error), action, branch }
+      }
+
+      return { ok: true, action, branch }
+    }).catch(fail)
   })
 
-  ipcMain.handle(
-    'git:openPullRequest',
-    async (_event, cwd?: string): Promise<GitPullRequestResult> => {
+  ipcMain.handle('git:undoCommit', (_event, cwd?: string): Promise<GitUndoResult> => {
+    return withRepoLock(cwd, async () => {
+      const git = gitFor(cwd)
+
+      let status: StatusResult
+      let dir: string | null
+      try {
+        ;[status, dir] = await Promise.all([git.status(), gitDir(cwd)])
+      } catch (error) {
+        return fail(error)
+      }
+
+      if (!status.current) return { ok: false, error: 'HEAD is detached' }
+
+      if (dir) {
+        try {
+          await fs.promises.access(path.join(dir, 'MERGE_HEAD'))
+          return { ok: false, error: 'Finish or abort the merge first' }
+        } catch {
+          /* empty */
+        }
+      }
+
+      try {
+        await git.raw(['rev-parse', '--verify', '--quiet', 'HEAD'])
+      } catch {
+        return { ok: false, error: 'Nothing to undo: no commits yet' }
+      }
+
+      let parents: string[]
+      let subject: string
+      let body: string
+      try {
+        const meta = await git.raw(['show', '-s', '--format=%P%x1f%s%x1f%b', 'HEAD'])
+        const [rawParents, rawSubject, rawBody] = meta.split('\x1f')
+        parents = (rawParents ?? '').split(' ').filter(Boolean)
+        subject = (rawSubject ?? '').trim()
+        body = (rawBody ?? '').trim()
+      } catch (error) {
+        return fail(error)
+      }
+
+      if (parents.length === 0) {
+        return { ok: false, error: 'Nothing to undo: this is the first commit' }
+      }
+      if (parents.length > 1) {
+        return {
+          ok: false,
+          error: 'The last commit is a merge',
+          detail: 'Undoing a merge is not a soft reset. Do it by hand if you meant to.'
+        }
+      }
+      if (status.tracking && status.ahead === 0) {
+        return { ok: false, error: `HEAD is already pushed to ${status.tracking}` }
+      }
+
+      try {
+        await git.raw(['reset', '--soft', 'HEAD~1'])
+      } catch (error) {
+        return fail(error)
+      }
+
+      return { ok: true, subject, body }
+    }).catch(fail)
+  })
+
+  ipcMain.handle('git:openPullRequest', (_event, cwd?: string): Promise<GitPullRequestResult> =>
+    withRepoLock(cwd, async () => {
       const git = gitFor(cwd)
 
       let status: StatusResult
@@ -1248,14 +1292,29 @@ export function registerGitHandlers(): void {
         }
       }
 
+      if (!isExternalUrl(url)) {
+        return {
+          ok: false,
+          url,
+          error: 'Refusing to open a non-web pull request URL',
+          detail: [
+            'Snow only opens http and https URLs. This one came from:',
+            '',
+            '  git config --get snow.pullRequestUrl',
+            '',
+            url
+          ].join('\n')
+        }
+      }
+
       try {
-        await shell.openExternal(url)
+        await openExternal(url)
       } catch (error) {
         return { ...fail(error), url }
       }
 
       return { ok: true, url }
-    }
+    }).catch(fail)
   )
 
   ipcMain.handle('git:discover', (_event, cwd?: string): Promise<GitRepo[]> => discoverRepos(cwd))
@@ -1266,36 +1325,59 @@ export function registerGitHandlers(): void {
       const subject = (message ?? '').trim()
       if (!subject) return { ok: false, error: 'Commit message required' }
 
-      const git = gitFor(cwd)
-      try {
-        const pending = await git.status()
-        const paths = filterPaths(pending.files.map((f) => f.path))
-        if (paths.length === 0) return { ok: false, error: 'Nothing to commit' }
-        const root = await worktreeRoot(cwd)
-        await git.add(root ? paths.map((p) => path.join(root, p)) : paths)
-        await git.commit(subject)
-      } catch (error) {
-        return { ok: false, error: errorText(error) }
-      }
+      return withRepoLock(cwd, async () => {
+        const git = gitFor(cwd)
 
-      try {
-        const status = await git.status()
-        if (status.tracking || !status.current) {
-          await git.push()
-        } else {
-          const remote = (await remoteName(cwd)) ?? 'origin'
-          await git.push(['--set-upstream', remote, status.current])
+        try {
+          const pending = await git.status()
+          if (pending.conflicted.length > 0) {
+            return {
+              ok: false,
+              error: 'Resolve conflicts before committing',
+              detail: [
+                'These files are still unmerged. Staging them would mark the conflict resolved',
+                'with the markers left in place:',
+                '',
+                ...pending.conflicted,
+                '',
+                'Resolve them, then commit.'
+              ].join('\n')
+            }
+          }
+          const paths = filterPaths(pending.files.map((f) => f.path))
+          if (paths.length === 0) return { ok: false, error: 'Nothing to commit' }
+          const root = await worktreeRoot(cwd)
+          await git.add(root ? paths.map((p) => path.join(root, p)) : paths)
+          await git.commit(subject)
+        } catch (error) {
+          return { ok: false, error: errorText(error), detail: errorDetail(error) }
         }
-      } catch (error) {
-        return { ok: false, error: `Committed, push failed: ${errorText(error)}` }
-      }
 
-      return { ok: true }
+        try {
+          const status = await git.status()
+          if (status.tracking || !status.current) {
+            await git.push()
+          } else {
+            const remote = (await remoteName(cwd)) ?? 'origin'
+            await git.push(['--set-upstream', remote, status.current])
+          }
+        } catch (error) {
+          return { ok: false, error: `Committed, push failed: ${errorText(error)}` }
+        }
+
+        return { ok: true }
+      }).catch(fail)
     }
   )
 
   ipcMain.handle('git:unwatch', (event, cwd?: string): void => {
     const key = watcherKey(event.sender.id, cwd)
+    const ref = watchRefs.get(key)
+    if (ref && ref.count > 1) {
+      ref.count--
+      return
+    }
+    watchRefs.delete(key)
     nextGeneration(key)
     closeWatcher(key)
   })
@@ -1304,11 +1386,26 @@ export function registerGitHandlers(): void {
     const sender = event.sender
     const wcId = sender.id
     const key = watcherKey(wcId, cwd)
+
+    const ref = watchRefs.get(key)
+    if (ref) {
+      ref.count++
+      return
+    }
+    watchRefs.set(key, { wcId, count: 1 })
+
     const generation = nextGeneration(key)
     closeWatcher(key)
 
+    const abandon = (): void => {
+      if (generations.get(key) === generation) watchRefs.delete(key)
+    }
+
     const dir = await gitDir(cwd)
-    if (!dir) return
+    if (!dir) {
+      abandon()
+      return
+    }
 
     let timer: NodeJS.Timeout | null = null
     let burstStart = 0
@@ -1359,7 +1456,7 @@ export function registerGitHandlers(): void {
 
     const worktree = await worktreeRoot(cwd)
     if (worktree) {
-      watch(worktree, true, (filename) => !filename || !ignoredWorktreeEntry.test(filename))
+      watch(worktree, true, (filename) => !!filename && !ignoredWorktreeEntry.test(filename))
     }
 
     const close = (): void => {
@@ -1368,6 +1465,7 @@ export function registerGitHandlers(): void {
     }
 
     if (generations.get(key) !== generation || sender.isDestroyed()) {
+      abandon()
       close()
       return
     }

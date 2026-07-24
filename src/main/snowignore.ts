@@ -56,13 +56,16 @@ function writeDefaultSnowignore(): void {
 
 let matcher: Ignore | null = null
 let matcherEmpty = true
+let matcherError: string | null = null
 
 function currentMatcher(): Ignore | null {
   if (!matcher) {
-    const { patterns } = readSnowignore()
+    const { patterns, error } = readSnowignore()
+    matcherError = error
     matcherEmpty = patterns.length === 0
-    matcher = ignore().add(patterns)
+    if (!error) matcher = ignore().add(patterns)
   }
+  if (matcherError) throw new Error(`Could not read ${snowignorePath()}\n${matcherError}`)
   return matcherEmpty ? null : matcher
 }
 

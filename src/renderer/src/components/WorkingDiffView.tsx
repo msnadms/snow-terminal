@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import DiffBody from './DiffBody'
 import DiffScroll from './DiffScroll'
+import { useLatestRun } from '@renderer/useLatestRun'
 
 type GitWorkingDiff = Awaited<ReturnType<typeof window.api.git.diff>>
 
@@ -21,18 +22,36 @@ function WorkingDiffView({
 }: WorkingDiffViewProps): React.JSX.Element {
   const [diff, setDiff] = useState<GitWorkingDiff | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const latestRun = useLatestRun()
+  const loaded = useRef(false)
 
   useEffect(() => {
-    let cancelled = false
+    window.api.git.watch(cwd)
+    return () => {
+      window.api.git.unwatch(cwd)
+    }
+  }, [cwd])
+
+  useEffect(() => {
+    loaded.current = false
+
+    const keep = (isCurrent: () => boolean): boolean => {
+      if (isCurrent() || !loaded.current) {
+        loaded.current = true
+        return true
+      }
+      return false
+    }
 
     const load = async (): Promise<void> => {
+      const isCurrent = latestRun()
       try {
         const result = await window.api.git.diff(cwd)
-        if (cancelled) return
+        if (!keep(isCurrent)) return
         setDiff(result)
         setError(null)
       } catch {
-        if (cancelled) return
+        if (!keep(isCurrent)) return
         setDiff(null)
         setError('Could not read working tree')
       }
@@ -44,10 +63,9 @@ function WorkingDiffView({
     })
 
     return () => {
-      cancelled = true
       offChanged()
     }
-  }, [cwd])
+  }, [cwd, latestRun])
 
   const body = (): React.JSX.Element => {
     if (error) return <div className="commit-empty">{error}</div>
@@ -68,7 +86,7 @@ function WorkingDiffView({
         ) : (
           <DiffBody
             cwd={cwd}
-            base="HEAD"
+            base={diff.base}
             files={diff.files}
             patch={diff.patch}
             truncated={diff.truncated}

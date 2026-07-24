@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { failureOf, type Failure } from '@renderer/format'
+import { failureOf, failureOfError, type Failure } from '@renderer/format'
 import { flashClass, useFlash } from '@renderer/useFlash'
 
 export interface GitActionResult {
@@ -35,21 +35,23 @@ export function useGitAction<T extends GitActionResult = GitActionResult>({
     setPending(true)
     setLabel(next)
     setError('')
-    let result: T
+    let result: T | null = null
+    let failure: Failure | null = null
     try {
       result = await op()
-    } finally {
-      setPending(false)
-      setLabel('')
+      if (!result.ok) failure = failureOf(result)
+    } catch (error) {
+      failure = failureOfError(error)
     }
+    setPending(false)
+    setLabel('')
 
-    if (result.ok) {
-      trigger('ok')
-    } else {
-      const failure = failureOf(result)
+    if (failure) {
       setError(failure.title)
       onFailure?.(failure)
       trigger('error')
+    } else {
+      trigger('ok')
     }
 
     onSettled?.()

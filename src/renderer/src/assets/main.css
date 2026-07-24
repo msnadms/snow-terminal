@@ -671,6 +671,32 @@ body {
   font-size: 13px;
 }
 
+.home-error {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  width: 340px;
+  max-width: 80%;
+  border: 1px solid #f38ba8;
+  border-radius: 4px;
+  background: #1e1e2e;
+}
+
+.home-error-title {
+  color: #f38ba8;
+  font-size: 12px;
+}
+
+.home-error-detail {
+  margin: 0;
+  color: #a6adc8;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .home-presets {
   display: flex;
   flex-direction: column;

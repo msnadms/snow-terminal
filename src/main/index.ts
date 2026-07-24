@@ -1,5 +1,6 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
+import { openExternal } from './external'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerPtyHandlers, disposeAllPty } from './pty'
@@ -25,7 +26,7 @@ function createWindow(): void {
     ...(process.platform !== 'darwin' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      sandbox: true
     }
   })
 
@@ -39,14 +40,35 @@ function createWindow(): void {
   mainWindow.on('closed', () => log('info', 'window', 'closed'))
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    openExternal(details.url).catch((error) =>
+      log('warn', 'window', 'blocked window.open', { url: details.url, error: String(error) })
+    )
     return { action: 'deny' }
   })
 
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+  const devUrl = is.dev ? process.env['ELECTRON_RENDERER_URL'] : undefined
+  const appOrigin = devUrl ? new URL(devUrl).origin : null
+
+  const isInternal = (url: string): boolean => {
+    if (!appOrigin) return url.startsWith('file://') && url.endsWith('/renderer/index.html')
+    try {
+      return new URL(url).origin === appOrigin
+    } catch {
+      return false
+    }
+  }
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (isInternal(url)) return
+    event.preventDefault()
+    log('warn', 'window', 'blocked navigation', { url })
+    openExternal(url).catch(() => undefined)
+  })
+
+  if (devUrl) {
+    mainWindow.loadURL(devUrl)
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }

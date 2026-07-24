@@ -3,6 +3,7 @@ import type { Preset } from '../useSnowconfig'
 
 interface HomePageProps {
   presets: Preset[]
+  error: string | null
   onOpenPreset: (cwd: string) => void
 }
 
@@ -11,7 +12,7 @@ function basename(p: string): string {
   return parts[parts.length - 1] ?? p
 }
 
-function HomePage({ presets, onOpenPreset }: HomePageProps): React.JSX.Element {
+function HomePage({ presets, error, onOpenPreset }: HomePageProps): React.JSX.Element {
   const [name, setName] = useState('')
   const [cwd, setCwd] = useState('')
 
@@ -39,6 +40,12 @@ function HomePage({ presets, onOpenPreset }: HomePageProps): React.JSX.Element {
   return (
     <div className="home-page">
       <div className="home-title">snow</div>
+      {error && (
+        <div className="home-error">
+          <div className="home-error-title">Presets are not editable until this file is fixed</div>
+          <pre className="home-error-detail">{error}</pre>
+        </div>
+      )}
       <div className="home-presets">
         {presets.map((preset, i) => (
           <div key={i} className="home-preset">
@@ -50,6 +57,7 @@ function HomePage({ presets, onOpenPreset }: HomePageProps): React.JSX.Element {
               type="checkbox"
               className="home-preset-default"
               checked={!!preset.default}
+              disabled={!!error}
               onChange={() => toggleDefault(i, !!preset.default)}
               title="Open with the new-tab button"
             />
@@ -71,7 +79,11 @@ function HomePage({ presets, onOpenPreset }: HomePageProps): React.JSX.Element {
         >
           {cwd || 'Choose folder…'}
         </button>
-        <button className="home-add-button" type="submit" disabled={!name.trim() || !cwd.trim()}>
+        <button
+          className="home-add-button"
+          type="submit"
+          disabled={!!error || !name.trim() || !cwd.trim()}
+        >
           Add preset
         </button>
       </form>

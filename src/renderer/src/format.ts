@@ -12,6 +12,20 @@ export interface Failure {
   detail: string
 }
 
+const remoteMethodPrefix = /^Error invoking remote method '[^']*':\s*/
+
+export function failureOfError(error: unknown): Failure {
+  const raw = (error instanceof Error ? error.message : String(error)).replace(
+    remoteMethodPrefix,
+    ''
+  )
+  const lines = raw.split('\n').map((l) => l.trimEnd())
+  return {
+    title: lines[0]?.trim() || 'git command failed',
+    detail: lines.slice(1).join('\n').trim()
+  }
+}
+
 export function failureOf(result: { error?: string; detail?: string }): Failure {
   const title = result.error ?? 'git command failed'
   const lines = (result.detail ?? '').split('\n')

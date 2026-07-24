@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import FailureDialog from './FailureDialog'
 import { type Failure } from '@renderer/format'
 import { useGitAction } from '@renderer/useGitAction'
+import { useLatestRun } from '@renderer/useLatestRun'
 
 interface BranchSelectProps {
   cwd?: string
@@ -23,14 +24,14 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
   const [choice, setChoice] = useState<{ name: string; branch: string; files: number } | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+  const latestRun = useLatestRun()
 
   useEffect(() => {
-    let cancelled = false
-
     const load = async (): Promise<void> => {
       if (!cwd) return
+      const isCurrent = latestRun()
       const result = await window.api.git.branches(cwd)
-      if (cancelled) return
+      if (!isCurrent()) return
       setCurrent(result.current)
       setBranches(result.branches)
       setRemotes(result.remotes)
@@ -40,10 +41,9 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
     const offChanged = window.api.git.onChanged(() => load())
 
     return () => {
-      cancelled = true
       offChanged()
     }
-  }, [cwd])
+  }, [cwd, latestRun])
 
   useEffect(() => {
     if (!open) return

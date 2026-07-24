@@ -22,7 +22,7 @@ function App(): React.JSX.Element {
   const [cwds, setCwds] = useState<Record<number, string | undefined>>({})
   const [frozen, setFrozen] = useState<{ cwd?: string } | null>(null)
   const nextIdRef = useRef(1)
-  const presets = useSnowconfig()
+  const { presets, error: presetsError } = useSnowconfig()
 
   const activeTab = tabs.find((t) => t.id === activeId)
   const cwd = activeTab && activeTab.kind !== 'shell' ? activeTab.cwd : cwds[activeTab?.id ?? -1]
@@ -116,7 +116,11 @@ function App(): React.JSX.Element {
           />
           <div className="terminal-stack">
             {activeId === 'home' && (
-              <HomePage presets={presets} onOpenPreset={(dir) => addSession(dir)} />
+              <HomePage
+                presets={presets}
+                error={presetsError}
+                onOpenPreset={(dir) => addSession(dir)}
+              />
             )}
             {tabs.map((tab) => {
               if (tab.kind === 'commit')
