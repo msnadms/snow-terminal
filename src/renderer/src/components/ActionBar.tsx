@@ -7,6 +7,8 @@ import { useGitAction } from '@renderer/useGitAction'
 
 interface ActionBarProps {
   cwd?: string
+  frozen: boolean
+  onFreeze: (frozen: boolean) => void
 }
 
 type GitStatus = Awaited<ReturnType<typeof window.api.git.status>>
@@ -18,7 +20,8 @@ const glyphs = {
   update: ' ',
   undo: '',
   fetch: '',
-  pullRequest: ''
+  pullRequest: '',
+  freeze: ''
 }
 
 interface SyncFace {
@@ -45,7 +48,7 @@ function syncFaceOf(tracking: string | null, ahead: number, behind: number): Syn
   return { glyph: glyphs.fetch, title: `Fetch from ${tracking}` }
 }
 
-function ActionBar({ cwd }: ActionBarProps): React.JSX.Element {
+function ActionBar({ cwd, frozen, onFreeze }: ActionBarProps): React.JSX.Element {
   const [isRepo, setIsRepo] = useState(false)
   const [status, setStatus] = useState<GitStatus | null>(null)
   const [defaultName, setDefaultName] = useState<string | null>(null)
@@ -217,6 +220,18 @@ function ActionBar({ cwd }: ActionBarProps): React.JSX.Element {
       <div className="actionbar-right">
         <WorkflowSelect key={`workflow-${cwd ?? 'none'}`} cwd={cwd} />
         <BranchSelect key={cwd ?? 'none'} cwd={cwd} />
+        <button
+          className={`actionbar-button actionbar-freeze${frozen ? ' actionbar-freeze-on' : ''}`}
+          aria-pressed={frozen}
+          onClick={() => onFreeze(!frozen)}
+          title={
+            frozen
+              ? 'Git view frozen — click to follow the active tab again'
+              : 'Freeze the git view on the current directory'
+          }
+        >
+          <div className="nerd-glyph">{glyphs.freeze}</div>
+        </button>
       </div>
       {failure && <FailureDialog failure={failure} onDismiss={() => setFailure(null)} />}
     </div>

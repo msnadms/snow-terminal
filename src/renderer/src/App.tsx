@@ -20,11 +20,13 @@ function App(): React.JSX.Element {
   const [tabs, setTabs] = useState<Tab[]>([])
   const [activeId, setActiveId] = useState<ActiveId>('home')
   const [cwds, setCwds] = useState<Record<number, string | undefined>>({})
+  const [frozen, setFrozen] = useState<{ cwd?: string } | null>(null)
   const nextIdRef = useRef(1)
   const presets = useSnowconfig()
 
   const activeTab = tabs.find((t) => t.id === activeId)
   const cwd = activeTab && activeTab.kind !== 'shell' ? activeTab.cwd : cwds[activeTab?.id ?? -1]
+  const gitCwd = frozen ? frozen.cwd : cwd
 
   const labels = useMemo(() => {
     const result: Record<number, string> = {}
@@ -97,7 +99,11 @@ function App(): React.JSX.Element {
 
   return (
     <div className="app">
-      <ActionBar cwd={cwd} />
+      <ActionBar
+        cwd={cwd}
+        frozen={frozen !== null}
+        onFreeze={(on) => setFrozen(on ? { cwd } : null)}
+      />
       <div className="content">
         <div className="terminal-area">
           <TabBar
@@ -145,7 +151,7 @@ function App(): React.JSX.Element {
             })}
           </div>
         </div>
-        <GitPanel cwd={cwd} onOpenCommit={openCommit} onOpenDiff={openDiff} />
+        <GitPanel cwd={gitCwd} onOpenCommit={openCommit} onOpenDiff={openDiff} />
       </div>
     </div>
   )

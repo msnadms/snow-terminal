@@ -121,6 +121,23 @@ body {
   min-width: 0;
 }
 
+.actionbar-freeze,
+.actionbar-freeze:hover:not(:disabled) {
+  padding: 0 4px;
+  background: none;
+  border-color: transparent;
+}
+
+.actionbar-freeze .nerd-glyph {
+  font-size: 20px;
+  margin-top: -5px;
+}
+
+.actionbar-freeze-on,
+.actionbar-freeze-on:hover:not(:disabled) {
+  color: #89dceb;
+}
+
 .picker-select {
   position: relative;
   display: flex;
@@ -812,7 +829,7 @@ body {
 }
 
 .git-panel {
-  flex: 0 0 300px;
+  flex: 0 0 20%;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -889,8 +906,12 @@ body {
 }
 
 .git-branch {
+  min-width: 0;
   color: var(--git-branch, #c7b06b);
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .git-branch-link {
@@ -904,16 +925,19 @@ body {
 }
 
 .git-track {
+  flex: 0 0 auto;
   color: var(--git-track, #7791c5);
 }
 
 .git-dirty {
+  flex: 0 0 auto;
   color: var(--git-dirty, #c3a865);
   margin-left: auto;
   cursor: pointer;
 }
 
 .git-snowignored {
+  flex: 0 0 auto;
   color: var(--git-muted, #5f5878);
   margin-left: auto;
   cursor: pointer;
@@ -1137,7 +1161,7 @@ body {
   width: 100%;
   overflow-y: auto;
   scrollbar-width: none;
-  padding: 12px 14px 40px;
+  padding: 0 14px 40px;
   background: var(--git-bg, #1e1e2e);
   color: var(--git-text, #b8b3cc);
   font-family: 'Hack Nerd Font Mono', monospace;
@@ -1166,18 +1190,31 @@ body {
   color: var(--git-muted, #5f5878);
 }
 
-.commit-totop {
+.commit-tools {
   position: sticky;
-  top: -12px;
+  top: 0;
   z-index: 5;
   height: 0;
   margin: 0 -14px;
 }
 
-.commit-totop-button {
+.commit-tools + * {
+  margin-top: 12px;
+}
+
+.commit-tools-row {
   position: absolute;
   top: 0;
   right: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.commit-tools-row > :first-child {
+  border-bottom-left-radius: 4px;
+}
+
+.commit-totop-button {
   padding: 5px 15px;
   font: inherit;
   line-height: 1;
@@ -1186,7 +1223,6 @@ body {
   border: 1px solid var(--git-button-border, #313244);
   border-top: none;
   border-right: none;
-  border-radius: 0 0 0 4px;
   cursor: pointer;
   transition:
     color 160ms ease,
@@ -1196,6 +1232,64 @@ body {
 .commit-totop-button:hover {
   border-color: var(--git-button-border-hover, #45475a);
   color: var(--git-accent, #d8c07a);
+}
+
+.find-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--git-bg, #1e1e2e);
+  border: 1px solid var(--git-button-border, #313244);
+  border-top: none;
+  border-right: none;
+}
+
+.find-input {
+  width: 180px;
+  padding: 2px 6px;
+  font: inherit;
+  color: var(--git-strong-text, #cdd6f4);
+  background: transparent;
+  border: 1px solid var(--git-button-border, #313244);
+  border-radius: 3px;
+  outline: none;
+}
+
+.find-input:focus {
+  border-color: var(--git-button-border-hover, #45475a);
+}
+
+.find-count {
+  min-width: 62px;
+  color: var(--git-muted, #5f5878);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.find-button {
+  padding: 2px 6px;
+  font: inherit;
+  line-height: 1;
+  color: var(--git-strong-text, #cdd6f4);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: color 160ms ease;
+}
+
+.find-button:hover {
+  color: var(--git-accent, #d8c07a);
+}
+
+::highlight(snow-find) {
+  background-color: #4a4460;
+  color: #f0edf7;
+}
+
+::highlight(snow-find-current) {
+  background-color: var(--git-accent, #d8c07a);
+  color: var(--git-bg, #1e1e2e);
 }
 
 .commit-header {

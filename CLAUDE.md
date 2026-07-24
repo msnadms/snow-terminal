@@ -74,6 +74,26 @@ Each visible file tokenizes twice: once from hunk text alone (fast, highlighting
 and again once `git:blame` returns `source`. Files that are not visible pass empty hunks, so work stays
 proportional to what is on screen.
 
+#### Find (Ctrl+F)
+
+`useFind` (`src/renderer/src/useFind.ts`) gives every `DiffScroll` pane a find bar, so both
+`CommitView` and `WorkingDiffView` get it. It never touches the DOM: matches are `Range`s handed to
+the CSS Custom Highlight API (`CSS.highlights`), styled by the `::highlight(snow-find)` /
+`::highlight(snow-find-current)` rules in `main.css`. Mutating the tree instead would fight
+react-diff-view's rendering and invalidate on every tokenize pass.
+
+The scan concatenates the pane's text nodes into one string and remembers each node's offset, so a
+match may span the token `<span>`s syntax highlighting produces — searching `const x` works even
+though `const` and `x` are separate elements. A `\n` is inserted between block ancestors, which is
+what keeps a match from running across two diff lines. Text directly inside a `td.diff-gutter` is
+skipped so line numbers are not matched; blame text sits in spans, so it still is.
+
+Because the highlight registry is global while several diff panes stay mounted at once, the module
+tracks which pane owns the two highlight names and an inactive pane only clears highlights it owns.
+Results are recomputed on a debounced `MutationObserver` (lazy blame and worker tokens rewrite the
+tree under the search), which ignores mutations inside `.commit-tools` — the sticky row holding the
+find bar and the top button — since rendering the match count would otherwise retrigger the search.
+
 ### Pull requests
 
 `git:openPullRequest` turns the remote URL into a web URL (`webUrl` normalizes scp-like and Azure SSH
@@ -284,6 +304,13 @@ per-session `cwds` map fed by each session's bottom-terminal OSC 7. The active s
 `display:none` so their PTYs survive tab switches (they die only on close/unmount). `Terminal` takes
 an `active` prop and re-fits via `requestAnimationFrame` on activation; its fit/resize is guarded on a
 non-zero container size so a hidden (0×0) pane is never shrunk to `FitAddon`'s minimum columns.
+
+The **Freeze** checkbox at the right of the action bar pins the git view to one directory. `App` holds
+`frozen` as `{ cwd } | null` — a wrapper rather than a bare string, so freezing on a tab with no cwd
+yet still freezes instead of reading as "not frozen" — and passes `frozen ? frozen.cwd : cwd` to
+`GitPanel` only. `ActionBar` keeps taking the live `cwd`, so every action still targets the active
+tab's repo; the freeze is a view filter, not a mode. It pins the *directory*, not the content: git
+watchers keep running, so the pinned repo's log and status stay live.
 
 ## node-pty (native module) constraints
 

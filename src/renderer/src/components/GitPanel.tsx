@@ -267,7 +267,7 @@ function RepoSection({
       {branch ? (
         <span
           className="git-branch git-branch-link"
-          title="Click to view uncommitted changes"
+          title={`${branch}\nClick to view uncommitted changes`}
           onClick={(event) => {
             event.stopPropagation()
             setTip(null)
