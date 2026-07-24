@@ -44,6 +44,12 @@ body {
   margin-top: -2px;
 }
 
+.actionbar-count {
+  font-size: 13px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
 .actionbar-input {
   flex: 0 1 320px;
   min-width: 0;
@@ -1132,7 +1138,7 @@ body {
   overflow-y: auto;
   scrollbar-width: none;
   padding: 12px 14px 40px;
-  background: #1e1e2e;
+  background: var(--git-bg, #1e1e2e);
   color: var(--git-text, #b8b3cc);
   font-family: 'Hack Nerd Font Mono', monospace;
   font-size: 12px;
@@ -1160,13 +1166,45 @@ body {
   color: var(--git-muted, #5f5878);
 }
 
+.commit-totop {
+  position: sticky;
+  top: -12px;
+  z-index: 5;
+  height: 0;
+  margin: 0 -14px;
+}
+
+.commit-totop-button {
+  position: absolute;
+  top: 0;
+  right: 0;
+  padding: 5px 15px;
+  font: inherit;
+  line-height: 1;
+  color: var(--git-strong-text, #cdd6f4);
+  background: var(--git-bg, #1e1e2e);
+  border: 1px solid var(--git-button-border, #313244);
+  border-top: none;
+  border-right: none;
+  border-radius: 0 0 0 4px;
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    border-color 160ms ease;
+}
+
+.commit-totop-button:hover {
+  border-color: var(--git-button-border-hover, #45475a);
+  color: var(--git-accent, #d8c07a);
+}
+
 .commit-header {
   padding-bottom: 10px;
   border-bottom: 1px solid var(--git-border, #2f2b40);
 }
 
 .commit-subject {
-  color: #cdd6f4;
+  color: var(--git-strong-text, #cdd6f4);
   font-size: 13px;
   word-break: break-word;
 }
@@ -1220,9 +1258,9 @@ body {
   height: 22px;
   padding: 0 10px;
   font: inherit;
-  color: #cdd6f4;
-  background: #1e1e2e;
-  border: 1px solid #313244;
+  color: var(--git-strong-text, #cdd6f4);
+  background: var(--git-bg, #1e1e2e);
+  border: 1px solid var(--git-button-border, #313244);
   border-radius: 4px;
   cursor: pointer;
   transition:
@@ -1231,13 +1269,13 @@ body {
 }
 
 .commit-toggle-button:hover {
-  border-color: #45475a;
-  color: #d8c07a;
+  border-color: var(--git-button-border-hover, #45475a);
+  color: var(--git-accent, #d8c07a);
 }
 
 .commit-toggle-active {
-  color: #d8c07a;
-  border-color: #45475a;
+  color: var(--git-accent, #d8c07a);
+  border-color: var(--git-button-border-hover, #45475a);
 }
 
 .commit-files {
@@ -1307,7 +1345,7 @@ body {
 
 .commit-file-title {
   padding: 5px 10px;
-  color: #cdd6f4;
+  color: var(--git-strong-text, #cdd6f4);
   background: #191926;
   border-bottom: 1px solid var(--git-border, #2f2b40);
   word-break: break-all;
@@ -1362,6 +1400,75 @@ body {
   padding: 2px 10px;
   color: var(--git-muted, #5f5878);
   background: #191926;
+}
+
+.commit-file-section .token.comment,
+.commit-file-section .token.prolog,
+.commit-file-section .token.doctype,
+.commit-file-section .token.cdata {
+  color: var(--syntax-comment, #5f5878);
+}
+
+.commit-file-section .token.keyword,
+.commit-file-section .token.atrule,
+.commit-file-section .token.important,
+.commit-file-section .token.rule {
+  color: var(--syntax-keyword, #a387c9);
+}
+
+.commit-file-section .token.string,
+.commit-file-section .token.char,
+.commit-file-section .token.attr-value {
+  color: var(--syntax-string, #8fbf9f);
+}
+
+.commit-file-section .token.number,
+.commit-file-section .token.boolean {
+  color: var(--syntax-number, #c3a865);
+}
+
+.commit-file-section .token.function {
+  color: var(--syntax-function, #7791c5);
+}
+
+.commit-file-section .token.class-name {
+  color: var(--syntax-class-name, #c7b06b);
+}
+
+.commit-file-section .token.variable,
+.commit-file-section .token.builtin,
+.commit-file-section .token.parameter {
+  color: var(--syntax-variable, #b8b3cc);
+}
+
+.commit-file-section .token.constant,
+.commit-file-section .token.symbol {
+  color: var(--syntax-constant, #c98c96);
+}
+
+.commit-file-section .token.operator,
+.commit-file-section .token.entity,
+.commit-file-section .token.url {
+  color: var(--syntax-operator, #8f8aa8);
+}
+
+.commit-file-section .token.punctuation {
+  color: var(--syntax-punctuation, #6e6690);
+}
+
+.commit-file-section .token.tag,
+.commit-file-section .token.selector,
+.commit-file-section .token.namespace {
+  color: var(--syntax-tag, #917ec8);
+}
+
+.commit-file-section .token.attr-name,
+.commit-file-section .token.property {
+  color: var(--syntax-attr-name, #6eb0c4);
+}
+
+.commit-file-section .token.regex {
+  color: var(--syntax-regex, #6b9dc0);
 }
 
 .commit-truncated {

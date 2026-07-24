@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import DiffBody from './DiffBody'
+import DiffScroll from './DiffScroll'
 
 type GitWorkingDiff = Awaited<ReturnType<typeof window.api.git.diff>>
 
@@ -81,11 +82,7 @@ function WorkingDiffView({
     )
   }
 
-  return (
-    <div className="commit-view" style={{ display: active ? 'block' : 'none' }}>
-      {body()}
-    </div>
-  )
+  return <DiffScroll active={active}>{body()}</DiffScroll>
 }
 
 export default WorkingDiffView

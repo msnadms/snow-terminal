@@ -7,6 +7,10 @@ const cssVars: Record<Exclude<keyof GitColors, 'lanes'>, string> = {
   background: '--git-bg',
   border: '--git-border',
   text: '--git-text',
+  strongText: '--git-strong-text',
+  accent: '--git-accent',
+  buttonBorder: '--git-button-border',
+  buttonBorderHover: '--git-button-border-hover',
   muted: '--git-muted',
   repo: '--git-repo',
   branch: '--git-branch',
@@ -27,10 +31,15 @@ const cssVars: Record<Exclude<keyof GitColors, 'lanes'>, string> = {
   diffDeleteText: '--git-diff-del-text'
 }
 
-function applyCssVars(colors: GitColors): void {
+const kebab = (key: string): string => key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)
+
+function applyCssVars(theme: ThemeResult['theme']): void {
   const root = document.documentElement
   for (const [key, name] of Object.entries(cssVars)) {
-    root.style.setProperty(name, colors[key as keyof typeof cssVars])
+    root.style.setProperty(name, theme.git[key as keyof typeof cssVars])
+  }
+  for (const [key, value] of Object.entries(theme.syntax)) {
+    root.style.setProperty(`--syntax-${kebab(key)}`, value)
   }
 }
 
@@ -43,7 +52,7 @@ export function useGitColors(): GitColors | null {
     const receive = (result: ThemeResult): void => {
       if (cancelled) return
       if (result.error) console.error(`snow: failed to read ${result.path}: ${result.error}`)
-      applyCssVars(result.theme.git)
+      applyCssVars(result.theme)
       setColors(result.theme.git)
     }
 

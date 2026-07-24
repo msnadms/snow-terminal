@@ -1,12 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Diff, Hunk, parseDiff } from 'react-diff-view'
+import { Diff, Hunk, parseDiff, useTokenizeWorker } from 'react-diff-view'
 import type { FileData, GutterOptions, ViewType } from 'react-diff-view'
 import { shortHash } from '@renderer/format'
+import { languageFor } from '@renderer/syntax'
 import 'react-diff-view/style/index.css'
 
 type GitCommitDetail = Awaited<ReturnType<typeof window.api.git.show>>
 export type DiffFileEntry = GitCommitDetail['files'][number]
-type GitBlame = Awaited<ReturnType<typeof window.api.git.blame>>
+type GitBlameResult = Awaited<ReturnType<typeof window.api.git.blame>>
+
+let worker: Worker | null = null
+
+function tokenizeWorker(): Worker {
+  if (!worker) {
+    worker = new Worker(new URL('../tokenize.worker.ts', import.meta.url), { type: 'module' })
+  }
+  return worker
+}
+
+const noHunks: FileData['hunks'] = []
 
 interface DiffFileProps {
   cwd: string
@@ -27,9 +39,10 @@ function DiffFile({
   sectionRef,
   onOpenCommit
 }: DiffFileProps): React.JSX.Element {
-  const [blame, setBlame] = useState<GitBlame | null>(null)
+  const [blame, setBlame] = useState<GitBlameResult | null>(null)
   const [visible, setVisible] = useState(false)
   const hostRef = useRef<HTMLDivElement | null>(null)
+  const language = diff ? languageFor(file.path) : null
 
   useEffect(() => {
     const node = hostRef.current
@@ -51,7 +64,7 @@ function DiffFile({
         if (!cancelled) setBlame(result)
       })
       .catch(() => {
-        if (!cancelled) setBlame({})
+        if (!cancelled) setBlame({ lines: {}, source: null })
       })
 
     return () => {
@@ -59,12 +72,23 @@ function DiffFile({
     }
   }, [visible, base, cwd, file, diff, blame])
 
-  const hasBlame = blame != null && Object.keys(blame).length > 0
+  const payload = useMemo(
+    () => ({
+      hunks: visible ? (diff?.hunks ?? noHunks) : noHunks,
+      oldSource: blame?.source ?? null,
+      language
+    }),
+    [visible, diff, blame, language]
+  )
+  const { tokens } = useTokenizeWorker(tokenizeWorker(), payload)
+
+  const lines = blame?.lines
+  const hasBlame = lines != null && Object.keys(lines).length > 0
 
   const renderGutter = ({ change, side, renderDefault }: GutterOptions): React.ReactNode => {
     if (!hasBlame || side !== 'old' || change.type === 'insert') return renderDefault()
     const line = change.type === 'delete' ? change.lineNumber : change.oldLineNumber
-    const entry = blame?.[line]
+    const entry = lines?.[line]
     if (!entry) return renderDefault()
     return (
       <>
@@ -99,6 +123,7 @@ function DiffFile({
           viewType={view}
           diffType={diff.type}
           hunks={diff.hunks}
+          tokens={tokens}
           renderGutter={renderGutter}
         >
           {(hunks) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}

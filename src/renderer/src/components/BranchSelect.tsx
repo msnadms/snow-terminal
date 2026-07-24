@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import FailureDialog from './FailureDialog'
-import { failureOf, type Failure } from '@renderer/format'
-import { flashClass, useFlash } from '@renderer/useFlash'
+import { type Failure } from '@renderer/format'
+import { useGitAction } from '@renderer/useGitAction'
 
 interface BranchSelectProps {
   cwd?: string
 }
 
 type BranchTab = 'local' | 'origin'
+type GitBranchResult = { ok: boolean; branch?: string; error?: string; detail?: string }
 
 function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
   const [current, setCurrent] = useState<string | null>(null)
@@ -16,11 +17,9 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
   const [tab, setTab] = useState<BranchTab>('local')
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
-  const [pending, setPending] = useState(false)
-  const [error, setError] = useState('')
-  const [flash, trigger] = useFlash()
   const [newName, setNewName] = useState('')
   const [failure, setFailure] = useState<Failure | null>(null)
+  const switching = useGitAction<GitBranchResult>({ onFailure: setFailure })
   const [choice, setChoice] = useState<{ name: string; branch: string; files: number } | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
@@ -85,55 +84,35 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
     setOpen((prev) => !prev)
   }
 
-  const finish = (
-    result: { ok: boolean; branch?: string; error?: string; detail?: string },
-    branch: string
-  ): void => {
-    setPending(false)
-    if (result.ok || result.branch) {
+  const land = async (branch: string, op: () => Promise<GitBranchResult>): Promise<void> => {
+    setOpen(false)
+    const result = await switching.run(op, 'Switching…')
+    if (result?.ok || result?.branch) {
       const name = result.branch ?? branch
       setCurrent(name)
       setBranches((prev) => (prev.includes(name) ? prev : [...prev, name].sort()))
     }
-    if (!result.ok) {
-      const next = failureOf(result)
-      setError(next.title)
-      setFailure(next)
-      trigger('error')
-      return
-    }
-    setError('')
-    trigger('ok')
   }
 
-  const switchTo = async (branch: string, create: boolean, carry = false): Promise<void> => {
-    setOpen(false)
-    setPending(true)
-    setError('')
-    const result = create
-      ? await window.api.git.createBranch(cwd, branch, carry)
-      : await window.api.git.checkout(cwd, branch)
-    finish(result, branch)
-  }
+  const switchTo = (branch: string, create: boolean, carry = false): Promise<void> =>
+    land(branch, () =>
+      create
+        ? window.api.git.createBranch(cwd, branch, carry)
+        : window.api.git.checkout(cwd, branch)
+    )
 
   const checkout = (branch: string): void => {
-    if (branch === current || pending) return
+    if (branch === current || switching.pending) return
     switchTo(branch, false)
   }
 
-  const checkoutRemote = async (ref: string): Promise<void> => {
-    if (pending) return
-    setOpen(false)
-    setPending(true)
-    setError('')
-    const result = await window.api.git.checkoutRemote(cwd, ref)
-    finish(result, ref)
-  }
+  const checkoutRemote = (ref: string): Promise<void> =>
+    land(ref, () => window.api.git.checkoutRemote(cwd, ref))
 
   const createBranch = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
     const name = newName.trim()
-    if (!name || pending) return
+    if (!name || switching.pending) return
     setNewName('')
     const preview = await window.api.git.parkPreview(cwd)
     if (!preview) {
@@ -151,13 +130,13 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
   return (
     <div className="picker-select" ref={rootRef}>
       <button
-        className={`picker-button${flashClass(flash)}`}
-        disabled={pending}
+        className={`picker-button${switching.className}`}
+        disabled={switching.pending}
         onClick={toggle}
-        title={error || current}
+        title={switching.error || current}
       >
         <span className="picker-icon">{''}</span>
-        <span className="picker-name">{pending ? 'Switching…' : current}</span>
+        <span className="picker-name">{switching.label || current}</span>
         <span className="picker-caret">▾</span>
       </button>
       {open && (

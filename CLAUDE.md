@@ -48,6 +48,44 @@ Key files:
 - `src/preload/index.ts` — defines `window.api.terminal`; its `onData`/`onExit` return unsubscribe functions. `export type Api` is consumed by `src/preload/index.d.ts` to type `window.api`.
 - `src/renderer/src/components/Terminal.tsx` — one xterm pane per component; a `ResizeObserver` refits and resizes the PTY.
 
+### Diff rendering
+
+`DiffBody` renders one `DiffFile` per changed file, each gated on an `IntersectionObserver` so nothing
+loads until it scrolls into view. On becoming visible a file makes **one** IPC call, `git:blame`, which
+returns `{ lines, source }`: `git blame --line-porcelain` already emits every source line, so
+`parseBlame` keeps them instead of throwing them away, and the file content at that rev comes free with
+the blame. There is deliberately no second "read this file" channel — adding one would spawn a second
+`git` process for bytes the first already produced. `source` is `null` past `maxSourceChars`.
+
+Syntax highlighting runs in a **web worker** (`src/renderer/src/tokenize.worker.ts`), driven by
+react-diff-view's `useTokenizeWorker`. This is load-bearing, not a nicety: passing `oldSource` to
+`tokenize` makes it highlight both entire file versions (not just the hunk text) so a hunk inside a
+block comment or template literal colors correctly, and that is far too much synchronous work for the
+thread that also hosts the xterm panes. The worker is a lazily-created module singleton shared by every
+`DiffFile`; `useTokenizeWorker` tags each job with an id and ignores replies for other files.
+
+The 22 refractor grammars live **only** in the worker, which is why `syntax.ts` imports nothing — it is
+just the extension→language map plus `languageFor`. That keeps ~340 kB of grammars out of the main
+renderer bundle and off the startup path. Because the map and the registration list are in different
+bundles they can drift, so the worker checks `refractor.registered()` and reports an unknown grammar as
+a tokenize failure rather than throwing; the guard belongs next to the registry, not next to the map.
+
+Each visible file tokenizes twice: once from hunk text alone (fast, highlighting appears immediately)
+and again once `git:blame` returns `source`. Files that are not visible pass empty hunks, so work stays
+proportional to what is on screen.
+
+### Pull requests
+
+`git:openPullRequest` turns the remote URL into a web URL (`webUrl` normalizes scp-like and Azure SSH
+forms) and then picks a URL shape from the `forges` table. Hosts are matched on **dot-delimited
+labels**, not substrings: `github.mycompany.com` and `git.gitlab.example.com` match, while
+`gitlab-mirror.github-cdn.example.com` and `notgithub.com` correctly do not.
+
+An unrecognized host is a **failure**, not a fallback to the repo homepage — opening the wrong page and
+reporting success is worse than saying so. The escape hatch is per-repo git config:
+`git config snow.pullRequestUrl "https://host/...?from={branch}&to={base}"`, with `{branch}`, `{base}`,
+and `{repo}` substituted. It is checked before the table, so it also overrides a known forge.
+
 ### User config
 
 All config files live in `~/.config/snow/` (`$XDG_CONFIG_HOME/snow/` when set); `configDir()` in
@@ -56,14 +94,27 @@ there too; each watcher filters `fs.watch` events by basename, so log writes nev
 
 #### `theme.json`
 
-Colors are currently
-scoped to the git view. `src/main/theme.ts` owns it: it writes the defaults on first launch, reads and
+Two sections, both scoped to the git view: `git` (chrome and diff backgrounds) and `syntax` (diff
+highlight token colors). `src/main/theme.ts` owns it: it writes the defaults on first launch, reads and
 validates on `theme:get`, and `fs.watch`es the directory to broadcast `theme:changed` on edit. Unknown
-or malformed values fall back to the defaults per key, so a bad edit degrades instead of breaking.
+or malformed values fall back to the defaults per key, so a bad edit degrades instead of breaking —
+`mergeColors` drives that off the keys of `defaultTheme`, so the defaults are the only key list.
+Because the default file is written with `flag: 'wx'`, an existing `theme.json` never grows the
+`syntax` block on disk; the keys are whatever `defaultTheme.syntax` lists.
 
 `useGitColors` (`src/renderer/src/useGitColors.ts`) pushes each color onto `document.documentElement`
-as a `--git-*` custom property that `main.css` consumes with the default as its fallback; `lanes` is
-returned to `GitPanel` since SVG strokes need the value in JS.
+as a custom property that `main.css` consumes with the default as its fallback: `git` through the
+explicit `cssVars` map (`--git-*`, since those names are not mechanical), `syntax` as `--syntax-` plus
+the kebab-cased key. `lanes` is returned to `GitPanel` since SVG strokes need the value in JS.
+
+The `--syntax-*` properties are consumed by `.commit-file-section .token.*` rules — scoped to the
+element `DiffBody` itself renders, not to the surrounding scroll container, so highlighting follows
+`DiffBody` wherever it is mounted.
+
+`strongText`, `accent`, `buttonBorder`, and `buttonBorderHover` model the button palette the git view
+shares (`.commit-toggle-button`, `.commit-totop-button`, `.commit-subject`, `.commit-file-title`). The
+action bar and the `picker-*` dropdowns still hardcode the same hexes — they predate the theme system
+and are not part of the git view it covers.
 
 #### `.snowignore`
 
