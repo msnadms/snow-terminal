@@ -39,6 +39,11 @@ body {
   -webkit-app-region: drag;
 }
 
+.nerd-glyph {
+  font-size: 16px;
+  margin-top: -2px;
+}
+
 .actionbar-input {
   flex: 0 1 320px;
   min-width: 0;
@@ -92,6 +97,13 @@ body {
 .actionbar-button:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+.actionbar-divider {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 18px;
+  background: #313244;
 }
 
 .actionbar-right {
@@ -875,6 +887,16 @@ body {
   font-weight: 600;
 }
 
+.git-branch-link {
+  cursor: pointer;
+}
+
+.git-branch-link:hover {
+  color: var(--git-hash-hover, #d8c07a);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .git-track {
   color: var(--git-track, #7791c5);
 }
@@ -882,15 +904,103 @@ body {
 .git-dirty {
   color: var(--git-dirty, #c3a865);
   margin-left: auto;
+  cursor: pointer;
 }
 
 .git-snowignored {
   color: var(--git-muted, #5f5878);
   margin-left: auto;
+  cursor: pointer;
+}
+
+.git-dirty:hover,
+.git-snowignored:hover {
+  color: var(--git-hash-hover, #d8c07a);
+}
+
+.git-dirty-open {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .git-dirty + .git-snowignored {
   margin-left: 6px;
+}
+
+.git-files {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.git-file-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.git-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  height: 22px;
+  padding: 0 12px;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  appearance: none;
+}
+
+.git-file:hover {
+  background: var(--git-border, #2f2b40);
+}
+
+.git-file-missing {
+  cursor: default;
+}
+
+.git-file-code {
+  flex: 0 0 12px;
+  color: var(--git-dirty, #c3a865);
+  text-align: center;
+}
+
+.git-file-staged .git-file-code {
+  color: var(--git-diff-add-text, #8fbf9f);
+}
+
+.git-file-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-file-from {
+  color: var(--git-muted, #5f5878);
+}
+
+.git-file-dir {
+  color: var(--git-muted, #5f5878);
+}
+
+.git-file-untracked .git-file-code,
+.git-file-untracked .git-file-path {
+  color: var(--git-track, #7791c5);
+}
+
+.git-file-conflict .git-file-code,
+.git-file-conflict .git-file-path {
+  color: var(--git-diff-del-text, #c98c96);
+}
+
+.git-file-ignored {
+  opacity: 0.45;
 }
 
 .git-log {

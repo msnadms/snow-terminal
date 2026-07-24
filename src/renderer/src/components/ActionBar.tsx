@@ -135,10 +135,11 @@ function ActionBar({ cwd }: ActionBarProps): React.JSX.Element {
         className={`actionbar-button${flashClass(pushFlash)}`}
         disabled={!canSubmit}
         onClick={submit}
-        title={pushError || undefined}
+        title={pushError || 'Add, Commit, Push'}
       >
-        {pending ? 'Working…' : 'Add, Commit, Push'}
+        <div className="nerd-glyph">  </div>
       </button>
+      <div className="actionbar-divider" />
       <button
         className={`actionbar-button${flashClass(syncFlash)}`}
         disabled={!canSync}
@@ -150,7 +151,7 @@ function ActionBar({ cwd }: ActionBarProps): React.JSX.Element {
             : "Fetch and check out the remote's default branch")
         }
       >
-        {syncing ? 'Syncing…' : 'Sync Default'}
+        <div className="nerd-glyph"> </div>
       </button>
       <button
         className={`actionbar-button${flashClass(updateFlash)}`}
@@ -163,8 +164,9 @@ function ActionBar({ cwd }: ActionBarProps): React.JSX.Element {
             : "Merge the remote's default branch into the current branch")
         }
       >
-        {updating ? 'Updating…' : 'Update from Default'}
+        <div className="nerd-glyph"> </div>
       </button>
+      <div className="actionbar-divider" />
       <div className="actionbar-right">
         <WorkflowSelect key={`workflow-${cwd ?? 'none'}`} cwd={cwd} />
         <BranchSelect key={cwd ?? 'none'} cwd={cwd} />

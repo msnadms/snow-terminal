@@ -10,7 +10,8 @@ import type {
   GitRepo,
   GitStatus,
   GitSyncDefaultResult,
-  GitUpdateDefaultResult
+  GitUpdateDefaultResult,
+  GitWorkingDiff
 } from '../main/git'
 import type { WorkflowList, WorkflowResult } from '../main/workflow'
 import type { ThemeResult } from '../main/theme'
@@ -53,6 +54,7 @@ const git = {
     ipcRenderer.invoke('git:log', cwd, maxCount),
   show: (cwd: string | undefined, hash: string): Promise<GitCommitDetail> =>
     ipcRenderer.invoke('git:show', cwd, hash),
+  diff: (cwd?: string): Promise<GitWorkingDiff> => ipcRenderer.invoke('git:diff', cwd),
   status: (cwd?: string): Promise<GitStatus> => ipcRenderer.invoke('git:status', cwd),
   branches: (cwd?: string): Promise<GitBranches> => ipcRenderer.invoke('git:branches', cwd),
   defaultBranch: (cwd?: string): Promise<string | null> =>

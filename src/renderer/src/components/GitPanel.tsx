@@ -5,6 +5,7 @@ import { useGitColors } from '../useGitColors'
 type GitLog = Awaited<ReturnType<typeof window.api.git.log>>
 type GitStatus = Awaited<ReturnType<typeof window.api.git.status>>
 type GitCommit = GitLog['commits'][number]
+type GitStatusFile = GitStatus['files'][number]
 type GitRepo = Awaited<ReturnType<typeof window.api.git.discover>>[number]
 
 const ROW = 30
@@ -66,6 +67,93 @@ function buildEdges(commits: GitCommit[], lanes: string[]): Edge[] {
   return edges
 }
 
+const conflictCodes = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'])
+
+const codeLabels: Record<string, string> = {
+  M: 'modified',
+  A: 'added',
+  D: 'deleted',
+  R: 'renamed',
+  C: 'copied',
+  T: 'type changed',
+  U: 'unmerged'
+}
+
+const categoryClasses = ['git-file-conflict', 'git-file-staged', '', 'git-file-untracked']
+
+function fileCategory(file: GitStatusFile): number {
+  if (conflictCodes.has(`${file.index}${file.working_dir}`)) return 0
+  if (file.index === '?') return 3
+  return file.working_dir.trim() ? 2 : 1
+}
+
+function groupFiles(files: GitStatusFile[]): GitStatusFile[][] {
+  const groups: GitStatusFile[][] = [[], [], [], []]
+  for (const file of files) groups[fileCategory(file)].push(file)
+  return groups.filter((group) => group.length > 0)
+}
+
+function fileCode(file: GitStatusFile): string {
+  if (conflictCodes.has(`${file.index}${file.working_dir}`)) return 'U'
+  if (file.index === '?') return '?'
+  return file.working_dir.trim() || file.index.trim() || '·'
+}
+
+function fileMissing(file: GitStatusFile): boolean {
+  return fileCode(file) === 'D'
+}
+
+function fileClass(file: GitStatusFile): string {
+  const classes = ['git-file', categoryClasses[fileCategory(file)]].filter(Boolean)
+  if (file.ignored) classes.push('git-file-ignored')
+  if (fileMissing(file)) classes.push('git-file-missing')
+  return classes.join(' ')
+}
+
+function baseName(filePath: string): string {
+  const cut = filePath.replace(/\/+$/, '').lastIndexOf('/')
+  return cut === -1 ? filePath : filePath.slice(cut + 1)
+}
+
+function pathSuffix(parts: string[], depth: number): string {
+  return parts.slice(Math.max(0, parts.length - depth)).join('/')
+}
+
+function fileLabels(paths: string[]): Map<string, string> {
+  const parts = new Map(paths.map((p) => [p, p.split('/').filter(Boolean)]))
+  const labels = new Map<string, string>()
+  for (const filePath of paths) {
+    const own = parts.get(filePath) ?? []
+    let depth = 1
+    while (
+      depth < own.length &&
+      paths.some(
+        (other) =>
+          other !== filePath && pathSuffix(parts.get(other) ?? [], depth) === pathSuffix(own, depth)
+      )
+    )
+      depth++
+    labels.set(filePath, pathSuffix(own, depth))
+  }
+  return labels
+}
+
+function statusLabel(file: GitStatusFile): string {
+  const suffix = file.ignored ? ' — skipped by .snowignore' : ''
+  if (conflictCodes.has(`${file.index}${file.working_dir}`)) return `conflicted${suffix}`
+  if (file.index === '?') return `untracked${suffix}`
+  const parts: string[] = []
+  if (file.index.trim()) parts.push(`${codeLabels[file.index] ?? file.index} in index`)
+  if (file.working_dir.trim())
+    parts.push(`${codeLabels[file.working_dir] ?? file.working_dir} in worktree`)
+  return `${parts.join(', ')}${suffix}`
+}
+
+function fileTitle(file: GitStatusFile): string {
+  const path = file.from ? `${file.from} → ${file.path}` : file.path
+  return `${path}\n${statusLabel(file)}`
+}
+
 interface Tip {
   commit: GitCommit
   x: number
@@ -73,6 +161,7 @@ interface Tip {
 }
 
 type OpenCommit = (cwd: string, hash: string) => void
+type OpenDiff = (cwd: string, branch: string, file?: string) => void
 
 interface RepoSectionProps {
   repo: GitRepo
@@ -80,6 +169,7 @@ interface RepoSectionProps {
   lanes: string[]
   maxCommits: number
   onOpenCommit?: OpenCommit
+  onOpenDiff?: OpenDiff
 }
 
 function RepoSection({
@@ -87,13 +177,15 @@ function RepoSection({
   multi,
   lanes,
   maxCommits,
-  onOpenCommit
+  onOpenCommit,
+  onOpenDiff
 }: RepoSectionProps): React.JSX.Element {
   const [status, setStatus] = useState<GitStatus | null>(null)
   const [log, setLog] = useState<GitLog | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tip, setTip] = useState<Tip | null>(null)
   const [expanded, setExpanded] = useState(true)
+  const [showFiles, setShowFiles] = useState(false)
   const cwd = repo.path
   const open = !multi || expanded
 
@@ -134,13 +226,35 @@ function RepoSection({
   }, [cwd, maxCommits])
 
   const edges = useMemo(() => (log ? buildEdges(log.commits, lanes) : []), [log, lanes])
+  const labels = useMemo(() => fileLabels((status?.files ?? []).map((f) => f.path)), [status])
 
   if (error) {
     return <div className="git-empty">{error}</div>
   }
 
+  const branch = status?.current ?? null
   const changed = status?.stageable ?? 0
   const snowignored = (status?.changed ?? 0) - changed
+  const files = status?.files ?? []
+  const groups = groupFiles(files)
+
+  const toggleFiles = (event: React.MouseEvent): void => {
+    event.stopPropagation()
+    setTip(null)
+    if (!open) {
+      setExpanded(true)
+      setShowFiles(true)
+      return
+    }
+    setShowFiles((v) => !v)
+  }
+
+  const toggleTitle = showFiles ? 'Click to show the branch tree' : 'Click to list changed files'
+
+  const openFile = (file: GitStatusFile): void => {
+    setTip(null)
+    onOpenDiff?.(cwd, branch ?? 'HEAD', file.path)
+  }
 
   const commits = log?.commits ?? []
   const graphWidth = PADX + (log?.laneCount ?? 1) * LANE
@@ -150,15 +264,45 @@ function RepoSection({
     <>
       {multi && <span className={open ? 'git-caret git-caret-open' : 'git-caret'}>▸</span>}
       {multi && <span className="git-repo-name">{repo.name}</span>}
-      <span className="git-branch">{status?.current ?? '-'}</span>
+      {branch ? (
+        <span
+          className="git-branch git-branch-link"
+          title="Click to view uncommitted changes"
+          onClick={(event) => {
+            event.stopPropagation()
+            setTip(null)
+            onOpenDiff?.(cwd, branch)
+          }}
+        >
+          {branch}
+        </span>
+      ) : (
+        <span className="git-branch">-</span>
+      )}
       {status && (status.ahead > 0 || status.behind > 0) && (
         <span className="git-track">
           {status.ahead > 0 && `↑${status.ahead}`}
           {status.behind > 0 && `↓${status.behind}`}
         </span>
       )}
-      {changed > 0 && <span className="git-dirty">{changed} changed</span>}
-      {snowignored > 0 && <span className="git-snowignored">{snowignored} ignored</span>}
+      {changed > 0 && (
+        <span
+          className={showFiles ? 'git-dirty git-dirty-open' : 'git-dirty'}
+          title={toggleTitle}
+          onClick={toggleFiles}
+        >
+          {changed} changed
+        </span>
+      )}
+      {snowignored > 0 && (
+        <span
+          className={showFiles ? 'git-snowignored git-dirty-open' : 'git-snowignored'}
+          title={toggleTitle}
+          onClick={toggleFiles}
+        >
+          {snowignored} ignored
+        </span>
+      )}
     </>
   )
 
@@ -180,7 +324,37 @@ function RepoSection({
         <div className="git-header">{header}</div>
       )}
 
-      {open && (
+      {open && showFiles && files.length > 0 && (
+        <div className="git-files">
+          {groups.map((group) => (
+            <div key={group[0].path} className="git-file-group">
+              {group.map((file) => {
+                const name = baseName(file.path)
+                const label = labels.get(file.path) ?? name
+                const dir = label.slice(0, label.length - name.length)
+                return (
+                  <button
+                    key={file.path}
+                    type="button"
+                    className={fileClass(file)}
+                    title={fileTitle(file)}
+                    onClick={() => openFile(file)}
+                  >
+                    <span className="git-file-code">{fileCode(file)}</span>
+                    <span className="git-file-path">
+                      {file.from && <span className="git-file-from">{baseName(file.from)} → </span>}
+                      {dir && <span className="git-file-dir">{dir}</span>}
+                      {name}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {open && !(showFiles && files.length > 0) && (
         <div className="git-log">
           <div className="git-graph" style={{ height: graphHeight }}>
             <svg
@@ -267,9 +441,10 @@ function RepoSection({
 interface GitPanelProps {
   cwd?: string
   onOpenCommit?: OpenCommit
+  onOpenDiff?: OpenDiff
 }
 
-function GitPanel({ cwd, onOpenCommit }: GitPanelProps): React.JSX.Element {
+function GitPanel({ cwd, onOpenCommit, onOpenDiff }: GitPanelProps): React.JSX.Element {
   const [repos, setRepos] = useState<GitRepo[] | null>(null)
   const colors = useGitColors()
   const lanes = colors?.lanes ?? fallbackLanes
@@ -312,6 +487,7 @@ function GitPanel({ cwd, onOpenCommit }: GitPanelProps): React.JSX.Element {
             lanes={lanes}
             maxCommits={repos.length > 1 ? MULTI_REPO_COMMITS : SINGLE_REPO_COMMITS}
             onOpenCommit={onOpenCommit}
+            onOpenDiff={onOpenDiff}
           />
         ))}
       </div>

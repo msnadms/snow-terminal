@@ -5,6 +5,7 @@ import GitPanel from './components/GitPanel'
 import Session from './components/Session'
 import TabBar from './components/TabBar'
 import HomePage from './components/HomePage'
+import WorkingDiffView from './components/WorkingDiffView'
 import { basename, shortHash } from './format'
 import { useSnowconfig } from './useSnowconfig'
 
@@ -13,6 +14,7 @@ type ActiveId = number | 'home'
 type Tab =
   | { kind: 'shell'; id: number; cwd?: string }
   | { kind: 'commit'; id: number; cwd: string; hash: string }
+  | { kind: 'diff'; id: number; cwd: string; branch: string; focus?: string; focusKey: number }
 
 function App(): React.JSX.Element {
   const [tabs, setTabs] = useState<Tab[]>([])
@@ -22,13 +24,17 @@ function App(): React.JSX.Element {
   const presets = useSnowconfig()
 
   const activeTab = tabs.find((t) => t.id === activeId)
-  const cwd = activeTab?.kind === 'commit' ? activeTab.cwd : cwds[activeTab?.id ?? -1]
+  const cwd = activeTab && activeTab.kind !== 'shell' ? activeTab.cwd : cwds[activeTab?.id ?? -1]
 
   const labels = useMemo(() => {
     const result: Record<number, string> = {}
     for (const tab of tabs) {
       if (tab.kind === 'commit') {
         result[tab.id] = shortHash(tab.hash)
+        continue
+      }
+      if (tab.kind === 'diff') {
+        result[tab.id] = `${tab.branch} ✎`
         continue
       }
       const dir = cwds[tab.id]
@@ -52,6 +58,24 @@ function App(): React.JSX.Element {
     }
     const id = nextIdRef.current++
     setTabs((prev) => [...prev, { kind: 'commit', id, cwd, hash }])
+    setActiveId(id)
+  }
+
+  const openDiff = (cwd: string, branch: string, file?: string): void => {
+    const existing = tabs.find((t) => t.kind === 'diff' && t.cwd === cwd)
+    if (existing) {
+      setTabs((prev) =>
+        prev.map((t) =>
+          t.id === existing.id && t.kind === 'diff'
+            ? { ...t, branch, focus: file, focusKey: t.focusKey + 1 }
+            : t
+        )
+      )
+      setActiveId(existing.id)
+      return
+    }
+    const id = nextIdRef.current++
+    setTabs((prev) => [...prev, { kind: 'diff', id, cwd, branch, focus: file, focusKey: 0 }])
     setActiveId(id)
   }
 
@@ -88,16 +112,29 @@ function App(): React.JSX.Element {
             {activeId === 'home' && (
               <HomePage presets={presets} onOpenPreset={(dir) => addSession(dir)} />
             )}
-            {tabs.map((tab) =>
-              tab.kind === 'commit' ? (
-                <CommitView
-                  key={tab.id}
-                  active={activeId === tab.id}
-                  cwd={tab.cwd}
-                  hash={tab.hash}
-                  onOpenCommit={openCommit}
-                />
-              ) : (
+            {tabs.map((tab) => {
+              if (tab.kind === 'commit')
+                return (
+                  <CommitView
+                    key={tab.id}
+                    active={activeId === tab.id}
+                    cwd={tab.cwd}
+                    hash={tab.hash}
+                    onOpenCommit={openCommit}
+                  />
+                )
+              if (tab.kind === 'diff')
+                return (
+                  <WorkingDiffView
+                    key={tab.id}
+                    active={activeId === tab.id}
+                    cwd={tab.cwd}
+                    focus={tab.focus}
+                    focusKey={tab.focusKey}
+                    onOpenCommit={openCommit}
+                  />
+                )
+              return (
                 <Session
                   key={tab.id}
                   active={activeId === tab.id}
@@ -105,10 +142,10 @@ function App(): React.JSX.Element {
                   onCwd={(next) => setCwds((prev) => ({ ...prev, [tab.id]: next }))}
                 />
               )
-            )}
+            })}
           </div>
         </div>
-        <GitPanel cwd={cwd} onOpenCommit={openCommit} />
+        <GitPanel cwd={cwd} onOpenCommit={openCommit} onOpenDiff={openDiff} />
       </div>
     </div>
   )

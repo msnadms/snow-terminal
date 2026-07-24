@@ -57,6 +57,13 @@ export interface GitCommitDetail {
   truncated: boolean
 }
 
+export interface GitWorkingDiff {
+  branch: string | null
+  files: GitCommitFile[]
+  patch: string
+  truncated: boolean
+}
+
 export interface GitCommitPushResult {
   ok: boolean
   error?: string
@@ -95,6 +102,14 @@ export interface GitUpdateDefaultResult {
   detail?: string
 }
 
+export interface GitStatusFile {
+  path: string
+  from: string | null
+  index: string
+  working_dir: string
+  ignored: boolean
+}
+
 export interface GitStatus {
   current: string | null
   tracking: string | null
@@ -104,6 +119,7 @@ export interface GitStatus {
   modified: string[]
   not_added: string[]
   conflicted: string[]
+  files: GitStatusFile[]
   changed: number
   stageable: number
 }
@@ -120,6 +136,10 @@ const commitFormat = {
 const detailFormat = ['%H', '%P', '%an', '%ae', '%aI', '%s', '%D', '%b'].join('%x1f')
 
 const maxPatchChars = 2_000_000
+
+const emptyTree = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+
+let scratchIndexCount = 0
 
 function capPatch(patch: string): { patch: string; truncated: boolean } {
   if (patch.length <= maxPatchChars) return { patch, truncated: false }
@@ -662,6 +682,48 @@ export function registerGitHandlers(): void {
     }
   )
 
+  ipcMain.handle('git:diff', async (_event, cwd?: string): Promise<GitWorkingDiff> => {
+    const git = gitFor(cwd)
+    const root = (await worktreeRoot(cwd)) ?? cwd ?? os.homedir()
+    const [branch, hasHead] = await Promise.all([
+      git
+        .raw(['rev-parse', '--abbrev-ref', 'HEAD'])
+        .then((name) => name.trim())
+        .catch(() => ''),
+      git
+        .raw(['rev-parse', '--verify', '--quiet', 'HEAD'])
+        .then(() => true)
+        .catch(() => false)
+    ])
+
+    const base = hasHead ? 'HEAD' : emptyTree
+    const indexFile = path.join(os.tmpdir(), `snow-diff-${process.pid}-${++scratchIndexCount}`)
+    const scratch = simpleGit(root)
+      .env('GIT_OPTIONAL_LOCKS', '0')
+      .env('GIT_INDEX_FILE', indexFile)
+
+    try {
+      await scratch.raw(['read-tree', base])
+      await scratch.raw(['add', '-A', '-N'])
+
+      const range = ['diff', base, '-M']
+      const [numstat, raw] = await Promise.all([
+        scratch.raw([...range, '--numstat', '-z']),
+        scratch.raw([...range, '--patch', '--no-color'])
+      ])
+      const { patch, truncated } = capPatch(raw)
+
+      return {
+        branch: branch && branch !== 'HEAD' ? branch : null,
+        files: parseNumstat(numstat),
+        patch,
+        truncated
+      }
+    } finally {
+      await fs.promises.rm(indexFile, { force: true })
+    }
+  })
+
   ipcMain.handle(
     'git:blame',
     async (_event, cwd: string | undefined, rev: string, filePath: string): Promise<GitBlame> => {
@@ -675,6 +737,8 @@ export function registerGitHandlers(): void {
 
   ipcMain.handle('git:status', async (_event, cwd?: string): Promise<GitStatus> => {
     const status = await gitFor(cwd).status()
+    const stageable = filterPaths(status.files.map((f) => f.path))
+    const keep = new Set(stageable)
     return {
       current: status.current,
       tracking: status.tracking,
@@ -684,8 +748,15 @@ export function registerGitHandlers(): void {
       modified: status.modified,
       not_added: status.not_added,
       conflicted: status.conflicted,
+      files: status.files.map((f) => ({
+        path: f.path,
+        from: f.from ?? null,
+        index: f.index,
+        working_dir: f.working_dir,
+        ignored: !keep.has(f.path)
+      })),
       changed: status.files.length,
-      stageable: filterPaths(status.files.map((f) => f.path)).length
+      stageable: stageable.length
     }
   })
 
