@@ -1,5 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import BranchSelect from './BranchSelect'
+import FailureDialog from './FailureDialog'
+import WorkflowSelect from './WorkflowSelect'
+import { failureOf, type Failure } from '@renderer/format'
 import { flashClass, useFlash } from '@renderer/useFlash'
 
 interface ActionBarProps {
@@ -9,6 +12,7 @@ interface ActionBarProps {
 function ActionBar({ cwd }: ActionBarProps): React.JSX.Element {
   const [ready, setReady] = useState(false)
   const [isRepo, setIsRepo] = useState(false)
+  const [onDefault, setOnDefault] = useState(false)
   const [message, setMessage] = useState('')
   const [pending, setPending] = useState(false)
   const [syncing, setSyncing] = useState(false)
@@ -19,9 +23,8 @@ function ActionBar({ cwd }: ActionBarProps): React.JSX.Element {
   const [pushError, setPushError] = useState('')
   const [syncError, setSyncError] = useState('')
   const [updateError, setUpdateError] = useState('')
-  const [failure, setFailure] = useState<{ title: string; detail: string } | null>(null)
+  const [failure, setFailure] = useState<Failure | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
-  const dismissRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -32,13 +35,21 @@ function ActionBar({ cwd }: ActionBarProps): React.JSX.Element {
       setIsRepo(repo)
       if (!repo) {
         setReady(false)
+        setOnDefault(false)
         return
       }
       try {
-        const gitStatus = await window.api.git.status(cwd)
-        if (!cancelled) setReady(gitStatus.stageable > 0)
+        const [gitStatus, defaultName] = await Promise.all([
+          window.api.git.status(cwd),
+          window.api.git.defaultBranch(cwd)
+        ])
+        if (cancelled) return
+        setReady(gitStatus.stageable > 0)
+        setOnDefault(defaultName !== null && gitStatus.current === defaultName)
       } catch {
-        if (!cancelled) setReady(false)
+        if (cancelled) return
+        setReady(false)
+        setOnDefault(false)
       }
     }
 
@@ -53,21 +64,10 @@ function ActionBar({ cwd }: ActionBarProps): React.JSX.Element {
     }
   }, [cwd, refreshKey])
 
-  useEffect(() => {
-    if (!failure) return
-
-    dismissRef.current?.focus()
-
-    const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' || e.key === 'Enter') setFailure(null)
-    }
-
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [failure])
-
   const busy = pending || syncing || updating
   const canSubmit = ready && !busy && message.trim() !== ''
+  const canSync = isRepo && !busy
+  const canUpdate = isRepo && !busy && !onDefault
 
   const submit = async (): Promise<void> => {
     if (!canSubmit) return
@@ -86,7 +86,7 @@ function ActionBar({ cwd }: ActionBarProps): React.JSX.Element {
   }
 
   const syncDefault = async (): Promise<void> => {
-    if (!isRepo || busy) return
+    if (!canSync) return
     setSyncing(true)
     const result = await window.api.git.syncDefault(cwd)
     setSyncing(false)
@@ -94,14 +94,16 @@ function ActionBar({ cwd }: ActionBarProps): React.JSX.Element {
     if (result.ok) {
       setSyncError('')
       flashSync('ok')
-    } else {
-      setSyncError(result.error ?? 'git command failed')
-      flashSync('error')
+      return
     }
+    const next = failureOf(result)
+    setSyncError(next.title)
+    setFailure(next)
+    flashSync('error')
   }
 
   const updateFromDefault = async (): Promise<void> => {
-    if (!isRepo || busy) return
+    if (!canUpdate) return
     setUpdating(true)
     const result = await window.api.git.updateFromDefault(cwd)
     setUpdating(false)
@@ -111,9 +113,9 @@ function ActionBar({ cwd }: ActionBarProps): React.JSX.Element {
       flashUpdate('ok')
       return
     }
-    const title = result.error ?? 'git command failed'
-    setUpdateError(title)
-    setFailure({ title, detail: result.detail ?? '' })
+    const next = failureOf(result)
+    setUpdateError(next.title)
+    setFailure(next)
     flashUpdate('error')
   }
 
@@ -139,38 +141,35 @@ function ActionBar({ cwd }: ActionBarProps): React.JSX.Element {
       </button>
       <button
         className={`actionbar-button${flashClass(syncFlash)}`}
-        disabled={!isRepo || busy}
+        disabled={!canSync}
         onClick={syncDefault}
-        title={syncError || "Fetch and check out the remote's default branch"}
+        title={
+          syncError ||
+          (onDefault
+            ? 'Fast-forward the default branch from its remote'
+            : "Fetch and check out the remote's default branch")
+        }
       >
         {syncing ? 'Syncing…' : 'Sync Default'}
       </button>
       <button
         className={`actionbar-button${flashClass(updateFlash)}`}
-        disabled={!isRepo || busy}
+        disabled={!canUpdate}
         onClick={updateFromDefault}
-        title={updateError || "Merge the remote's default branch into the current branch"}
+        title={
+          updateError ||
+          (onDefault
+            ? 'Already on the default branch'
+            : "Merge the remote's default branch into the current branch")
+        }
       >
         {updating ? 'Updating…' : 'Update from Default'}
       </button>
-      <BranchSelect key={cwd ?? 'none'} cwd={cwd} />
-      {failure && (
-        <div className="git-dialog-backdrop" onPointerDown={() => setFailure(null)}>
-          <div className="git-dialog" onPointerDown={(e) => e.stopPropagation()}>
-            <div className="git-dialog-title">{failure.title}</div>
-            {failure.detail && <pre className="git-dialog-detail">{failure.detail}</pre>}
-            <div className="git-dialog-actions">
-              <button
-                ref={dismissRef}
-                className="git-dialog-button"
-                onClick={() => setFailure(null)}
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <div className="actionbar-right">
+        <WorkflowSelect key={`workflow-${cwd ?? 'none'}`} cwd={cwd} />
+        <BranchSelect key={cwd ?? 'none'} cwd={cwd} />
+      </div>
+      {failure && <FailureDialog failure={failure} onDismiss={() => setFailure(null)} />}
     </div>
   )
 }

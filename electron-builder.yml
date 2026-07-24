@@ -1,4 +1,4 @@
-appId: com.electron.app
+appId: io.github.msnadms.snow
 productName: snow
 directories:
   buildResources: build
@@ -36,11 +36,12 @@ linux:
     - AppImage
     - snap
     - deb
-  maintainer: electronjs.org
+  maintainer: msnadms <masonadams002@gmail.com>
   category: Utility
 appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
 publish:
-  provider: generic
-  url: https://example.com/auto-updates
+  provider: github
+  owner: msnadms
+  repo: snow-terminal

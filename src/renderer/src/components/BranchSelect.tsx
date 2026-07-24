@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import FailureDialog from './FailureDialog'
+import { failureOf, type Failure } from '@renderer/format'
 import { flashClass, useFlash } from '@renderer/useFlash'
 
 interface BranchSelectProps {
@@ -18,10 +20,10 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
   const [error, setError] = useState('')
   const [flash, trigger] = useFlash()
   const [newName, setNewName] = useState('')
-  const [failure, setFailure] = useState<{ title: string; detail: string } | null>(null)
+  const [failure, setFailure] = useState<Failure | null>(null)
+  const [choice, setChoice] = useState<{ name: string; branch: string; files: number } | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
-  const dismissRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -66,17 +68,15 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
   }, [open])
 
   useEffect(() => {
-    if (!failure) return
-
-    dismissRef.current?.focus()
+    if (!choice) return
 
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' || e.key === 'Enter') setFailure(null)
+      if (e.key === 'Escape') setChoice(null)
     }
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [failure])
+  }, [choice])
 
   if (!current) return null
 
@@ -90,28 +90,28 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
     branch: string
   ): void => {
     setPending(false)
+    if (result.ok || result.branch) {
+      const name = result.branch ?? branch
+      setCurrent(name)
+      setBranches((prev) => (prev.includes(name) ? prev : [...prev, name].sort()))
+    }
     if (!result.ok) {
-      const title = result.error ?? 'git command failed'
-      const lines = (result.detail ?? '').split('\n')
-      const body = lines[0]?.trim() === title ? lines.slice(1) : lines
-      setError(title)
-      setFailure({ title, detail: body.join('\n').trim() })
+      const next = failureOf(result)
+      setError(next.title)
+      setFailure(next)
       trigger('error')
       return
     }
     setError('')
     trigger('ok')
-    const name = result.branch ?? branch
-    setCurrent(name)
-    setBranches((prev) => (prev.includes(name) ? prev : [...prev, name].sort()))
   }
 
-  const switchTo = async (branch: string, create: boolean): Promise<void> => {
+  const switchTo = async (branch: string, create: boolean, carry = false): Promise<void> => {
     setOpen(false)
     setPending(true)
     setError('')
     const result = create
-      ? await window.api.git.createBranch(cwd, branch)
+      ? await window.api.git.createBranch(cwd, branch, carry)
       : await window.api.git.checkout(cwd, branch)
     finish(result, branch)
   }
@@ -130,12 +130,18 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
     finish(result, ref)
   }
 
-  const createBranch = (e: React.FormEvent): void => {
+  const createBranch = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
     const name = newName.trim()
     if (!name || pending) return
     setNewName('')
-    switchTo(name, true)
+    const preview = await window.api.git.parkPreview(cwd)
+    if (!preview) {
+      switchTo(name, true)
+      return
+    }
+    setOpen(false)
+    setChoice({ name, ...preview })
   }
 
   const needle = query.trim().toLowerCase()
@@ -143,27 +149,28 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
   const visible = needle ? source.filter((name) => name.toLowerCase().includes(needle)) : source
 
   return (
-    <div className="branch-select" ref={rootRef}>
+    <div className="picker-select" ref={rootRef}>
       <button
-        className={`branch-button${flashClass(flash)}`}
+        className={`picker-button${flashClass(flash)}`}
         disabled={pending}
         onClick={toggle}
         title={error || current}
       >
-        <span className="branch-name">{pending ? 'Switching…' : current}</span>
-        <span className="branch-caret">▾</span>
+        <span className="picker-icon">{''}</span>
+        <span className="picker-name">{pending ? 'Switching…' : current}</span>
+        <span className="picker-caret">▾</span>
       </button>
       {open && (
-        <div className="branch-menu">
-          <div className="branch-tabs">
+        <div className="picker-menu">
+          <div className="picker-tabs">
             <button
-              className={`branch-tab${tab === 'local' ? ' branch-tab-active' : ''}`}
+              className={`picker-tab${tab === 'local' ? ' picker-tab-active' : ''}`}
               onClick={() => setTab('local')}
             >
               Local
             </button>
             <button
-              className={`branch-tab${tab === 'origin' ? ' branch-tab-active' : ''}`}
+              className={`picker-tab${tab === 'origin' ? ' picker-tab-active' : ''}`}
               onClick={() => setTab('origin')}
             >
               Origin
@@ -171,17 +178,17 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
           </div>
           <input
             ref={searchRef}
-            className="branch-search"
+            className="picker-search"
             placeholder="Search branches…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          <div className="branch-list">
-            {visible.length === 0 && <div className="branch-none">No branches</div>}
+          <div className="picker-list">
+            {visible.length === 0 && <div className="picker-none">No branches</div>}
             {visible.map((branch) => (
               <button
                 key={branch}
-                className={`branch-item${branch === current ? ' branch-item-current' : ''}`}
+                className={`picker-item${branch === current ? ' picker-item-current' : ''}`}
                 onClick={() => (tab === 'local' ? checkout(branch) : checkoutRemote(branch))}
               >
                 {branch}
@@ -189,37 +196,56 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
             ))}
           </div>
           {tab === 'local' && (
-            <form className="branch-create" onSubmit={createBranch}>
+            <form className="picker-create" onSubmit={createBranch}>
               <input
-                className="branch-create-input"
+                className="picker-create-input"
                 placeholder="New branch…"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
               />
-              <button className="branch-create-button" type="submit" disabled={!newName.trim()}>
+              <button className="picker-create-button" type="submit" disabled={!newName.trim()}>
                 +
               </button>
             </form>
           )}
         </div>
       )}
-      {failure && (
-        <div className="git-dialog-backdrop" onPointerDown={() => setFailure(null)}>
+      {choice && (
+        <div className="git-dialog-backdrop" onPointerDown={() => setChoice(null)}>
           <div className="git-dialog" onPointerDown={(e) => e.stopPropagation()}>
-            <div className="git-dialog-title">{failure.title}</div>
-            {failure.detail && <pre className="git-dialog-detail">{failure.detail}</pre>}
+            <div className="git-dialog-title">Where do your changes go?</div>
+            <pre className="git-dialog-detail">
+              {[
+                `You have ${choice.files} uncommitted file${choice.files === 1 ? '' : 's'} on ${choice.branch}, a registered workflow.`,
+                '',
+                `Park them: they stay with ${choice.branch} and ${choice.name} starts clean.`,
+                `Bring them: ${choice.name} starts with the changes, as git checkout -b would.`
+              ].join('\n')}
+            </pre>
             <div className="git-dialog-actions">
               <button
-                ref={dismissRef}
                 className="git-dialog-button"
-                onClick={() => setFailure(null)}
+                onClick={() => {
+                  setChoice(null)
+                  switchTo(choice.name, true, false)
+                }}
               >
-                OK
+                Park on {choice.branch}
+              </button>
+              <button
+                className="git-dialog-button"
+                onClick={() => {
+                  setChoice(null)
+                  switchTo(choice.name, true, true)
+                }}
+              >
+                Bring to {choice.name}
               </button>
             </div>
           </div>
         </div>
       )}
+      {failure && <FailureDialog failure={failure} onDismiss={() => setFailure(null)} />}
     </div>
   )
 }

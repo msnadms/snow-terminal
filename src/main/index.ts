@@ -4,6 +4,8 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerPtyHandlers, disposeAllPty } from './pty'
 import { registerGitHandlers, disposeGitWatchers } from './git'
+import { registerWorkflowHandlers } from './workflow'
+import { initRegistry, disposeRegistryWatcher } from './registry'
 import { registerThemeHandlers, disposeThemeWatcher } from './theme'
 import { registerSnowignoreHandlers, disposeSnowignoreWatcher } from './snowignore'
 import { registerSnowconfigHandlers, disposeSnowconfigWatcher } from './snowconfig'
@@ -55,7 +57,7 @@ function createWindow(): void {
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
   // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
+  electronApp.setAppUserModelId('io.github.msnadms.snow')
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
@@ -70,8 +72,15 @@ app.whenReady().then(() => {
   // Register pseudo-terminal (node-pty) IPC handlers.
   registerPtyHandlers()
 
+  // Load ~/.config/snow/.snowworkflows and watch it for edits. Before the git handlers, which
+  // consult the registry to decide whether a branch switch parks its changes.
+  initRegistry()
+
   // Register git info IPC handlers; each call carries the repo cwd.
   registerGitHandlers()
+
+  // Register workflow IPC handlers.
+  registerWorkflowHandlers()
 
   // Load ~/.config/snow/theme.json and watch it for edits.
   registerThemeHandlers()
@@ -106,6 +115,7 @@ app.on('window-all-closed', () => {
 app.on('will-quit', () => {
   disposeAllPty()
   disposeGitWatchers()
+  disposeRegistryWatcher()
   disposeThemeWatcher()
   disposeSnowignoreWatcher()
   disposeSnowconfigWatcher()

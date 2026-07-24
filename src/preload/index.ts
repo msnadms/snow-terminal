@@ -12,6 +12,7 @@ import type {
   GitSyncDefaultResult,
   GitUpdateDefaultResult
 } from '../main/git'
+import type { WorkflowList, WorkflowResult } from '../main/workflow'
 import type { ThemeResult } from '../main/theme'
 import type { SnowignoreResult } from '../main/snowignore'
 import type { SnowconfigResult } from '../main/snowconfig'
@@ -54,12 +55,19 @@ const git = {
     ipcRenderer.invoke('git:show', cwd, hash),
   status: (cwd?: string): Promise<GitStatus> => ipcRenderer.invoke('git:status', cwd),
   branches: (cwd?: string): Promise<GitBranches> => ipcRenderer.invoke('git:branches', cwd),
+  defaultBranch: (cwd?: string): Promise<string | null> =>
+    ipcRenderer.invoke('git:defaultBranch', cwd),
   checkout: (cwd: string | undefined, branch: string): Promise<GitCheckoutResult> =>
     ipcRenderer.invoke('git:checkout', cwd, branch),
   checkoutRemote: (cwd: string | undefined, ref: string): Promise<GitCheckoutResult> =>
     ipcRenderer.invoke('git:checkoutRemote', cwd, ref),
-  createBranch: (cwd: string | undefined, branch: string): Promise<GitCheckoutResult> =>
-    ipcRenderer.invoke('git:createBranch', cwd, branch),
+  parkPreview: (cwd?: string): Promise<{ branch: string; files: number } | null> =>
+    ipcRenderer.invoke('git:parkPreview', cwd),
+  createBranch: (
+    cwd: string | undefined,
+    branch: string,
+    carry: boolean
+  ): Promise<GitCheckoutResult> => ipcRenderer.invoke('git:createBranch', cwd, branch, carry),
   commitPush: (cwd: string | undefined, message: string): Promise<GitCommitPushResult> =>
     ipcRenderer.invoke('git:commitPush', cwd, message),
   syncDefault: (cwd?: string): Promise<GitSyncDefaultResult> =>
@@ -72,6 +80,23 @@ const git = {
     const listener = (_e: IpcRendererEvent, cwd: string | null): void => callback(cwd)
     ipcRenderer.on('git:changed', listener)
     return () => ipcRenderer.removeListener('git:changed', listener)
+  }
+}
+
+const workflow = {
+  list: (cwd?: string): Promise<WorkflowList> => ipcRenderer.invoke('workflow:list', cwd),
+  register: (cwd: string | undefined, branch?: string): Promise<WorkflowResult> =>
+    ipcRenderer.invoke('workflow:register', cwd, branch),
+  unregister: (cwd: string | undefined, branch: string): Promise<WorkflowResult> =>
+    ipcRenderer.invoke('workflow:unregister', cwd, branch),
+  switch: (cwd: string | undefined, branch: string): Promise<WorkflowResult> =>
+    ipcRenderer.invoke('workflow:switch', cwd, branch),
+  create: (cwd: string | undefined, branch: string): Promise<WorkflowResult> =>
+    ipcRenderer.invoke('workflow:create', cwd, branch),
+  onChanged: (callback: () => void): (() => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('workflow:changed', listener)
+    return () => ipcRenderer.removeListener('workflow:changed', listener)
   }
 }
 
@@ -107,7 +132,7 @@ const snowconfig = {
   }
 }
 
-const api = { terminal, git, theme, snowignore, snowconfig }
+const api = { terminal, git, workflow, theme, snowignore, snowconfig }
 
 export type Api = typeof api
 

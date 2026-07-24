@@ -11,6 +11,11 @@ const quietChannels = new Set(['pty:write', 'pty:resize'])
 const redactedChannels = new Set([
   'git:blame',
   'git:show',
+  'workflow:list',
+  'workflow:register',
+  'workflow:unregister',
+  'workflow:switch',
+  'workflow:create',
   'snowconfig:get',
   'snowconfig:addPreset',
   'snowconfig:setDefault',

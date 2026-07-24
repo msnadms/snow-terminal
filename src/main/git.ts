@@ -2,8 +2,9 @@ import { ipcMain, WebContents } from 'electron'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { simpleGit, SimpleGit } from 'simple-git'
+import { simpleGit, SimpleGit, StatusResult } from 'simple-git'
 import { filterPaths } from './snowignore'
+import { registeredFor, workflowsPath } from './registry'
 
 export interface GitCommit {
   hash: string
@@ -70,6 +71,9 @@ export interface GitBranches {
 export interface GitCheckoutResult {
   ok: boolean
   branch?: string
+  parked?: number
+  restored?: number
+  conflicted?: string[]
   error?: string
   detail?: string
 }
@@ -78,6 +82,7 @@ export interface GitSyncDefaultResult {
   ok: boolean
   branch?: string
   error?: string
+  detail?: string
 }
 
 export interface GitUpdateDefaultResult {
@@ -233,7 +238,7 @@ function layout(
 
 const gitByPath = new Map<string, SimpleGit>()
 
-function gitFor(cwd?: string): SimpleGit {
+export function gitFor(cwd?: string): SimpleGit {
   const dir = cwd || os.homedir()
   let git = gitByPath.get(dir)
   if (!git) {
@@ -243,7 +248,7 @@ function gitFor(cwd?: string): SimpleGit {
   return git
 }
 
-function errorText(error: unknown): string {
+export function errorText(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error)
   const line = raw
     .split('\n')
@@ -252,7 +257,7 @@ function errorText(error: unknown): string {
   return line || 'git command failed'
 }
 
-function errorDetail(error: unknown): string {
+export function errorDetail(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error)
   return raw
     .split('\n')
@@ -270,7 +275,7 @@ async function gitDir(cwd?: string): Promise<string | null> {
   }
 }
 
-async function worktreeRoot(cwd?: string): Promise<string | null> {
+export async function worktreeRoot(cwd?: string): Promise<string | null> {
   try {
     return (await gitFor(cwd).revparse(['--show-toplevel'])).trim() || null
   } catch {
@@ -303,16 +308,21 @@ async function remoteName(cwd?: string): Promise<string | null> {
   return remotes.includes('origin') ? 'origin' : remotes[0]
 }
 
-async function defaultBranch(cwd?: string): Promise<{ remote: string; branch: string } | null> {
+export async function defaultBranch(
+  cwd?: string,
+  refresh = true
+): Promise<{ remote: string; branch: string } | null> {
   const git = gitFor(cwd)
   const remote = await remoteName(cwd)
   if (!remote) return null
 
-  try {
-    await git.raw(['fetch', remote])
-    await git.raw(['remote', 'set-head', remote, '--auto'])
-  } catch {
-    /* empty */
+  if (refresh) {
+    try {
+      await git.raw(['fetch', remote])
+      await git.raw(['remote', 'set-head', remote, '--auto'])
+    } catch {
+      /* empty */
+    }
   }
 
   try {
@@ -322,6 +332,201 @@ async function defaultBranch(cwd?: string): Promise<{ remote: string; branch: st
     return branch ? { remote, branch } : null
   } catch {
     return null
+  }
+}
+
+const markerPrefix = 'snow-wf:'
+const markerPattern = new RegExp(`^(?:On [^:]+: )?${markerPrefix}(.+)$`)
+
+interface StashEntry {
+  selector: string
+  branch: string
+  date: string
+}
+
+interface Departure {
+  current: string | null
+  parked: number
+  registered: string[]
+}
+
+export async function stashEntries(cwd?: string): Promise<StashEntry[]> {
+  let raw: string
+  try {
+    raw = await gitFor(cwd).raw(['stash', 'list', '--format=%gd%x1f%gs%x1f%aI'])
+  } catch {
+    return []
+  }
+
+  const entries: StashEntry[] = []
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue
+    const [selector, subject, date] = line.split('\x1f')
+    if (!selector || !subject) continue
+    const match = markerPattern.exec(subject)
+    if (!match) continue
+    const branch = match[1].trim()
+    if (branch) entries.push({ selector, branch, date: date ?? '' })
+  }
+  return entries
+}
+
+export function newestStash(entries: StashEntry[], branch: string): StashEntry | null {
+  return entries.find((entry) => entry.branch === branch) ?? null
+}
+
+async function countLines(cwd: string | undefined, args: string[]): Promise<number | null> {
+  try {
+    const raw = await gitFor(cwd).raw(args)
+    return raw.split('\n').filter((line) => line.trim()).length
+  } catch {
+    return null
+  }
+}
+
+export async function parkedFiles(
+  cwd: string | undefined,
+  selector: string
+): Promise<number | null> {
+  const [tracked, untracked] = await Promise.all([
+    countLines(cwd, ['stash', 'show', '--name-only', selector]),
+    countLines(cwd, ['ls-tree', '-r', '--name-only', `${selector}^3`])
+  ])
+  return tracked === null ? null : tracked + (untracked ?? 0)
+}
+
+async function registeredBranches(cwd?: string): Promise<string[]> {
+  const repo = await worktreeRoot(cwd)
+  if (!repo) return []
+  const { branches, error } = registeredFor(repo)
+  if (error) throw new Error(`Could not read ${workflowsPath()}\n${error}`)
+  return branches
+}
+
+async function parkPlan(cwd?: string): Promise<Departure & { status: StatusResult }> {
+  const [registered, status] = await Promise.all([registeredBranches(cwd), gitFor(cwd).status()])
+  const current = status.current
+  const dirty = !!current && registered.includes(current) && status.files.length > 0
+  return { current, parked: dirty ? status.files.length : 0, registered, status }
+}
+
+async function parkOnLeave(cwd?: string): Promise<Departure> {
+  const { status, ...departure } = await parkPlan(cwd)
+  if (departure.parked === 0) return departure
+
+  if (status.conflicted.length > 0) {
+    throw new Error(
+      `Resolve conflicts on ${departure.current} before leaving it\n${status.conflicted.join('\n')}`
+    )
+  }
+
+  await gitFor(cwd).raw(['stash', 'push', '-u', '-m', `${markerPrefix}${departure.current}`])
+  return departure
+}
+
+async function restoreOnEnter(
+  cwd: string | undefined,
+  branch: string,
+  registered: string[]
+): Promise<GitCheckoutResult | null> {
+  if (!registered.includes(branch)) return null
+  const entry = newestStash(await stashEntries(cwd), branch)
+  if (!entry) return null
+
+  const files = await parkedFiles(cwd, entry.selector)
+  try {
+    await gitFor(cwd).raw(['stash', 'pop', entry.selector])
+    return { ok: true, restored: files ?? 0 }
+  } catch (error) {
+    let conflicted: string[] = []
+    try {
+      conflicted = (await gitFor(cwd).status()).conflicted
+    } catch {
+      /* empty */
+    }
+    if (conflicted.length > 0) {
+      return {
+        ok: false,
+        conflicted,
+        error: 'Conflicts restoring parked changes',
+        detail: [
+          `Switched to ${branch}, but its parked changes conflict with the branch.`,
+          'Resolve these files, then run: git stash drop',
+          '',
+          ...conflicted,
+          '',
+          'Your parked changes are still stashed, so nothing is lost.'
+        ].join('\n')
+      }
+    }
+    return { ok: false, error: errorText(error), detail: errorDetail(error) }
+  }
+}
+
+async function rollbackPark(
+  cwd: string | undefined,
+  departure: Departure,
+  failure: GitCheckoutResult
+): Promise<GitCheckoutResult> {
+  if (departure.parked === 0 || !departure.current) return failure
+
+  const stranded = (): GitCheckoutResult => ({
+    ...failure,
+    detail: [
+      failure.detail,
+      [
+        `Your changes are stashed as "${markerPrefix}${departure.current}" and could not be restored automatically.`,
+        'Recover them with: git stash pop'
+      ].join('\n')
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+  })
+
+  try {
+    const entry = newestStash(await stashEntries(cwd), departure.current)
+    if (!entry) return stranded()
+    await gitFor(cwd).raw(['stash', 'pop', entry.selector])
+    return failure
+  } catch {
+    return stranded()
+  }
+}
+
+async function parkPreview(cwd?: string): Promise<{ branch: string; files: number } | null> {
+  const { current, parked } = await parkPlan(cwd)
+  return current && parked ? { branch: current, files: parked } : null
+}
+
+export async function switchBranch(
+  cwd: string | undefined,
+  target: string,
+  checkout: (git: SimpleGit) => Promise<unknown>
+): Promise<GitCheckoutResult> {
+  let departure: Departure
+  try {
+    departure = await parkOnLeave(cwd)
+  } catch (error) {
+    return { ok: false, error: errorText(error), detail: errorDetail(error) }
+  }
+
+  try {
+    await checkout(gitFor(cwd))
+  } catch (error) {
+    return rollbackPark(cwd, departure, {
+      ok: false,
+      error: errorText(error),
+      detail: errorDetail(error)
+    })
+  }
+
+  const restored = await restoreOnEnter(cwd, target, departure.registered)
+  if (restored && !restored.ok) return { ...restored, branch: target, parked: departure.parked }
+  return {
+    ok: true,
+    branch: target,
+    parked: departure.parked,
+    restored: restored?.restored ?? 0
   }
 }
 
@@ -508,16 +713,16 @@ export function registerGitHandlers(): void {
     return { current, branches, remotes }
   })
 
+  ipcMain.handle('git:defaultBranch', async (_event, cwd?: string): Promise<string | null> => {
+    const target = await defaultBranch(cwd, false)
+    return target?.branch ?? null
+  })
+
   ipcMain.handle(
     'git:checkout',
     async (_event, cwd: string | undefined, branch: string): Promise<GitCheckoutResult> => {
       if (!branch) return { ok: false, error: 'Branch required' }
-      try {
-        await gitFor(cwd).checkout(branch)
-        return { ok: true }
-      } catch (error) {
-        return { ok: false, error: errorText(error), detail: errorDetail(error) }
-      }
+      return switchBranch(cwd, branch, (git) => git.checkout(branch))
     }
   )
 
@@ -526,21 +731,39 @@ export function registerGitHandlers(): void {
     async (_event, cwd: string | undefined, ref: string): Promise<GitCheckoutResult> => {
       const remoteRef = (ref ?? '').trim()
       if (!remoteRef) return { ok: false, error: 'Branch required' }
-      const git = gitFor(cwd)
 
+      let local: string
       try {
-        const remotes = await git.getRemotes(false)
+        const remotes = await gitFor(cwd).getRemotes(false)
         const remote = remotes.find((r) => remoteRef.startsWith(`${r.name}/`))
-        const local = remote ? remoteRef.slice(remote.name.length + 1) : remoteRef
+        local = remote ? remoteRef.slice(remote.name.length + 1) : remoteRef
         if (!local) return { ok: false, error: 'Branch required' }
+      } catch (error) {
+        return { ok: false, error: errorText(error), detail: errorDetail(error) }
+      }
 
+      return switchBranch(cwd, local, async (git) => {
         const existing = await git.branchLocal()
-        if (existing.all.includes(local)) {
-          await git.checkout(local)
-        } else {
-          await git.checkout(['--track', remoteRef])
-        }
-        return { ok: true, branch: local }
+        if (existing.all.includes(local)) await git.checkout(local)
+        else await git.checkout(['--track', remoteRef])
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'git:createBranch',
+    async (
+      _event,
+      cwd: string | undefined,
+      branch: string,
+      carry = false
+    ): Promise<GitCheckoutResult> => {
+      const name = (branch ?? '').trim()
+      if (!name) return { ok: false, error: 'Branch name required' }
+      if (!carry) return switchBranch(cwd, name, (git) => git.checkoutLocalBranch(name))
+      try {
+        await gitFor(cwd).checkoutLocalBranch(name)
+        return { ok: true, branch: name }
       } catch (error) {
         return { ok: false, error: errorText(error), detail: errorDetail(error) }
       }
@@ -548,15 +771,12 @@ export function registerGitHandlers(): void {
   )
 
   ipcMain.handle(
-    'git:createBranch',
-    async (_event, cwd: string | undefined, branch: string): Promise<GitCheckoutResult> => {
-      const name = (branch ?? '').trim()
-      if (!name) return { ok: false, error: 'Branch name required' }
+    'git:parkPreview',
+    async (_event, cwd?: string): Promise<{ branch: string; files: number } | null> => {
       try {
-        await gitFor(cwd).checkoutLocalBranch(name)
-        return { ok: true }
-      } catch (error) {
-        return { ok: false, error: errorText(error), detail: errorDetail(error) }
+        return await parkPreview(cwd)
+      } catch {
+        return null
       }
     }
   )
@@ -575,10 +795,20 @@ export function registerGitHandlers(): void {
         return { ok: true, branch }
       }
       await git.raw(['fetch', remote, `${branch}:${branch}`])
-      await git.checkout(branch)
-      return { ok: true, branch }
     } catch (error) {
-      return { ok: false, branch, error: errorText(error) }
+      return { ok: false, branch, error: errorText(error), detail: errorDetail(error) }
+    }
+
+    const result = await switchBranch(cwd, branch, (g) => g.checkout(branch))
+    if (result.ok) return { ok: true, branch }
+    const note = result.conflicted
+      ? ''
+      : `${branch} was updated from ${remote}, but the switch failed.`
+    return {
+      ok: false,
+      branch,
+      error: result.error,
+      detail: [result.detail, note].filter(Boolean).join('\n\n')
     }
   })
 

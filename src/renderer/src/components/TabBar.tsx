@@ -22,7 +22,7 @@ function TabBar({
         onClick={() => onSelect('home')}
         title="Home"
       >
-        ⌂
+        󱎱
       </button>
       {sessions.map(({ id }) => (
         <div
@@ -39,7 +39,7 @@ function TabBar({
             }}
             title="Close session"
           >
-            ×
+            
           </button>
         </div>
       ))}

@@ -1,10 +1,13 @@
 {
   "name": "snow",
   "version": "1.0.0",
-  "description": "An Electron application with React and TypeScript",
+  "description": "A terminal emulator and AI workflow helper",
   "main": "./out/main/index.js",
-  "author": "example.com",
-  "homepage": "https://electron-vite.org",
+  "author": {
+    "name": "msnadms",
+    "email": "masonadams002@gmail.com"
+  },
+  "homepage": "https://github.com/msnadms/snow-terminal",
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",

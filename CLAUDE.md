@@ -113,6 +113,117 @@ Renderer output reaches the file through `watchRenderer(webContents)` in `create
 forwards `console-message`, `render-process-gone`, `did-fail-load`, and `preload-error` — so the
 renderer needs no logging API and gets no new privilege. `closeLogging()` on `will-quit` flushes.
 
+## Workflows
+
+A **workflow** is a branch you have explicitly registered, plus the uncommitted work parked on it.
+Three modules, in a strict one-way dependency chain — `registry.ts` ← `git.ts` ← `workflow.ts`:
+
+- `src/main/registry.ts` — the `.snowworkflows` file. Imports nothing from git, which is what keeps
+  the chain acyclic.
+- `src/main/git.ts` — the park machinery (`parkOnLeave`, `restoreOnEnter`, `rollbackPark`,
+  `switchBranch`) on top of the git primitives, consulting the registry.
+- `src/main/workflow.ts` — the `workflow:*` handlers, composed from the other two.
+
+**Registration is the opt-in, and it is the whole point.** The dropdown never enumerates branches —
+it lists only registered ones. A branch becomes a workflow via `workflow:register` (registers the
+current branch) or `workflow:create` (which registers what it creates).
+
+Parking is a property of the _branch_, not of which dropdown you used. `git:checkout`,
+`git:checkoutRemote`, and `git:syncDefault` all route through `switchBranch`, so leaving a registered
+workflow parks its changes even when you switch from the branch dropdown, and arriving at one
+restores them. On a branch that is _not_ registered, snow does nothing special: the park is skipped
+and a plain `git checkout` runs, so the changes ride along, or git refuses the switch exactly as it
+always would. Nothing is ever stashed on a branch you did not opt in to.
+
+`git:createBranch` is the exception, because `checkout -b` branches from HEAD and so **cannot** fail
+on a dirty tree — parking there rescues nothing and only contradicts what git would do. It takes a
+`carry` flag: `carry: false` routes through `switchBranch` (park on the branch you are leaving),
+`carry: true` runs a plain `checkoutLocalBranch` so the changes come with you. `BranchSelect` never
+guesses. Its create form first calls `git:parkPreview`, which reports the branch and dirty-file count
+when a park _would_ happen and `null` otherwise; on `null` it creates straight away, and on a hit it
+opens a two-button dialog and passes the answer as `carry`. The preview is advisory only — it
+swallows its own errors, and the authoritative failure still comes from the real call.
+
+#### `.snowworkflows`
+
+The registry, in `~/.config/snow/`, with the same lifecycle as the other config files (default
+`{"workflows": []}` written with `flag: 'wx'` on first launch, directory `fs.watch` filtered by
+basename broadcasting `workflow:changed`) — but built from the shared `writeDefaultConfig`,
+`watchConfigFile`, and `broadcast` helpers in `config.ts` rather than pasting the block a fourth
+time. Like `theme.ts` and `snowconfig.ts`, only the watcher broadcasts; `addRecord`/`removeRecord`
+write and let the debounced watch event notify every window, so one registration is one reload.
+`initRegistry()` runs _before_ `registerGitHandlers()` in `index.ts`, since the
+git handlers read it. Shape is `{ workflows: { repo, branch }[] }` — flat, because branch names
+collide across repos. `repo` is the worktree root with `~` collapsed on write and expanded on read,
+like `.snowconfig` does for `cwd`. Paths are compared with `samePath`, which resolves and
+slash-normalizes before comparing, case-insensitively on win32 — necessary because
+`git rev-parse --show-toplevel` emits forward slashes while `os.homedir()` and `path.resolve` use
+backslashes. `addRecord`/`removeRecord` re-read first and **bail if the read errored**, so a
+hand-corrupted file is never silently replaced with a one-entry registry.
+
+A read error is never treated as "nothing is registered" — that would silently disable both parking
+_and_ restoring, so a branch with work already in the stash would come up empty with no explanation.
+`registeredBranches()` throws instead, which `switchBranch` turns into an ordinary failed-switch
+dialog and leaves the tree untouched until the file is fixed. `workflow:list` is the one reader that
+returns the error rather than throwing (it has no tree to protect), and `WorkflowSelect` renders it
+in the dropdown and the button tooltip.
+
+#### Parked work
+
+Parked work lives in git's own stash list under the message `snow-wf:<branch>`, so it survives use
+of git outside snow and is recoverable by hand. Entries are read back with
+`git stash list --format=%gd%x1f%gs%x1f%aI` and matched on that marker. Stash selectors (`stash@{n}`)
+shift on every push and drop, so they are always re-listed immediately before an apply and never
+cached. When a branch has more than one marker stash (a previous pop conflicted and git kept it),
+the newest wins and the rest stay listed as parked — lossless.
+
+`parkOnLeave()` is the single gate: it parks with `git stash push -u` (untracked included, so nothing
+leaks between branches; `.gitignore`d paths are still skipped) **only when the current branch is
+registered and dirty**, and refuses to park a tree with conflicts in it. `restoreOnEnter()` is its
+mirror and is likewise gated on registration — a marker stash left on a branch you have since
+unregistered is never silently popped, which is what makes the "your parked changes stay in the
+stash" line in the unregister dialog true. `switchBranch()` composes the two around an arbitrary
+checkout closure, which is why every switch path shares the exact same semantics.
+
+`workflow:create` routes through `switchBranch` too — branching from the remote's default rather
+than an existing ref is just what its closure does:
+`checkout -b <name> --no-track <remote>/<default>`. **`--no-track` is load-bearing**: without it the
+branch tracks `origin/<default>`, and `git:commitPush` would take its `status.tracking` path and push
+a feature branch at the default branch's upstream. `restoreOnEnter` is a no-op on the way in, since
+the new name is not registered until `addRecord` runs after the checkout — except when the registry
+still holds an entry for a branch of that name that was since deleted, where re-creating it recovers
+the parked stash that `WorkflowSelect` was already showing as a missing-branch row.
+
+`switchBranch` is the only park entry point `git.ts` exports; `parkOnLeave`, `restoreOnEnter`,
+`rollbackPark`, and `registeredBranches` are module-private so no caller can take half the gate.
+
+Every path rolls the park back through `rollbackPark()` if the checkout fails, so a failed call
+leaves the tree exactly where it started. A conflicting pop is reported like `git:updateFromDefault`
+does — conflicted paths in `detail`, stash kept. When `rollbackPark` _cannot_ put the work back —
+either the pop failed or the marker stash is no longer listed — it appends recovery instructions to
+`detail` rather than returning the bare checkout error, since otherwise the tree would come back
+empty with nothing on screen explaining where the changes went.
+
+Snow never drops a stash. `workflow:unregister` only removes the registry entry; any parked work
+stays in `git stash` and the dialog says so.
+
+`.snowignore` is deliberately not consulted: it is a commit filter, not a worktree filter, so a
+matched-but-modified file parks and restores unchanged.
+
+Parked file counts are `git stash show --name-only` plus `git ls-tree -r --name-only <sel>^3` (the
+untracked parent, absent when nothing untracked was parked) rather than `git stash show -u`, which
+needs git ≥ 2.32. The missing `^3` is the expected case and counts as zero, but a failed _tracked_
+listing yields `null`, not `0` — a marker stash always has content, so "0 files parked" would be a
+lie. `WorkflowSelect` renders `null` as `● ?`. No git watcher is added: stash writes touch `.git/refs/stash` and
+`.git/logs/refs/stash`, already covered by `git:watch`. `WorkflowSelect` reloads on both
+`git:changed` and `workflow:changed`.
+
+`WorkflowSelect` sits beside `BranchSelect` in `.actionbar-right`. The two share one dropdown
+vocabulary — the chrome classes in `main.css` are named `picker-*`, not `branch-*` — and
+`WorkflowSelect` adds only `workflow-*` rules for the parked badge, the missing-branch row, the
+register button, and the remove button. Its button reads the branch name when that branch is a
+registered workflow and a neutral "Workflows" when it is not.
+
 ## Session tabs
 
 `App.tsx` owns the tab model: `sessions` (each `{ id, cwd? }`), `activeId` (`number | 'home'`), and a

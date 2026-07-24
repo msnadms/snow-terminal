@@ -1,8 +1,7 @@
 import { ipcMain, BrowserWindow, dialog } from 'electron'
 import fs from 'fs'
-import os from 'os'
 import path from 'path'
-import { configDir } from './config'
+import { configDir, expandHome } from './config'
 import { log } from './log'
 
 export interface Preset {
@@ -27,12 +26,6 @@ const defaultConfig: SnowConfig = {
 
 export function snowconfigPath(): string {
   return path.join(configDir(), '.snowconfig')
-}
-
-function expandHome(p: string): string {
-  if (p === '~') return os.homedir()
-  if (p.startsWith('~/') || p.startsWith('~\\')) return path.join(os.homedir(), p.slice(2))
-  return p
 }
 
 function validate(raw: unknown): Preset[] {
