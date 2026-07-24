@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import FailureDialog from './FailureDialog'
-import { failureOf, type Failure } from '@renderer/format'
-import { flashClass, useFlash } from '@renderer/useFlash'
+import { type Failure } from '@renderer/format'
+import { useGitAction } from '@renderer/useGitAction'
 
 type WorkflowList = Awaited<ReturnType<typeof window.api.workflow.list>>
 type WorkflowEntry = WorkflowList['workflows'][number]
@@ -31,14 +31,17 @@ function WorkflowSelect({ cwd }: WorkflowSelectProps): React.JSX.Element | null 
   const [list, setList] = useState<WorkflowList | null>(null)
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
-  const [busy, setBusy] = useState('')
-  const [error, setError] = useState('')
-  const [flash, trigger] = useFlash()
   const [newName, setNewName] = useState('')
   const [removing, setRemoving] = useState<WorkflowEntry | null>(null)
   const [failure, setFailure] = useState<Failure | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+  const action = useGitAction<WorkflowResult>({
+    onFailure: setFailure,
+    onSettled: () => {
+      window.api.workflow.list(cwd).then(setList)
+    }
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -93,54 +96,32 @@ function WorkflowSelect({ cwd }: WorkflowSelectProps): React.JSX.Element | null 
     setOpen((prev) => !prev)
   }
 
-  const finish = async (result: WorkflowResult): Promise<void> => {
-    setBusy('')
-    const next = await window.api.workflow.list(cwd)
-    setList(next)
-    if (result.ok) {
-      setError('')
-      trigger('ok')
-      return
-    }
-    const problem = failureOf(result)
-    setError(problem.title)
-    setFailure(problem)
-    trigger('error')
-  }
-
-  const switchTo = async (entry: WorkflowEntry): Promise<void> => {
-    if (busy || entry.current || !entry.exists) return
+  const switchTo = (entry: WorkflowEntry): void => {
+    if (action.pending || entry.current || !entry.exists) return
     setOpen(false)
-    setBusy('Switching…')
-    setError('')
-    finish(await window.api.workflow.switch(cwd, entry.branch))
+    action.run(() => window.api.workflow.switch(cwd, entry.branch), 'Switching…')
   }
 
-  const create = async (e: React.FormEvent): Promise<void> => {
+  const create = (e: React.FormEvent): void => {
     e.preventDefault()
     const name = newName.trim()
-    if (!name || busy) return
+    if (!name || action.pending) return
     setNewName('')
     setOpen(false)
-    setBusy('Creating…')
-    setError('')
-    finish(await window.api.workflow.create(cwd, name))
+    action.run(() => window.api.workflow.create(cwd, name), 'Creating…')
   }
 
-  const register = async (): Promise<void> => {
-    if (busy) return
+  const register = (): void => {
+    if (action.pending) return
     setOpen(false)
-    setBusy('Registering…')
-    setError('')
-    finish(await window.api.workflow.register(cwd))
+    action.run(() => window.api.workflow.register(cwd), 'Registering…')
   }
 
-  const unregister = async (): Promise<void> => {
+  const unregister = (): void => {
     const entry = removing
     setRemoving(null)
-    if (!entry || busy) return
-    setBusy('Removing…')
-    finish(await window.api.workflow.unregister(cwd, entry.branch))
+    if (!entry || action.pending) return
+    action.run(() => window.api.workflow.unregister(cwd, entry.branch), 'Removing…')
   }
 
   const needle = query.trim().toLowerCase()
@@ -151,11 +132,11 @@ function WorkflowSelect({ cwd }: WorkflowSelectProps): React.JSX.Element | null 
   return (
     <div className="picker-select" ref={rootRef}>
       <button
-        className={`picker-button${flashClass(flash)}`}
-        disabled={busy !== ''}
+        className={`picker-button${action.className}`}
+        disabled={action.pending}
         onClick={toggle}
         title={
-          error ||
+          action.error ||
           (readError && `Could not read your workflows — ${readError}`) ||
           (registered
             ? `Workflow: ${current}`
@@ -164,7 +145,7 @@ function WorkflowSelect({ cwd }: WorkflowSelectProps): React.JSX.Element | null 
       >
         <span className="picker-icon">{''}</span>
         <span className={`picker-name${registered ? '' : ' workflow-unregistered'}`}>
-          {busy || (registered ? current : 'Workflows')}
+          {action.label || (registered ? current : 'Workflows')}
         </span>
         <span className="picker-caret">▾</span>
       </button>

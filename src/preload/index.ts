@@ -1,15 +1,18 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type {
-  GitBlame,
+  GitBlameResult,
   GitBranches,
   GitCheckoutResult,
   GitCommitDetail,
   GitCommitPushResult,
   GitLog,
+  GitPullRequestResult,
   GitRepo,
   GitStatus,
   GitSyncDefaultResult,
+  GitSyncResult,
+  GitUndoResult,
   GitUpdateDefaultResult,
   GitWorkingDiff
 } from '../main/git'
@@ -47,7 +50,7 @@ const terminal = {
 
 const git = {
   isRepo: (cwd?: string): Promise<boolean> => ipcRenderer.invoke('git:isRepo', cwd),
-  blame: (cwd: string | undefined, rev: string, filePath: string): Promise<GitBlame> =>
+  blame: (cwd: string | undefined, rev: string, filePath: string): Promise<GitBlameResult> =>
     ipcRenderer.invoke('git:blame', cwd, rev, filePath),
   discover: (cwd?: string): Promise<GitRepo[]> => ipcRenderer.invoke('git:discover', cwd),
   log: (cwd?: string, maxCount?: number): Promise<GitLog> =>
@@ -76,6 +79,10 @@ const git = {
     ipcRenderer.invoke('git:syncDefault', cwd),
   updateFromDefault: (cwd?: string): Promise<GitUpdateDefaultResult> =>
     ipcRenderer.invoke('git:updateFromDefault', cwd),
+  sync: (cwd?: string): Promise<GitSyncResult> => ipcRenderer.invoke('git:sync', cwd),
+  undoCommit: (cwd?: string): Promise<GitUndoResult> => ipcRenderer.invoke('git:undoCommit', cwd),
+  openPullRequest: (cwd?: string): Promise<GitPullRequestResult> =>
+    ipcRenderer.invoke('git:openPullRequest', cwd),
   watch: (cwd?: string): Promise<void> => ipcRenderer.invoke('git:watch', cwd),
   unwatch: (cwd?: string): Promise<void> => ipcRenderer.invoke('git:unwatch', cwd),
   onChanged: (callback: (cwd: string | null) => void): (() => void) => {

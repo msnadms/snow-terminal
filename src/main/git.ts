@@ -1,4 +1,4 @@
-import { ipcMain, WebContents } from 'electron'
+import { ipcMain, shell, WebContents } from 'electron'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -42,6 +42,11 @@ export interface GitBlameLine {
 }
 
 export type GitBlame = Record<number, GitBlameLine>
+
+export interface GitBlameResult {
+  lines: GitBlame
+  source: string | null
+}
 
 export interface GitCommitDetail {
   hash: string
@@ -102,6 +107,31 @@ export interface GitUpdateDefaultResult {
   detail?: string
 }
 
+export type GitSyncAction = 'push' | 'pull' | 'fetch'
+
+export interface GitSyncResult {
+  ok: boolean
+  action?: GitSyncAction
+  branch?: string
+  error?: string
+  detail?: string
+}
+
+export interface GitUndoResult {
+  ok: boolean
+  subject?: string
+  body?: string
+  error?: string
+  detail?: string
+}
+
+export interface GitPullRequestResult {
+  ok: boolean
+  url?: string
+  error?: string
+  detail?: string
+}
+
 export interface GitStatusFile {
   path: string
   from: string | null
@@ -136,6 +166,8 @@ const commitFormat = {
 const detailFormat = ['%H', '%P', '%an', '%ae', '%aI', '%s', '%D', '%b'].join('%x1f')
 
 const maxPatchChars = 2_000_000
+
+const maxSourceChars = 400_000
 
 const emptyTree = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 
@@ -175,8 +207,9 @@ function parseNumstat(raw: string): GitCommitFile[] {
 
 const blameHeader = /^([0-9a-f]{40}) \d+ (\d+)/
 
-function parseBlame(raw: string): GitBlame {
-  const blame: GitBlame = {}
+function parseBlame(raw: string): GitBlameResult {
+  const lines: GitBlame = {}
+  const content: string[] = []
   let hash = ''
   let line = 0
   let author = ''
@@ -185,8 +218,9 @@ function parseBlame(raw: string): GitBlame {
   for (const text of raw.split('\n')) {
     if (text.startsWith('\t')) {
       if (line > 0) {
-        blame[line] = { hash, author, date: time ? new Date(time * 1000).toISOString() : '' }
+        lines[line] = { hash, author, date: time ? new Date(time * 1000).toISOString() : '' }
       }
+      content.push(text.slice(1))
       line = 0
       continue
     }
@@ -200,7 +234,8 @@ function parseBlame(raw: string): GitBlame {
     else if (text.startsWith('author-time ')) time = Number(text.slice(12))
   }
 
-  return blame
+  const source = content.join('\n')
+  return { lines, source: source.length > maxSourceChars ? null : source }
 }
 
 function layout(
@@ -286,6 +321,10 @@ export function errorDetail(error: unknown): string {
     .trim()
 }
 
+function fail(error: unknown): { ok: false; error: string; detail: string } {
+  return { ok: false, error: errorText(error), detail: errorDetail(error) }
+}
+
 async function gitDir(cwd?: string): Promise<string | null> {
   try {
     const dir = (await gitFor(cwd).revparse(['--git-dir'])).trim()
@@ -330,10 +369,11 @@ async function remoteName(cwd?: string): Promise<string | null> {
 
 export async function defaultBranch(
   cwd?: string,
-  refresh = true
+  refresh = true,
+  knownRemote?: string
 ): Promise<{ remote: string; branch: string } | null> {
   const git = gitFor(cwd)
-  const remote = await remoteName(cwd)
+  const remote = knownRemote ?? (await remoteName(cwd))
   if (!remote) return null
 
   if (refresh) {
@@ -353,6 +393,81 @@ export async function defaultBranch(
   } catch {
     return null
   }
+}
+
+const scpLike = /^(?:[^@/]+@)?([^:/]+):(.+)$/
+
+function webUrl(raw: string): URL | null {
+  const text = raw
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/\.git$/, '')
+  if (!text) return null
+
+  const scp = !text.includes('://') ? scpLike.exec(text) : null
+  const normalized = scp ? `https://${scp[1]}/${scp[2]}` : text
+
+  let url: URL
+  try {
+    url = new URL(normalized)
+  } catch {
+    return null
+  }
+  if (!url.hostname) return null
+
+  url.protocol = 'https:'
+  url.username = ''
+  url.password = ''
+  url.port = ''
+
+  const azureSsh = /^\/v3\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(url.pathname)
+  if (url.hostname.toLowerCase() === 'ssh.dev.azure.com' && azureSsh) {
+    url.hostname = 'dev.azure.com'
+    url.pathname = `/${azureSsh[1]}/${azureSsh[2]}/_git/${azureSsh[3]}`
+  }
+
+  return url
+}
+
+function encodeRef(ref: string): string {
+  return ref.split('/').map(encodeURIComponent).join('/')
+}
+
+const forges: { labels: string[]; path: (web: string, branch: string, base: string) => string }[] =
+  [
+    {
+      labels: ['github'],
+      path: (web, branch, base) =>
+        `${web}/compare/${encodeRef(base)}...${encodeRef(branch)}?expand=1`
+    },
+    {
+      labels: ['gitlab'],
+      path: (web, branch) =>
+        `${web}/-/merge_requests/new?merge_request%5Bsource_branch%5D=${encodeURIComponent(branch)}`
+    },
+    {
+      labels: ['bitbucket'],
+      path: (web, branch, base) =>
+        `${web}/pull-requests/new?source=${encodeURIComponent(branch)}&dest=${encodeURIComponent(base)}`
+    },
+    {
+      labels: ['azure', 'visualstudio'],
+      path: (web, branch, base) =>
+        `${web}/pullrequestcreate?sourceRef=${encodeURIComponent(branch)}&targetRef=${encodeURIComponent(base)}`
+    }
+  ]
+
+function pullRequestUrl(repo: URL, branch: string, base: string, template: string): string | null {
+  const web = `${repo.origin}${repo.pathname}`
+  if (template) {
+    return template
+      .replaceAll('{branch}', encodeRef(branch))
+      .replaceAll('{base}', encodeRef(base))
+      .replaceAll('{repo}', web)
+  }
+  const labels = repo.hostname.toLowerCase().split('.')
+  const forge = forges.find((entry) => entry.labels.some((label) => labels.includes(label)))
+  return forge ? forge.path(web, branch, base) : null
 }
 
 const markerPrefix = 'snow-wf:'
@@ -698,9 +813,7 @@ export function registerGitHandlers(): void {
 
     const base = hasHead ? 'HEAD' : emptyTree
     const indexFile = path.join(os.tmpdir(), `snow-diff-${process.pid}-${++scratchIndexCount}`)
-    const scratch = simpleGit(root)
-      .env('GIT_OPTIONAL_LOCKS', '0')
-      .env('GIT_INDEX_FILE', indexFile)
+    const scratch = simpleGit(root).env('GIT_OPTIONAL_LOCKS', '0').env('GIT_INDEX_FILE', indexFile)
 
     try {
       await scratch.raw(['read-tree', base])
@@ -726,11 +839,16 @@ export function registerGitHandlers(): void {
 
   ipcMain.handle(
     'git:blame',
-    async (_event, cwd: string | undefined, rev: string, filePath: string): Promise<GitBlame> => {
+    async (
+      _event,
+      cwd: string | undefined,
+      rev: string,
+      filePath: string
+    ): Promise<GitBlameResult> => {
       try {
         return parseBlame(await gitFor(cwd).raw(['blame', '--line-porcelain', rev, '--', filePath]))
       } catch {
-        return {}
+        return { lines: {}, source: null }
       }
     }
   )
@@ -955,6 +1073,182 @@ export function registerGitHandlers(): void {
       } catch {
         return { ok: true, branch, from, updated: true }
       }
+    }
+  )
+
+  ipcMain.handle('git:sync', async (_event, cwd?: string): Promise<GitSyncResult> => {
+    const git = gitFor(cwd)
+
+    let status: StatusResult
+    let remote: string | null
+    try {
+      ;[status, remote] = await Promise.all([git.status(), remoteName(cwd)])
+    } catch (error) {
+      return fail(error)
+    }
+
+    const branch = status.current
+    if (!branch) return { ok: false, error: 'HEAD is detached' }
+    if (!remote) return { ok: false, branch, error: 'No remote configured' }
+
+    if (status.ahead > 0 && status.behind > 0) {
+      return {
+        ok: false,
+        branch,
+        error: `${branch} has diverged from ${status.tracking}`,
+        detail: [
+          `${branch} is ${status.ahead} ahead and ${status.behind} behind ${status.tracking}.`,
+          '',
+          'Snow will not pick a merge or a rebase for you. Reconcile it with one of:',
+          `  git pull --rebase`,
+          `  git merge ${status.tracking}`
+        ].join('\n')
+      }
+    }
+
+    const action: GitSyncAction =
+      !status.tracking || status.ahead > 0 ? 'push' : status.behind > 0 ? 'pull' : 'fetch'
+
+    try {
+      if (action === 'push') {
+        if (status.tracking) await git.push()
+        else await git.push(['--set-upstream', remote, branch])
+      } else if (action === 'pull') {
+        await git.raw(['pull', '--ff-only'])
+      } else {
+        await git.raw(['fetch', remote])
+      }
+    } catch (error) {
+      return { ...fail(error), action, branch }
+    }
+
+    return { ok: true, action, branch }
+  })
+
+  ipcMain.handle('git:undoCommit', async (_event, cwd?: string): Promise<GitUndoResult> => {
+    const git = gitFor(cwd)
+
+    let status: StatusResult
+    let dir: string | null
+    try {
+      ;[status, dir] = await Promise.all([git.status(), gitDir(cwd)])
+    } catch (error) {
+      return fail(error)
+    }
+
+    if (!status.current) return { ok: false, error: 'HEAD is detached' }
+
+    if (dir) {
+      try {
+        await fs.promises.access(path.join(dir, 'MERGE_HEAD'))
+        return { ok: false, error: 'Finish or abort the merge first' }
+      } catch {
+        /* empty */
+      }
+    }
+
+    try {
+      await git.raw(['rev-parse', '--verify', '--quiet', 'HEAD'])
+    } catch {
+      return { ok: false, error: 'Nothing to undo: no commits yet' }
+    }
+
+    let parents: string[]
+    let subject: string
+    let body: string
+    try {
+      const meta = await git.raw(['show', '-s', '--format=%P%x1f%s%x1f%b', 'HEAD'])
+      const [rawParents, rawSubject, rawBody] = meta.split('\x1f')
+      parents = (rawParents ?? '').split(' ').filter(Boolean)
+      subject = (rawSubject ?? '').trim()
+      body = (rawBody ?? '').trim()
+    } catch (error) {
+      return fail(error)
+    }
+
+    if (parents.length === 0) {
+      return { ok: false, error: 'Nothing to undo: this is the first commit' }
+    }
+    if (parents.length > 1) {
+      return {
+        ok: false,
+        error: 'The last commit is a merge',
+        detail: 'Undoing a merge is not a soft reset. Do it by hand if you meant to.'
+      }
+    }
+    if (status.tracking && status.ahead === 0) {
+      return { ok: false, error: `HEAD is already pushed to ${status.tracking}` }
+    }
+
+    try {
+      await git.raw(['reset', '--soft', 'HEAD~1'])
+    } catch (error) {
+      return fail(error)
+    }
+
+    return { ok: true, subject, body }
+  })
+
+  ipcMain.handle(
+    'git:openPullRequest',
+    async (_event, cwd?: string): Promise<GitPullRequestResult> => {
+      const git = gitFor(cwd)
+
+      let status: StatusResult
+      let remote: string | null
+      try {
+        ;[status, remote] = await Promise.all([git.status(), remoteName(cwd)])
+      } catch (error) {
+        return fail(error)
+      }
+
+      const branch = status.current
+      if (!branch) return { ok: false, error: 'HEAD is detached' }
+      if (!status.tracking) return { ok: false, error: 'Push the branch first' }
+      if (!remote) return { ok: false, error: 'No remote configured' }
+
+      let repo: URL | null
+      let target: { remote: string; branch: string } | null
+      let template: string
+      try {
+        const [rawUrl, resolved, configured] = await Promise.all([
+          git.raw(['remote', 'get-url', remote]),
+          defaultBranch(cwd, false, remote),
+          git.raw(['config', '--get', 'snow.pullRequestUrl']).catch(() => '')
+        ])
+        repo = webUrl(rawUrl)
+        target = resolved
+        template = configured.trim()
+      } catch (error) {
+        return fail(error)
+      }
+      if (!repo) return { ok: false, error: `Could not read a web URL from ${remote}` }
+      if (!target) return { ok: false, error: 'No default branch on remote' }
+      if (branch === target.branch) return { ok: false, error: 'Already on the default branch' }
+
+      const url = pullRequestUrl(repo, branch, target.branch, template)
+      if (!url) {
+        return {
+          ok: false,
+          error: `Snow does not know how to open a pull request on ${repo.hostname}`,
+          detail: [
+            `${repo.hostname} is not GitHub, GitLab, Bitbucket, or Azure DevOps, so snow has no URL`,
+            'shape for it. Teach it one for this repo:',
+            '',
+            '  git config snow.pullRequestUrl "https://host/org/repo/pr/new?from={branch}&to={base}"',
+            '',
+            '{branch}, {base}, and {repo} are substituted.'
+          ].join('\n')
+        }
+      }
+
+      try {
+        await shell.openExternal(url)
+      } catch (error) {
+        return { ...fail(error), url }
+      }
+
+      return { ok: true, url }
     }
   )
 

@@ -8,6 +8,10 @@ export interface GitColors {
   background: string
   border: string
   text: string
+  strongText: string
+  accent: string
+  buttonBorder: string
+  buttonBorderHover: string
   muted: string
   repo: string
   branch: string
@@ -29,8 +33,25 @@ export interface GitColors {
   lanes: string[]
 }
 
+export interface SyntaxColors {
+  comment: string
+  keyword: string
+  string: string
+  number: string
+  function: string
+  className: string
+  variable: string
+  constant: string
+  operator: string
+  punctuation: string
+  tag: string
+  attrName: string
+  regex: string
+}
+
 export interface Theme {
   git: GitColors
+  syntax: SyntaxColors
 }
 
 export interface ThemeResult {
@@ -44,6 +65,10 @@ const defaultTheme: Theme = {
     background: '#1e1e2e',
     border: '#2f2b40',
     text: '#b8b3cc',
+    strongText: '#cdd6f4',
+    accent: '#d8c07a',
+    buttonBorder: '#313244',
+    buttonBorderHover: '#45475a',
     muted: '#5f5878',
     repo: '#8fbf9f',
     branch: '#c7b06b',
@@ -63,6 +88,21 @@ const defaultTheme: Theme = {
     diffAddText: '#8fbf9f',
     diffDeleteText: '#c98c96',
     lanes: ['#917ec8', '#7791c5', '#c7b06b', '#a387c9', '#6797c1', '#c3a865', '#8177c5', '#6eb0c4']
+  },
+  syntax: {
+    comment: '#5f5878',
+    keyword: '#a387c9',
+    string: '#8fbf9f',
+    number: '#c3a865',
+    function: '#7791c5',
+    className: '#c7b06b',
+    variable: '#b8b3cc',
+    constant: '#c98c96',
+    operator: '#8f8aa8',
+    punctuation: '#6e6690',
+    tag: '#917ec8',
+    attrName: '#6eb0c4',
+    regex: '#6b9dc0'
   }
 }
 
@@ -86,41 +126,30 @@ function laneList(value: unknown, fallback: string[]): string[] {
   return valid.length > 0 ? valid : fallback
 }
 
-function mergeGit(raw: unknown): GitColors {
-  const base = defaultTheme.git
+function mergeColors<T extends object>(raw: unknown, base: T): T {
   if (!raw || typeof raw !== 'object') return base
-  const g = raw as Record<string, unknown>
-  return {
-    background: color(g.background, base.background),
-    border: color(g.border, base.border),
-    text: color(g.text, base.text),
-    muted: color(g.muted, base.muted),
-    repo: color(g.repo, base.repo),
-    branch: color(g.branch, base.branch),
-    track: color(g.track, base.track),
-    dirty: color(g.dirty, base.dirty),
-    author: color(g.author, base.author),
-    hash: color(g.hash, base.hash),
-    hashHover: color(g.hashHover, base.hashHover),
-    tooltipBackground: color(g.tooltipBackground, base.tooltipBackground),
-    tooltipBorder: color(g.tooltipBorder, base.tooltipBorder),
-    tooltipText: color(g.tooltipText, base.tooltipText),
-    tooltipMuted: color(g.tooltipMuted, base.tooltipMuted),
-    diffAddBackground: color(g.diffAddBackground, base.diffAddBackground),
-    diffDeleteBackground: color(g.diffDeleteBackground, base.diffDeleteBackground),
-    diffAddGutter: color(g.diffAddGutter, base.diffAddGutter),
-    diffDeleteGutter: color(g.diffDeleteGutter, base.diffDeleteGutter),
-    diffAddText: color(g.diffAddText, base.diffAddText),
-    diffDeleteText: color(g.diffDeleteText, base.diffDeleteText),
-    lanes: laneList(g.lanes, base.lanes)
-  }
+  const source = raw as Record<string, unknown>
+  const entries = Object.entries(base) as [string, string][]
+  return Object.fromEntries(
+    entries.map(([key, fallback]) => [key, color(source[key], fallback)])
+  ) as T
+}
+
+function mergeGit(raw: unknown): GitColors {
+  const { lanes, ...base } = defaultTheme.git
+  const g = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  return { ...mergeColors(g, base), lanes: laneList(g.lanes, lanes) }
 }
 
 function readTheme(): ThemeResult {
   const file = themePath()
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>
-    return { theme: { git: mergeGit(raw.git) }, path: file, error: null }
+    return {
+      theme: { git: mergeGit(raw.git), syntax: mergeColors(raw.syntax, defaultTheme.syntax) },
+      path: file,
+      error: null
+    }
   } catch (err) {
     const e = err as NodeJS.ErrnoException
     if (e.code === 'ENOENT') return { theme: defaultTheme, path: file, error: null }

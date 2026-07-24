@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { shortHash } from '@renderer/format'
 import DiffBody from './DiffBody'
+import DiffScroll from './DiffScroll'
 
 type GitCommitDetail = Awaited<ReturnType<typeof window.api.git.show>>
 
@@ -77,11 +78,7 @@ function CommitView({ active, cwd, hash, onOpenCommit }: CommitViewProps): React
     )
   }
 
-  return (
-    <div className="commit-view" style={{ display: active ? 'block' : 'none' }}>
-      {body()}
-    </div>
-  )
+  return <DiffScroll active={active}>{body()}</DiffScroll>
 }
 
 export default CommitView
