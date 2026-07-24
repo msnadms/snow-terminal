@@ -421,9 +421,15 @@ function webUrl(raw: string): URL | null {
   url.port = ''
 
   const azureSsh = /^\/v3\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(url.pathname)
-  if (url.hostname.toLowerCase() === 'ssh.dev.azure.com' && azureSsh) {
-    url.hostname = 'dev.azure.com'
-    url.pathname = `/${azureSsh[1]}/${azureSsh[2]}/_git/${azureSsh[3]}`
+  if (azureSsh) {
+    const host = url.hostname.toLowerCase()
+    if (host === 'ssh.dev.azure.com') {
+      url.hostname = 'dev.azure.com'
+      url.pathname = `/${azureSsh[1]}/${azureSsh[2]}/_git/${azureSsh[3]}`
+    } else if (host === 'vs-ssh.visualstudio.com') {
+      url.hostname = `${azureSsh[1]}.visualstudio.com`
+      url.pathname = `/${azureSsh[2]}/_git/${azureSsh[3]}`
+    }
   }
 
   return url
