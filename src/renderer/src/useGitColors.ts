@@ -5,6 +5,7 @@ export type GitColors = ThemeResult['theme']['git']
 
 const cssVars: Record<Exclude<keyof GitColors, 'lanes'>, string> = {
   background: '--git-bg',
+  panelBackground: '--git-panel-bg',
   border: '--git-border',
   text: '--git-text',
   strongText: '--git-strong-text',

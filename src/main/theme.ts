@@ -6,6 +6,7 @@ import { log } from './log'
 
 export interface GitColors {
   background: string
+  panelBackground: string
   border: string
   text: string
   strongText: string
@@ -62,47 +63,48 @@ export interface ThemeResult {
 
 const defaultTheme: Theme = {
   git: {
-    background: '#1e1e2e',
-    border: '#2f2b40',
-    text: '#b8b3cc',
-    strongText: '#cdd6f4',
-    accent: '#d8c07a',
-    buttonBorder: '#313244',
-    buttonBorderHover: '#45475a',
-    muted: '#5f5878',
-    repo: '#8fbf9f',
-    branch: '#c7b06b',
-    track: '#7791c5',
-    dirty: '#c3a865',
-    author: '#a396c2',
-    hash: '#6b9dc0',
-    hashHover: '#d8c07a',
-    tooltipBackground: '#191926',
-    tooltipBorder: '#34304a',
-    tooltipText: '#cdc8dd',
-    tooltipMuted: '#6e6690',
-    diffAddBackground: '#18291f',
-    diffDeleteBackground: '#2c1d23',
-    diffAddGutter: '#21402c',
-    diffDeleteGutter: '#452630',
-    diffAddText: '#8fbf9f',
-    diffDeleteText: '#c98c96',
-    lanes: ['#917ec8', '#7791c5', '#c7b06b', '#a387c9', '#6797c1', '#c3a865', '#8177c5', '#6eb0c4']
+    background: '#171c2b',
+    panelBackground: '#121724',
+    border: '#28334c',
+    text: '#b3c2da',
+    strongText: '#e4eefb',
+    accent: '#a6dcf0',
+    buttonBorder: '#2a3852',
+    buttonBorderHover: '#3e5273',
+    muted: '#5d6f8f',
+    repo: '#7fd8e8',
+    branch: '#6fb2f0',
+    track: '#9d9ce8',
+    dirty: '#45a3cf',
+    author: '#ccd4de',
+    hash: '#7ba8d0',
+    hashHover: '#a6dcf0',
+    tooltipBackground: '#111725',
+    tooltipBorder: '#2b3a55',
+    tooltipText: '#ccd9ee',
+    tooltipMuted: '#6b7d9d',
+    diffAddBackground: '#142c28',
+    diffDeleteBackground: '#2e1c25',
+    diffAddGutter: '#1e4a40',
+    diffDeleteGutter: '#4a2734',
+    diffAddText: '#7fdcc0',
+    diffDeleteText: '#e89aac',
+    lanes: ['#6fb2f0', '#7fd8e8', '#9d9ce8', '#c09ae0', '#4f86c6', '#7fdcc0', '#a6c8f0', '#6e7fb8']
   },
   syntax: {
-    comment: '#5f5878',
-    keyword: '#a387c9',
-    string: '#8fbf9f',
-    number: '#c3a865',
-    function: '#7791c5',
-    className: '#c7b06b',
-    variable: '#b8b3cc',
-    constant: '#c98c96',
-    operator: '#8f8aa8',
-    punctuation: '#6e6690',
-    tag: '#917ec8',
-    attrName: '#6eb0c4',
-    regex: '#6b9dc0'
+    comment: '#546882',
+    keyword: '#9d9ce8',
+    string: '#7fdcc0',
+    number: '#a6dcf0',
+    function: '#6fb2f0',
+    className: '#7fd8e8',
+    variable: '#c3d2e8',
+    constant: '#e89aac',
+    operator: '#93a4c0',
+    punctuation: '#7385a3',
+    tag: '#c09ae0',
+    attrName: '#8fbfe0',
+    regex: '#b8a0e8'
   }
 }
 

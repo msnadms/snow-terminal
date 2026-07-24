@@ -19,7 +19,7 @@ const GLOW_DURATION = 6
 const SINGLE_REPO_COMMITS = 200
 const MULTI_REPO_COMMITS = 10
 
-const fallbackLanes = ['#917ec8', '#7791c5', '#c7b06b', '#a387c9']
+const fallbackLanes = ['#6fb2f0', '#7fd8e8', '#9d9ce8', '#c09ae0']
 
 function laneColor(lanes: string[], col: number): string {
   return lanes[col % lanes.length]

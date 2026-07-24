@@ -19,6 +19,7 @@ const redactedChannels = new Set([
   'snowconfig:get',
   'snowconfig:addPreset',
   'snowconfig:setDefault',
+  'snowconfig:removePreset',
   'snowconfig:chooseDir'
 ])
 

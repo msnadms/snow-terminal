@@ -152,6 +152,13 @@ export function registerSnowconfigHandlers(): void {
     })
     return writePresets(presets)
   })
+  ipcMain.handle('snowconfig:removePreset', (_e, index: number): SnowconfigResult => {
+    const { presets, error } = rawPresets()
+    if (error) return readSnowconfig()
+    if (!Number.isInteger(index) || index < 0 || index >= presets.length) return readSnowconfig()
+    presets.splice(index, 1)
+    return writePresets(presets)
+  })
   ipcMain.handle('snowconfig:chooseDir', async (): Promise<string | null> => {
     const win = BrowserWindow.getFocusedWindow()
     const result = await (win

@@ -132,6 +132,8 @@ const snowconfig = {
     ipcRenderer.invoke('snowconfig:addPreset', preset),
   setDefault: (index: number): Promise<SnowconfigResult> =>
     ipcRenderer.invoke('snowconfig:setDefault', index),
+  removePreset: (index: number): Promise<SnowconfigResult> =>
+    ipcRenderer.invoke('snowconfig:removePreset', index),
   chooseDir: (): Promise<string | null> => ipcRenderer.invoke('snowconfig:chooseDir'),
   onChanged: (callback: (result: SnowconfigResult) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, result: SnowconfigResult): void => callback(result)
