@@ -573,6 +573,7 @@ body {
 .tab-home,
 .tab,
 .tab-add,
+.tab-browser,
 .tab-command-add,
 .tab-split {
   -webkit-app-region: no-drag;
@@ -588,6 +589,7 @@ body {
 
 .tab-home,
 .tab-add,
+.tab-browser,
 .tab-command-add,
 .tab-split {
   justify-content: center;
@@ -596,6 +598,10 @@ body {
   padding: 0;
   font-size: 20px;
   font-family: 'Hack Nerd Font Mono', monospace;
+}
+
+.tab-browser {
+  font-size: 14px;
 }
 
 .tab-command-add {
@@ -707,6 +713,7 @@ body {
 .tab-home:hover,
 .tab:hover,
 .tab-add:hover,
+.tab-browser:hover,
 .tab-command-add:not(:disabled):hover,
 .tab-split:not(:disabled):hover {
   border-color: #45475a;
@@ -1026,6 +1033,82 @@ body {
   padding: 6px;
   gap: 6px;
   background: #1e1e2e;
+}
+
+.browser-host {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #1e1e2e;
+}
+
+.browser-chrome {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: #181825;
+  border-bottom: 1px solid #313244;
+}
+
+.browser-nav {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: #a6adc8;
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: 'Hack Nerd Font Mono', monospace;
+  font-size: 14px;
+}
+
+.browser-nav:not(:disabled):hover {
+  color: #cdd6f4;
+  border-color: #45475a;
+}
+
+.browser-nav:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.browser-address-form {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+}
+
+.browser-address {
+  -webkit-app-region: no-drag;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 10px;
+  color: #cdd6f4;
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.browser-address:focus {
+  outline: none;
+  border-color: #585b70;
+}
+
+.browser-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .terminal-main {

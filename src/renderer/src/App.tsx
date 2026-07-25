@@ -3,6 +3,7 @@ import ActionBar from './components/ActionBar'
 import CommitView from './components/CommitView'
 import GitPanel from './components/GitPanel'
 import Session from './components/Session'
+import BrowserTab from './components/BrowserTab'
 import TabBar from './components/TabBar'
 import HomePage from './components/HomePage'
 import WorkingDiffView from './components/WorkingDiffView'
@@ -16,6 +17,7 @@ type Tab =
   | { kind: 'shell'; id: number; cwd?: string }
   | { kind: 'commit'; id: number; cwd: string; hash: string }
   | { kind: 'diff'; id: number; cwd: string; branch: string; focus?: string; focusKey: number }
+  | { kind: 'browser'; id: number; url: string }
 
 function App(): React.JSX.Element {
   const [tabs, setTabs] = useState<Tab[]>([])
@@ -23,12 +25,16 @@ function App(): React.JSX.Element {
   const [cwds, setCwds] = useState<Record<number, string | undefined>>({})
   const [panes, setPanes] = useState<Record<number, number[]>>({})
   const [running, setRunning] = useState<Record<string, number>>({})
+  const [browserTitles, setBrowserTitles] = useState<Record<number, string>>({})
   const [frozen, setFrozen] = useState<{ cwd?: string } | null>(null)
   const nextIdRef = useRef(1)
   const { presets, name: configName, startupCommand, error: presetsError } = useSnowconfig()
 
   const activeTab = tabs.find((t) => t.id === activeId)
-  const cwd = activeTab && activeTab.kind !== 'shell' ? activeTab.cwd : cwds[activeTab?.id ?? -1]
+  const cwd =
+    activeTab && (activeTab.kind === 'commit' || activeTab.kind === 'diff')
+      ? activeTab.cwd
+      : cwds[activeTab?.id ?? -1]
   const gitCwd = frozen ? frozen.cwd : cwd
 
   const activeShellCwd = activeTab?.kind === 'shell' ? activeTab.cwd : undefined
@@ -52,11 +58,15 @@ function App(): React.JSX.Element {
         result[tab.id] = `${tab.branch} ✎`
         continue
       }
+      if (tab.kind === 'browser') {
+        result[tab.id] = browserTitles[tab.id] ?? 'Browser'
+        continue
+      }
       const dir = cwds[tab.id]
       if (dir) result[tab.id] = basename(dir)
     }
     return result
-  }, [tabs, cwds])
+  }, [tabs, cwds, browserTitles])
 
   const addSession = (cwd?: string): void => {
     const id = nextIdRef.current++
@@ -92,6 +102,12 @@ function App(): React.JSX.Element {
     }
     const id = nextIdRef.current++
     setTabs((prev) => [...prev, { kind: 'diff', id, cwd, branch, focus: file, focusKey: 0 }])
+    setActiveId(id)
+  }
+
+  const openBrowser = (url = 'https://www.google.com'): void => {
+    const id = nextIdRef.current++
+    setTabs((prev) => [...prev, { kind: 'browser', id, url }])
     setActiveId(id)
   }
 
@@ -148,16 +164,14 @@ function App(): React.JSX.Element {
       setActiveId(neighbor ? neighbor.id : 'home')
     }
     setTabs(remaining)
-    setCwds((prev) => {
+    const dropKey = <T,>(prev: Record<number, T>): Record<number, T> => {
       const next = { ...prev }
       delete next[id]
       return next
-    })
-    setPanes((prev) => {
-      const next = { ...prev }
-      delete next[id]
-      return next
-    })
+    }
+    setCwds(dropKey)
+    setPanes(dropKey)
+    setBrowserTitles(dropKey)
   }
 
   return (
@@ -176,6 +190,7 @@ function App(): React.JSX.Element {
             onSelect={setActiveId}
             onClose={closeSession}
             onAdd={() => addSession(presets.find((p) => p.default)?.cwd)}
+            onOpenBrowser={() => openBrowser()}
             onSplit={splitActive}
             onToggleCommand={toggleCommand}
             onAddCommand={(command) => {
@@ -220,6 +235,16 @@ function App(): React.JSX.Element {
                     focus={tab.focus}
                     focusKey={tab.focusKey}
                     onOpenCommit={openCommit}
+                  />
+                )
+              if (tab.kind === 'browser')
+                return (
+                  <BrowserTab
+                    key={tab.id}
+                    id={tab.id}
+                    initialUrl={tab.url}
+                    active={activeId === tab.id}
+                    onTitle={(title) => setBrowserTitles((prev) => ({ ...prev, [tab.id]: title }))}
                   />
                 )
               return (

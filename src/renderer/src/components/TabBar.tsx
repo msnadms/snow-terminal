@@ -10,6 +10,7 @@ interface TabBarProps {
   onSelect: (id: number | 'home') => void
   onClose: (id: number) => void
   onAdd: () => void
+  onOpenBrowser: () => void
   onSplit: () => void
   onToggleCommand: (command: string) => void
   onAddCommand: (command: string) => void
@@ -27,6 +28,7 @@ function TabBar({
   onSelect,
   onClose,
   onAdd,
+  onOpenBrowser,
   onSplit,
   onToggleCommand,
   onAddCommand,
@@ -87,6 +89,9 @@ function TabBar({
       ))}
       <button className="tab-add" onClick={onAdd} title="New session">
         +
+      </button>
+      <button className="tab-browser" onClick={onOpenBrowser} title="New browser tab">
+        󰖟
       </button>
       <button
         className="tab-command-add"
