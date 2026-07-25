@@ -15,6 +15,7 @@ import type {
   GitUpdateDefaultResult,
   GitWorkingDiff
 } from '../main/git'
+import type { BrowserBounds, BrowserState } from '../main/browser'
 import type { WorkflowList, WorkflowResult } from '../main/workflow'
 import type { ThemeResult } from '../main/theme'
 import type { SnowignoreResult } from '../main/snowignore'
@@ -44,6 +45,38 @@ const terminal = {
       callback(payload.id, payload.exitCode)
     ipcRenderer.on('pty:exit', listener)
     return () => ipcRenderer.removeListener('pty:exit', listener)
+  }
+}
+
+const browser = {
+  create: (id: number, url: string): void => {
+    ipcRenderer.send('browser:create', { id, url })
+  },
+  setBounds: (id: number, bounds: BrowserBounds, visible: boolean): void => {
+    ipcRenderer.send('browser:setBounds', { id, bounds, visible })
+  },
+  navigate: (id: number, url: string): void => {
+    ipcRenderer.send('browser:navigate', { id, url })
+  },
+  goBack: (id: number): void => {
+    ipcRenderer.send('browser:goBack', { id })
+  },
+  goForward: (id: number): void => {
+    ipcRenderer.send('browser:goForward', { id })
+  },
+  reload: (id: number): void => {
+    ipcRenderer.send('browser:reload', { id })
+  },
+  stop: (id: number): void => {
+    ipcRenderer.send('browser:stop', { id })
+  },
+  destroy: (id: number): void => {
+    ipcRenderer.send('browser:destroy', { id })
+  },
+  onState: (callback: (state: BrowserState) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, state: BrowserState): void => callback(state)
+    ipcRenderer.on('browser:state', listener)
+    return () => ipcRenderer.removeListener('browser:state', listener)
   }
 }
 
@@ -146,7 +179,7 @@ const snowconfig = {
   }
 }
 
-const api = { terminal, git, workflow, theme, snowignore, snowconfig }
+const api = { terminal, browser, git, workflow, theme, snowignore, snowconfig }
 
 export type Api = typeof api
 

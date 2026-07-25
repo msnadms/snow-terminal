@@ -4,6 +4,7 @@ import { openExternal } from './external'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerPtyHandlers, disposeAllPty } from './pty'
+import { registerBrowserHandlers, disposeAllBrowser } from './browser'
 import { registerGitHandlers, disposeGitWatchers } from './git'
 import { registerWorkflowHandlers } from './workflow'
 import { initRegistry, disposeRegistryWatcher } from './registry'
@@ -94,6 +95,9 @@ app.whenReady().then(() => {
   // Register pseudo-terminal (node-pty) IPC handlers.
   registerPtyHandlers()
 
+  // Register embedded-browser (WebContentsView) IPC handlers.
+  registerBrowserHandlers()
+
   // Load ~/.config/snow/.snowworkflows and watch it for edits. Before the git handlers, which
   // consult the registry to decide whether a branch switch parks its changes.
   initRegistry()
@@ -136,6 +140,7 @@ app.on('window-all-closed', () => {
 // Ensure all PTY processes are terminated when the app quits.
 app.on('will-quit', () => {
   disposeAllPty()
+  disposeAllBrowser()
   disposeGitWatchers()
   disposeRegistryWatcher()
   disposeThemeWatcher()
