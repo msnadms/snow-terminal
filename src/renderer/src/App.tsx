@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import ActionBar from './components/ActionBar'
 import CommitView from './components/CommitView'
 import GitPanel from './components/GitPanel'
@@ -7,6 +7,7 @@ import TabBar from './components/TabBar'
 import HomePage from './components/HomePage'
 import WorkingDiffView from './components/WorkingDiffView'
 import { basename, shortHash } from './format'
+import { nextTerminalId } from './terminalId'
 import { useSnowconfig } from './useSnowconfig'
 
 type ActiveId = number | 'home'
@@ -20,13 +21,25 @@ function App(): React.JSX.Element {
   const [tabs, setTabs] = useState<Tab[]>([])
   const [activeId, setActiveId] = useState<ActiveId>('home')
   const [cwds, setCwds] = useState<Record<number, string | undefined>>({})
+  const [panes, setPanes] = useState<Record<number, number[]>>({})
+  const [running, setRunning] = useState<Record<string, number>>({})
   const [frozen, setFrozen] = useState<{ cwd?: string } | null>(null)
   const nextIdRef = useRef(1)
-  const { presets, name: configName, error: presetsError } = useSnowconfig()
+  const { presets, name: configName, startupCommand, error: presetsError } = useSnowconfig()
 
   const activeTab = tabs.find((t) => t.id === activeId)
   const cwd = activeTab && activeTab.kind !== 'shell' ? activeTab.cwd : cwds[activeTab?.id ?? -1]
   const gitCwd = frozen ? frozen.cwd : cwd
+
+  const activeShellCwd = activeTab?.kind === 'shell' ? activeTab.cwd : undefined
+  const activePresetIndex =
+    activeShellCwd != null ? presets.findIndex((p) => p.cwd === activeShellCwd) : -1
+  const activePreset = activePresetIndex >= 0 ? presets[activePresetIndex] : undefined
+  const presetCommands = activePreset?.commands ?? []
+  const runKey = (presetCwd: string, command: string): string => `${presetCwd}\n${command}`
+  const runningCommands = activePreset
+    ? presetCommands.filter((c) => running[runKey(activePreset.cwd, c)] != null)
+    : []
 
   const labels = useMemo(() => {
     const result: Record<number, string> = {}
@@ -49,6 +62,7 @@ function App(): React.JSX.Element {
     const id = nextIdRef.current++
     setTabs((prev) => [...prev, { kind: 'shell', id, cwd }])
     if (cwd) setCwds((prev) => ({ ...prev, [id]: cwd }))
+    setPanes((prev) => ({ ...prev, [id]: [nextTerminalId()] }))
     setActiveId(id)
   }
 
@@ -81,6 +95,50 @@ function App(): React.JSX.Element {
     setActiveId(id)
   }
 
+  const splitActive = (): void => {
+    if (!activeTab || activeTab.kind !== 'shell') return
+    const paneId = nextTerminalId()
+    setPanes((prev) => ({ ...prev, [activeTab.id]: [...(prev[activeTab.id] ?? []), paneId] }))
+  }
+
+  const closePane = (sessionId: number, paneId: number): void => {
+    setPanes((prev) => {
+      const current = prev[sessionId]
+      if (!current || current.length <= 1) return prev
+      return { ...prev, [sessionId]: current.filter((p) => p !== paneId) }
+    })
+  }
+
+  const toggleCommand = (command: string): void => {
+    if (!activePreset) return
+    const key = runKey(activePreset.cwd, command)
+    const existing = running[key]
+    if (existing != null) {
+      window.api.terminal.kill(existing)
+      setRunning((prev) => {
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
+      return
+    }
+    const id = nextTerminalId()
+    window.api.terminal.spawn(id, 80, 24, activePreset.cwd, `${command}; exit`)
+    setRunning((prev) => ({ ...prev, [key]: id }))
+  }
+
+  useEffect(() => {
+    return window.api.terminal.onExit((id) => {
+      setRunning((prev) => {
+        const command = Object.keys(prev).find((key) => prev[key] === id)
+        if (command === undefined) return prev
+        const next = { ...prev }
+        delete next[command]
+        return next
+      })
+    })
+  }, [])
+
   const closeSession = (id: number): void => {
     const index = tabs.findIndex((t) => t.id === id)
     if (index === -1) return
@@ -91,6 +149,11 @@ function App(): React.JSX.Element {
     }
     setTabs(remaining)
     setCwds((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+    setPanes((prev) => {
       const next = { ...prev }
       delete next[id]
       return next
@@ -113,6 +176,20 @@ function App(): React.JSX.Element {
             onSelect={setActiveId}
             onClose={closeSession}
             onAdd={() => addSession(presets.find((p) => p.default)?.cwd)}
+            onSplit={splitActive}
+            onToggleCommand={toggleCommand}
+            onAddCommand={(command) => {
+              if (activePresetIndex >= 0)
+                window.api.snowconfig.addCommand(activePresetIndex, command)
+            }}
+            onRemoveCommand={(index) => {
+              if (activePresetIndex >= 0)
+                window.api.snowconfig.removeCommand(activePresetIndex, index)
+            }}
+            commands={presetCommands}
+            runningCommands={runningCommands}
+            canManageCommands={activePresetIndex >= 0}
+            canSplit={activeTab?.kind === 'shell'}
           />
           <div className="terminal-stack">
             {activeId === 'home' && (
@@ -150,6 +227,9 @@ function App(): React.JSX.Element {
                   key={tab.id}
                   active={activeId === tab.id}
                   cwd={tab.cwd}
+                  paneIds={panes[tab.id] ?? []}
+                  startupCommand={startupCommand ?? 'claude'}
+                  onClosePane={(paneId) => closePane(tab.id, paneId)}
                   onCwd={(next) => setCwds((prev) => ({ ...prev, [tab.id]: next }))}
                 />
               )

@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Preset } from '../useSnowconfig'
+import ContextMenu from './ContextMenu'
 import SnowFall from './SnowFall'
 
 interface HomePageProps {
@@ -32,34 +33,6 @@ function HomePage({
   const [menu, setMenu] = useState<{ index: number; x: number; y: number } | null>(null)
   const formRef = useRef<HTMLFormElement>(null)
   const nameRef = useRef<HTMLInputElement>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!menu) return
-
-    const onPointerDown = (e: PointerEvent): void => {
-      if (!menuRef.current?.contains(e.target as Node)) setMenu(null)
-    }
-    const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setMenu(null)
-    }
-
-    window.addEventListener('pointerdown', onPointerDown)
-    window.addEventListener('keydown', onKeyDown)
-
-    return () => {
-      window.removeEventListener('pointerdown', onPointerDown)
-      window.removeEventListener('keydown', onKeyDown)
-    }
-  }, [menu])
-
-  useLayoutEffect(() => {
-    const el = menuRef.current
-    if (!menu || !el) return
-    const rect = el.getBoundingClientRect()
-    el.style.left = `${Math.max(0, Math.min(menu.x, window.innerWidth - rect.width))}px`
-    el.style.top = `${Math.max(0, Math.min(menu.y, window.innerHeight - rect.height))}px`
-  }, [menu])
 
   useEffect(() => {
     if (!name && !cwd) return
@@ -169,11 +142,11 @@ function HomePage({
         </form>
       </div>
       {menu && presets[menu.index] && (
-        <div className="home-menu" ref={menuRef}>
-          <button className="home-menu-item" onClick={() => removePreset(menu.index)}>
+        <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
+          <button className="context-menu-item" onClick={() => removePreset(menu.index)}>
             Remove “{presets[menu.index].name}”
           </button>
-        </div>
+        </ContextMenu>
       )}
     </div>
   )

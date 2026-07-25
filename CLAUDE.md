@@ -154,22 +154,47 @@ is already staged is left alone — snow only filters what it adds.
 
 Session presets for the home tab, as JSON. `src/main/snowconfig.ts` mirrors `theme.ts`'s lifecycle
 (default written with `flag: 'wx'` on first launch, directory `fs.watch` broadcasting
-`snowconfig:changed`). Shape is `{ presets: { name, cwd, default? }[], name? }`; entries missing a
+`snowconfig:changed`). Shape is
+`{ presets: { name, cwd, default?, commands? }[], name?, startupCommand? }`; entries missing a
 string `name`/`cwd` are dropped, and a leading `~` in `cwd` is expanded to the home dir **only on
 read**, so the renderer gets absolute paths while the file keeps the raw `~`. The top-level `name`
 drives the home tab's `Hello {name}` greeting (falling back to `snow`); `seedName()` on registration
 fills it in **once** when absent by resolving the GitHub name (`gh api user`, then
 `git config user.name`) and rewriting the file, so a user-set `name` is never overwritten and every
-write path preserves it. All preset writes go through `writeConfig(presets, name)`, which keeps the
-top-level `name` so `addPreset`/`setDefault`/`removePreset` don't drop it. Beyond `snowconfig:get` it
-exposes
-two write handlers — `snowconfig:addPreset` and `snowconfig:setDefault(index)` (index `-1` clears the
-default) — that mutate the raw parsed presets and rewrite the file; the fs.watch broadcast then keeps
-every window in sync. `useSnowconfig` (`src/renderer/src/useSnowconfig.ts`) is the single subscription;
+write path preserves it. `startupCommand` is the command each session's main terminal(s) run
+(default `claude` in the renderer when absent).
+
+`commands` is **per preset** — the shell-command buttons the tab bar shows to the right of its `+`
+when the active session belongs to that preset. `App` resolves the active preset by matching the
+active shell tab's *original* cwd (`activeTab.cwd`, fixed at open time — not the live OSC-7 cwd, so
+it survives `cd`) against `presets[].cwd`, and derives `activePresetIndex` fresh each render rather
+than storing it, so it never drifts when presets are reordered. Each button is a **toggle**: clicking
+spawns a hidden background PTY (no xterm attached) running the command in the preset's cwd, and
+clicking again kills it — so a long-running command like `npm run dev` starts and stops from the one
+button. The command is spawned as `<command>; exit` so the shell (and the PTY) dies when the command
+finishes — both PowerShell (`-NoExit`) and the interactive POSIX shell otherwise outlive their
+command, which would leave the button stuck green when the process ends on its own or is killed
+externally. `App` holds the `running` map keyed by `` `${presetCwd}\n${command}` `` → terminal id (so
+the same command under different presets tracks independently) and passes the active preset's running
+subset to `TabBar` as `runningCommands`; a self-terminating process clears its own button via the
+shared `pty:exit` listener. Background PTY ids come from the shared `nextTerminalId()`
+(`src/renderer/src/terminalId.ts`), the same allocator `Terminal` uses, so they never collide with
+pane ids.
+
+Every write handler goes through `mutateConfig`, which owns the read → error-bail → write sequence and
+hands the callback the whole parsed config (`{ presets, name, startupCommand }`), so passthrough
+fields are structural — no write path can drop a top-level field. The callback returns `false` to
+abort without writing (bad index, missing preset). Beyond `snowconfig:get` it exposes write handlers —
+`snowconfig:addPreset`, `snowconfig:setDefault(index)` (index `-1` clears the default),
+`snowconfig:removePreset(index)`, `snowconfig:addCommand(presetIndex, command)`, and
+`snowconfig:removeCommand(presetIndex, index)` — that mutate the parsed config and rewrite the file;
+the fs.watch broadcast then keeps every window in sync. `useSnowconfig` (`src/renderer/src/useSnowconfig.ts`) is the single subscription;
 `App` reads it so the tab strip's `+` button opens the `default` preset's cwd (home dir if none), and
-`HomePage` renders each preset with a default checkbox (radio-like via `setDefault`) plus an add form.
-Opening a preset calls `App`'s `addSession(cwd)`, which seeds the session's cwd (so git/tab-label are
-correct before the shell's first OSC 7) and passes it to both terminals' spawn.
+`HomePage` renders each preset with a default checkbox (radio-like via `setDefault`) plus an add
+form. Both `HomePage` and `TabBar` delete entries through the shared `ContextMenu` component
+(right-click → Remove). Opening a preset calls `App`'s `addSession(cwd)`, which seeds the session's
+cwd (so git/tab-label are correct before the shell's first OSC 7) and passes it to both terminals'
+spawn.
 
 #### `snow.log`
 
@@ -315,7 +340,7 @@ The **Freeze** checkbox at the right of the action bar pins the git view to one 
 `frozen` as `{ cwd } | null` — a wrapper rather than a bare string, so freezing on a tab with no cwd
 yet still freezes instead of reading as "not frozen" — and passes `frozen ? frozen.cwd : cwd` to
 `GitPanel` only. `ActionBar` keeps taking the live `cwd`, so every action still targets the active
-tab's repo; the freeze is a view filter, not a mode. It pins the *directory*, not the content: git
+tab's repo; the freeze is a view filter, not a mode. It pins the _directory_, not the content: git
 watchers keep running, so the pinned repo's log and status stay live.
 
 ## node-pty (native module) constraints

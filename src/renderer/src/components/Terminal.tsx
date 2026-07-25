@@ -2,8 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-
-let nextTerminalId = 1
+import { nextTerminalId } from '../terminalId'
 
 function parseOsc7(payload: string): string | null {
   const match = /^file:\/\/[^/]*(\/.*)$/.exec(payload)
@@ -42,7 +41,7 @@ function Terminal({
     const container = containerRef.current
     if (!container) return
 
-    const id = nextTerminalId++
+    const id = nextTerminalId()
 
     const term = new XTerm({
       cursorBlink: true,

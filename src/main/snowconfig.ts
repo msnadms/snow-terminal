@@ -13,11 +13,13 @@ export interface Preset {
   name: string
   cwd: string
   default?: boolean
+  commands?: string[]
 }
 
 export interface SnowConfig {
   presets: Preset[]
   name?: string
+  startupCommand?: string
 }
 
 export interface SnowconfigResult {
@@ -34,6 +36,17 @@ export function snowconfigPath(): string {
   return path.join(configDir(), '.snowconfig')
 }
 
+function validateCommandList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const result: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const command = item.trim()
+    if (command) result.push(command)
+  }
+  return result
+}
+
 function validate(raw: unknown): Preset[] {
   if (!raw || typeof raw !== 'object') return []
   const list = (raw as Record<string, unknown>).presets
@@ -48,53 +61,84 @@ function validate(raw: unknown): Preset[] {
     if (!name || !cwd) continue
     const preset: Preset = { name, cwd }
     if (o.default === true) preset.default = true
+    const commands = validateCommandList(o.commands)
+    if (commands.length) preset.commands = commands
     result.push(preset)
   }
   return result
 }
 
-function validateName(raw: unknown): string | null {
+function validateStringField(raw: unknown, key: string): string | null {
   if (!raw || typeof raw !== 'object') return null
-  const value = (raw as Record<string, unknown>).name
+  const value = (raw as Record<string, unknown>)[key]
   if (typeof value !== 'string') return null
   return value.trim() || null
 }
 
-function rawConfig(): { presets: Preset[]; name: string | null; error: string | null } {
+interface RawConfig {
+  presets: Preset[]
+  name: string | null
+  startupCommand: string | null
+  error: string | null
+}
+
+function rawConfig(): RawConfig {
   const file = snowconfigPath()
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown
-    return { presets: validate(raw), name: validateName(raw), error: null }
+    return {
+      presets: validate(raw),
+      name: validateStringField(raw, 'name'),
+      startupCommand: validateStringField(raw, 'startupCommand'),
+      error: null
+    }
   } catch (err) {
     const e = err as NodeJS.ErrnoException
-    if (e.code === 'ENOENT') return { presets: validate(defaultConfig), name: null, error: null }
-    return { presets: [], name: null, error: e.message }
+    if (e.code === 'ENOENT')
+      return {
+        presets: validate(defaultConfig),
+        name: null,
+        startupCommand: null,
+        error: null
+      }
+    return { presets: [], name: null, startupCommand: null, error: e.message }
   }
 }
 
 function readSnowconfig(): SnowconfigResult {
   const file = snowconfigPath()
-  const { presets, name, error } = rawConfig()
+  const { presets, name, startupCommand, error } = rawConfig()
   return {
     config: {
       presets: presets.map((p) => ({ ...p, cwd: expandHome(p.cwd) })),
-      ...(name ? { name } : {})
+      ...(name ? { name } : {}),
+      ...(startupCommand ? { startupCommand } : {})
     },
     path: file,
     error
   }
 }
 
-function writeConfig(presets: Preset[], name: string | null): SnowconfigResult {
+function writeConfig(next: Omit<RawConfig, 'error'>): SnowconfigResult {
   const file = snowconfigPath()
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true })
-    const data = name ? { presets, name } : { presets }
+    const data: SnowConfig = { presets: next.presets }
+    if (next.name) data.name = next.name
+    if (next.startupCommand) data.startupCommand = next.startupCommand
     fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`)
   } catch (err) {
     return { config: { presets: [] }, path: file, error: (err as Error).message }
   }
   return readSnowconfig()
+}
+
+function mutateConfig(mutate: (cfg: Omit<RawConfig, 'error'>) => boolean): SnowconfigResult {
+  const { presets, name, startupCommand, error } = rawConfig()
+  if (error) return readSnowconfig()
+  const cfg = { presets, name, startupCommand }
+  if (!mutate(cfg)) return readSnowconfig()
+  return writeConfig(cfg)
 }
 
 async function runName(file: string, args: string[], cwd?: string): Promise<string | null> {
@@ -117,9 +161,11 @@ async function seedName(): Promise<void> {
   if (rawConfig().name) return
   const resolved = await githubName()
   if (!resolved) return
-  const { presets, name, error } = rawConfig()
-  if (error || name) return
-  writeConfig(presets, resolved)
+  mutateConfig((cfg) => {
+    if (cfg.name) return false
+    cfg.name = resolved
+    return true
+  })
 }
 
 function writeDefaultSnowconfig(): void {
@@ -180,28 +226,53 @@ export function registerSnowconfigHandlers(): void {
       const name = String(preset?.name ?? '').trim()
       const cwd = String(preset?.cwd ?? '').trim()
       if (!name || !cwd) return readSnowconfig()
-      const { presets, name: configName, error } = rawConfig()
-      if (error) return readSnowconfig()
-      presets.push({ name, cwd })
-      return writeConfig(presets, configName)
+      return mutateConfig((cfg) => {
+        cfg.presets.push({ name, cwd })
+        return true
+      })
     }
   )
-  ipcMain.handle('snowconfig:setDefault', (_e, index: number): SnowconfigResult => {
-    const { presets, name: configName, error } = rawConfig()
-    if (error) return readSnowconfig()
-    presets.forEach((p, i) => {
-      if (i === index) p.default = true
-      else delete p.default
+  ipcMain.handle('snowconfig:setDefault', (_e, index: number): SnowconfigResult =>
+    mutateConfig((cfg) => {
+      cfg.presets.forEach((p, i) => {
+        if (i === index) p.default = true
+        else delete p.default
+      })
+      return true
     })
-    return writeConfig(presets, configName)
-  })
-  ipcMain.handle('snowconfig:removePreset', (_e, index: number): SnowconfigResult => {
-    const { presets, name: configName, error } = rawConfig()
-    if (error) return readSnowconfig()
-    if (!Number.isInteger(index) || index < 0 || index >= presets.length) return readSnowconfig()
-    presets.splice(index, 1)
-    return writeConfig(presets, configName)
-  })
+  )
+  ipcMain.handle('snowconfig:removePreset', (_e, index: number): SnowconfigResult =>
+    mutateConfig((cfg) => {
+      if (!Number.isInteger(index) || index < 0 || index >= cfg.presets.length) return false
+      cfg.presets.splice(index, 1)
+      return true
+    })
+  )
+  ipcMain.handle(
+    'snowconfig:addCommand',
+    (_e, presetIndex: number, command: string): SnowconfigResult => {
+      const trimmed = String(command ?? '').trim()
+      if (!trimmed) return readSnowconfig()
+      return mutateConfig((cfg) => {
+        const preset = cfg.presets[presetIndex]
+        if (!preset) return false
+        preset.commands = [...(preset.commands ?? []), trimmed]
+        return true
+      })
+    }
+  )
+  ipcMain.handle(
+    'snowconfig:removeCommand',
+    (_e, presetIndex: number, index: number): SnowconfigResult =>
+      mutateConfig((cfg) => {
+        const preset = cfg.presets[presetIndex]
+        if (!preset || !preset.commands) return false
+        if (!Number.isInteger(index) || index < 0 || index >= preset.commands.length) return false
+        preset.commands.splice(index, 1)
+        if (preset.commands.length === 0) delete preset.commands
+        return true
+      })
+  )
   ipcMain.handle('snowconfig:chooseDir', async (): Promise<string | null> => {
     const win = BrowserWindow.getFocusedWindow()
     const result = await (win
