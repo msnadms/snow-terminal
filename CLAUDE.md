@@ -154,9 +154,15 @@ is already staged is left alone — snow only filters what it adds.
 
 Session presets for the home tab, as JSON. `src/main/snowconfig.ts` mirrors `theme.ts`'s lifecycle
 (default written with `flag: 'wx'` on first launch, directory `fs.watch` broadcasting
-`snowconfig:changed`). Shape is `{ presets: { name, cwd, default? }[] }`; entries missing a string
-`name`/`cwd` are dropped, and a leading `~` in `cwd` is expanded to the home dir **only on read**, so
-the renderer gets absolute paths while the file keeps the raw `~`. Beyond `snowconfig:get` it exposes
+`snowconfig:changed`). Shape is `{ presets: { name, cwd, default? }[], name? }`; entries missing a
+string `name`/`cwd` are dropped, and a leading `~` in `cwd` is expanded to the home dir **only on
+read**, so the renderer gets absolute paths while the file keeps the raw `~`. The top-level `name`
+drives the home tab's `Hello {name}` greeting (falling back to `snow`); `seedName()` on registration
+fills it in **once** when absent by resolving the GitHub name (`gh api user`, then
+`git config user.name`) and rewriting the file, so a user-set `name` is never overwritten and every
+write path preserves it. All preset writes go through `writeConfig(presets, name)`, which keeps the
+top-level `name` so `addPreset`/`setDefault`/`removePreset` don't drop it. Beyond `snowconfig:get` it
+exposes
 two write handlers — `snowconfig:addPreset` and `snowconfig:setDefault(index)` (index `-1` clears the
 default) — that mutate the raw parsed presets and rewrite the file; the fs.watch broadcast then keeps
 every window in sync. `useSnowconfig` (`src/renderer/src/useSnowconfig.ts`) is the single subscription;

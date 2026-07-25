@@ -1171,35 +1171,6 @@ body {
   opacity: 0.5;
 }
 
-.git-edge-glow {
-  fill: none;
-  stroke-width: 2.5;
-  stroke-linecap: round;
-  filter: drop-shadow(0 0 4px currentColor) drop-shadow(0 0 9px currentColor);
-  animation-name: git-edge-glow;
-  animation-timing-function: linear;
-  animation-iteration-count: infinite;
-}
-
-@keyframes git-edge-glow {
-  from {
-    stroke-dashoffset: 0;
-  }
-  to {
-    stroke-dashoffset: var(--glow-period);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .git-edge-glow {
-    display: none;
-  }
-
-  .git-edge {
-    opacity: 1;
-  }
-}
-
 .git-row {
   position: relative;
   display: flex;
@@ -1214,12 +1185,32 @@ body {
   box-shadow: 0 0 0 2px var(--git-bg, #171c2b);
   cursor: pointer;
   z-index: 1;
+  animation-name: git-node-pulse;
+  animation-timing-function: ease-out;
+  animation-iteration-count: infinite;
+}
+
+@keyframes git-node-pulse {
+  0% {
+    filter: brightness(1.7) drop-shadow(0 0 4px currentColor)
+      drop-shadow(0 0 9px currentColor);
+  }
+  9%,
+  100% {
+    filter: brightness(1);
+  }
 }
 
 .git-node:hover {
   box-shadow:
     0 0 0 2px var(--git-bg, #171c2b),
     0 0 0 4px currentColor;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .git-node {
+    animation: none;
+  }
 }
 
 .git-row-text {

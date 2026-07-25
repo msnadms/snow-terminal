@@ -4,6 +4,7 @@ import SnowFall from './SnowFall'
 
 interface HomePageProps {
   presets: Preset[]
+  name: string | null
   error: string | null
   onOpenPreset: (cwd: string) => void
 }
@@ -13,7 +14,19 @@ function basename(p: string): string {
   return parts[parts.length - 1] ?? p
 }
 
-function HomePage({ presets, error, onOpenPreset }: HomePageProps): React.JSX.Element {
+function chooseGreeting(): string {
+  const hour = new Date().getHours()
+  if (hour < 12) return 'Good morning'
+  if (hour < 18) return 'Good afternoon'
+  return 'Good evening'
+}
+
+function HomePage({
+  presets,
+  name: greetingName,
+  error,
+  onOpenPreset
+}: HomePageProps): React.JSX.Element {
   const [name, setName] = useState('')
   const [cwd, setCwd] = useState('')
   const [menu, setMenu] = useState<{ index: number; x: number; y: number } | null>(null)
@@ -92,7 +105,9 @@ function HomePage({ presets, error, onOpenPreset }: HomePageProps): React.JSX.El
     <div className="home-page">
       <SnowFall />
       <div className="home-content">
-        <div className="home-title">snow</div>
+        <div className="home-title">
+          {greetingName ? `${chooseGreeting()}, ${greetingName}` : 'snow'}
+        </div>
         {error && (
           <div className="home-error">
             <div className="home-error-title">

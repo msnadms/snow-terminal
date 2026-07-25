@@ -3,8 +3,9 @@ import { useEffect, useState } from 'react'
 type SnowconfigResult = Awaited<ReturnType<typeof window.api.snowconfig.get>>
 export type Preset = SnowconfigResult['config']['presets'][number]
 
-export function useSnowconfig(): { presets: Preset[]; error: string | null } {
+export function useSnowconfig(): { presets: Preset[]; name: string | null; error: string | null } {
   const [presets, setPresets] = useState<Preset[]>([])
+  const [name, setName] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -15,6 +16,7 @@ export function useSnowconfig(): { presets: Preset[]; error: string | null } {
       if (result.error) console.error(`snow: failed to read ${result.path}: ${result.error}`)
       setError(result.error ? `${result.path}: ${result.error}` : null)
       setPresets(result.config.presets)
+      setName(result.config.name ?? null)
     }
 
     window.api.snowconfig.get().then(receive)
@@ -26,5 +28,5 @@ export function useSnowconfig(): { presets: Preset[]; error: string | null } {
     }
   }, [])
 
-  return { presets, error }
+  return { presets, name, error }
 }

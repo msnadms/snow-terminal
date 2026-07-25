@@ -13,9 +13,7 @@ const ROW = 30
 const LANE = 16
 const PADX = 12
 const DOT = 4
-const GLOW_LENGTH = 22
-const GLOW_PERIOD = ROW * 4
-const GLOW_DURATION = 6
+const PULSE_STEP = 0.45
 const SINGLE_REPO_COMMITS = 200
 const MULTI_REPO_COMMITS = 10
 
@@ -36,7 +34,6 @@ function rowY(row: number): number {
 interface Edge {
   path: string
   color: string
-  y: number
 }
 
 function edgePath(fromCol: number, fromRow: number, toCol: number, toRow: number): string {
@@ -60,8 +57,7 @@ function buildEdges(commits: GitCommit[], lanes: string[]): Edge[] {
       if (!parent || parent.row <= commit.row) continue
       edges.push({
         path: edgePath(commit.col, commit.row, parent.col, parent.row),
-        color: laneColor(lanes, parent.col),
-        y: rowY(commit.row)
+        color: laneColor(lanes, parent.col)
       })
     }
   }
@@ -259,6 +255,7 @@ function RepoSection({
   const commits = log?.commits ?? []
   const graphWidth = PADX + (log?.laneCount ?? 1) * LANE
   const graphHeight = commits.length * ROW
+  const pulseDuration = Math.max(commits.length, 1) * PULSE_STEP
 
   const header = (
     <>
@@ -373,23 +370,6 @@ function RepoSection({
                   fill="none"
                 />
               ))}
-              {edges.map((e, i) => (
-                <path
-                  key={i}
-                  className="git-edge-glow"
-                  d={e.path}
-                  stroke="currentColor"
-                  style={
-                    {
-                      color: e.color,
-                      strokeDasharray: `${GLOW_LENGTH} ${GLOW_PERIOD - GLOW_LENGTH}`,
-                      animationDuration: `${GLOW_DURATION}s`,
-                      animationDelay: `${-(e.y / GLOW_PERIOD) * GLOW_DURATION}s`,
-                      '--glow-period': `${GLOW_PERIOD}px`
-                    } as React.CSSProperties
-                  }
-                />
-              ))}
             </svg>
 
             {commits.map((c) => (
@@ -400,7 +380,10 @@ function RepoSection({
                     left: laneX(c.col),
                     width: DOT * 2,
                     height: DOT * 2,
-                    background: laneColor(lanes, c.col)
+                    background: laneColor(lanes, c.col),
+                    color: laneColor(lanes, c.col),
+                    animationDuration: `${pulseDuration}s`,
+                    animationDelay: `${-c.row * PULSE_STEP}s`
                   }}
                   onMouseEnter={(ev) => {
                     const r = ev.currentTarget.getBoundingClientRect()
