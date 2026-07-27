@@ -45,8 +45,7 @@ function BrowserTab({ id, initialUrl, active, onTitle }: BrowserTabProps): React
   useEffect(() => {
     window.api.browser.create(id, initialUrl)
 
-    const off = window.api.browser.onState((state) => {
-      if (state.id !== id) return
+    const off = window.api.browser.onState(id, (state) => {
       setNav({
         canGoBack: state.canGoBack,
         canGoForward: state.canGoForward,

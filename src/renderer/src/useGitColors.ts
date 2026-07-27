@@ -3,7 +3,10 @@ import { useEffect, useState } from 'react'
 type ThemeResult = Awaited<ReturnType<typeof window.api.theme.get>>
 export type GitColors = ThemeResult['theme']['git']
 
-const cssVars: Record<Exclude<keyof GitColors, 'lanes'>, string> = {
+const cssVars: Record<
+  Exclude<keyof GitColors, 'lanes' | 'nodeGradientTop' | 'nodeGradientBottom'>,
+  string
+> = {
   background: '--git-bg',
   panelBackground: '--git-panel-bg',
   border: '--git-border',

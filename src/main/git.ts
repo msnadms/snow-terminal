@@ -5,7 +5,7 @@ import path from 'path'
 import { simpleGit, SimpleGit, StatusResult } from 'simple-git'
 import { filterPaths } from './snowignore'
 import { registeredFor, workflowsPath } from './registry'
-import { isExternalUrl, openExternal } from './external'
+import { isExternalUrl } from './external'
 
 export interface GitCommit {
   hash: string
@@ -1305,12 +1305,6 @@ export function registerGitHandlers(): void {
             url
           ].join('\n')
         }
-      }
-
-      try {
-        await openExternal(url)
-      } catch (error) {
-        return { ...fail(error), url }
       }
 
       return { ok: true, url }

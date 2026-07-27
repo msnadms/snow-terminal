@@ -69,11 +69,26 @@ export function registerPtyHandlers(): void {
         }
       }
 
-      pty.onData((data) => {
+      let buffer = ''
+      let flushTimer: NodeJS.Timeout | null = null
+      const flush = (): void => {
+        if (flushTimer) {
+          clearTimeout(flushTimer)
+          flushTimer = null
+        }
+        if (!buffer) return
+        const data = buffer
+        buffer = ''
         safeSend('pty:data', { id, data })
+      }
+
+      pty.onData((data) => {
+        buffer += data
+        if (!flushTimer) flushTimer = setTimeout(flush, 4)
       })
 
       pty.onExit(({ exitCode }) => {
+        flush()
         log('info', 'pty', 'exit', { id, pid: pty.pid, exitCode })
         safeSend('pty:exit', { id, exitCode })
         if (sessions.get(id)?.pty === pty) sessions.delete(id)

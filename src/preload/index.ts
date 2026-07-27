@@ -21,6 +21,47 @@ import type { ThemeResult } from '../main/theme'
 import type { SnowignoreResult } from '../main/snowignore'
 import type { SnowconfigResult } from '../main/snowconfig'
 
+function idDispatcher<P extends { id: number }>(
+  channel: string
+): (id: number | null, callback: (payload: P) => void) => () => void {
+  const byId = new Map<number, Set<(payload: P) => void>>()
+  const wild = new Set<(payload: P) => void>()
+  let attached = false
+
+  const listener = (_e: IpcRendererEvent, payload: P): void => {
+    const set = byId.get(payload.id)
+    if (set) for (const cb of [...set]) cb(payload)
+    if (wild.size) for (const cb of [...wild]) cb(payload)
+  }
+
+  return (id, callback) => {
+    if (!attached) {
+      ipcRenderer.on(channel, listener)
+      attached = true
+    }
+    if (id === null) {
+      wild.add(callback)
+      return () => wild.delete(callback)
+    }
+    let set = byId.get(id)
+    if (!set) {
+      set = new Set()
+      byId.set(id, set)
+    }
+    set.add(callback)
+    return () => {
+      const current = byId.get(id)
+      if (!current) return
+      current.delete(callback)
+      if (current.size === 0) byId.delete(id)
+    }
+  }
+}
+
+const onPtyData = idDispatcher<{ id: number; data: string }>('pty:data')
+const onPtyExit = idDispatcher<{ id: number; exitCode: number }>('pty:exit')
+const onBrowserState = idDispatcher<BrowserState>('browser:state')
+
 const terminal = {
   spawn: (id: number, cols: number, rows: number, cwd?: string, startupCommand?: string): void => {
     ipcRenderer.send('pty:spawn', { id, cols, rows, cwd, startupCommand })
@@ -34,18 +75,10 @@ const terminal = {
   kill: (id: number): void => {
     ipcRenderer.send('pty:kill', { id })
   },
-  onData: (callback: (id: number, data: string) => void): (() => void) => {
-    const listener = (_e: IpcRendererEvent, payload: { id: number; data: string }): void =>
-      callback(payload.id, payload.data)
-    ipcRenderer.on('pty:data', listener)
-    return () => ipcRenderer.removeListener('pty:data', listener)
-  },
-  onExit: (callback: (id: number, exitCode: number) => void): (() => void) => {
-    const listener = (_e: IpcRendererEvent, payload: { id: number; exitCode: number }): void =>
-      callback(payload.id, payload.exitCode)
-    ipcRenderer.on('pty:exit', listener)
-    return () => ipcRenderer.removeListener('pty:exit', listener)
-  }
+  onData: (id: number, callback: (data: string) => void): (() => void) =>
+    onPtyData(id, (payload) => callback(payload.data)),
+  onExit: (id: number | null, callback: (id: number, exitCode: number) => void): (() => void) =>
+    onPtyExit(id, (payload) => callback(payload.id, payload.exitCode))
 }
 
 const browser = {
@@ -73,11 +106,8 @@ const browser = {
   destroy: (id: number): void => {
     ipcRenderer.send('browser:destroy', { id })
   },
-  onState: (callback: (state: BrowserState) => void): (() => void) => {
-    const listener = (_e: IpcRendererEvent, state: BrowserState): void => callback(state)
-    ipcRenderer.on('browser:state', listener)
-    return () => ipcRenderer.removeListener('browser:state', listener)
-  }
+  onState: (id: number, callback: (state: BrowserState) => void): (() => void) =>
+    onBrowserState(id, callback)
 }
 
 const git = {

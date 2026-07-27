@@ -10,10 +10,12 @@ interface ActionBarProps {
   cwd?: string
   frozen: boolean
   onFreeze: (frozen: boolean) => void
+  onOpenPullRequest: (url: string) => void
 }
 
 type GitStatus = Awaited<ReturnType<typeof window.api.git.status>>
 type GitUndo = Awaited<ReturnType<typeof window.api.git.undoCommit>>
+type GitPullRequest = Awaited<ReturnType<typeof window.api.git.openPullRequest>>
 
 const glyphs = {
   commit: '  ',
@@ -49,7 +51,12 @@ function syncFaceOf(tracking: string | null, ahead: number, behind: number): Syn
   return { glyph: glyphs.fetch, title: `Fetch from ${tracking}` }
 }
 
-function ActionBar({ cwd, frozen, onFreeze }: ActionBarProps): React.JSX.Element {
+function ActionBar({
+  cwd,
+  frozen,
+  onFreeze,
+  onOpenPullRequest
+}: ActionBarProps): React.JSX.Element {
   const [isRepo, setIsRepo] = useState(false)
   const [status, setStatus] = useState<GitStatus | null>(null)
   const [defaultName, setDefaultName] = useState<string | null>(null)
@@ -71,7 +78,7 @@ function ActionBar({ cwd, frozen, onFreeze }: ActionBarProps): React.JSX.Element
   const update = useGitAction(refresh)
   const sync = useGitAction(refresh)
   const undo = useGitAction<GitUndo>(refresh)
-  const pullRequest = useGitAction({ onFailure: setFailure })
+  const pullRequest = useGitAction<GitPullRequest>({ onFailure: setFailure })
   const actions = [commit, syncDefault, update, sync, undo, pullRequest]
 
   useEffect(() => {
@@ -227,7 +234,10 @@ function ActionBar({ cwd, frozen, onFreeze }: ActionBarProps): React.JSX.Element
         <button
           className={`actionbar-button${pullRequest.className}`}
           disabled={busy}
-          onClick={() => pullRequest.run(() => window.api.git.openPullRequest(cwd))}
+          onClick={async () => {
+            const result = await pullRequest.run(() => window.api.git.openPullRequest(cwd))
+            if (result?.ok && result.url) onOpenPullRequest(result.url)
+          }}
           title={pullRequest.error || 'Open a pull request'}
         >
           <div className="nerd-glyph">{glyphs.pullRequest}</div>

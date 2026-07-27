@@ -31,6 +31,8 @@ export interface GitColors {
   diffDeleteGutter: string
   diffAddText: string
   diffDeleteText: string
+  nodeGradientTop: string
+  nodeGradientBottom: string
   lanes: string[]
 }
 
@@ -89,6 +91,8 @@ const defaultTheme: Theme = {
     diffDeleteGutter: '#4a2734',
     diffAddText: '#7fdcc0',
     diffDeleteText: '#e89aac',
+    nodeGradientTop: '#a855f7',
+    nodeGradientBottom: '#3b82f6',
     lanes: ['#6fb2f0', '#7fd8e8', '#9d9ce8', '#c09ae0', '#4f86c6', '#7fdcc0', '#a6c8f0', '#6e7fb8']
   },
   syntax: {

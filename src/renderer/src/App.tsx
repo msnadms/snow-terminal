@@ -144,7 +144,7 @@ function App(): React.JSX.Element {
   }
 
   useEffect(() => {
-    return window.api.terminal.onExit((id) => {
+    return window.api.terminal.onExit(null, (id) => {
       setRunning((prev) => {
         const command = Object.keys(prev).find((key) => prev[key] === id)
         if (command === undefined) return prev
@@ -180,6 +180,7 @@ function App(): React.JSX.Element {
         cwd={cwd}
         frozen={frozen !== null}
         onFreeze={(on) => setFrozen(on ? { cwd } : null)}
+        onOpenPullRequest={(url) => openBrowser(url)}
       />
       <div className="content">
         <div className="terminal-area">

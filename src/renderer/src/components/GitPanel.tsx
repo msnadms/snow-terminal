@@ -13,14 +13,39 @@ const ROW = 30
 const LANE = 16
 const PADX = 12
 const DOT = 4
-const PULSE_STEP = 0.45
 const SINGLE_REPO_COMMITS = 200
 const MULTI_REPO_COMMITS = 10
 
+type RGB = [number, number, number]
+
 const fallbackLanes = ['#6fb2f0', '#7fd8e8', '#9d9ce8', '#c09ae0']
+const fallbackGradient: [RGB, RGB] = [
+  [0xa8, 0x55, 0xf7],
+  [0x3b, 0x82, 0xf6]
+]
+
+function hexToRgb(hex: string, fallback: RGB): RGB {
+  const m = hex.trim().replace(/^#/, '')
+  const short = m.length === 3 || m.length === 4
+  if (!short && m.length !== 6 && m.length !== 8) return fallback
+  const size = short ? 1 : 2
+  const at = (i: number): number => {
+    const part = m.slice(i * size, i * size + size)
+    return parseInt(short ? part + part : part, 16)
+  }
+  const [r, g, b] = [at(0), at(1), at(2)]
+  return [r, g, b].some(Number.isNaN) ? fallback : [r, g, b]
+}
 
 function laneColor(lanes: string[], col: number): string {
   return lanes[col % lanes.length]
+}
+
+function nodeColor(gradient: [RGB, RGB], row: number, total: number): string {
+  const [top, bottom] = gradient
+  const t = total > 1 ? row / (total - 1) : 0
+  const ch = (i: number): number => Math.round(top[i] + (bottom[i] - top[i]) * t)
+  return `rgb(${ch(0)}, ${ch(1)}, ${ch(2)})`
 }
 
 function laneX(col: number): number {
@@ -164,6 +189,7 @@ interface RepoSectionProps {
   repo: GitRepo
   multi: boolean
   lanes: string[]
+  gradient: [RGB, RGB]
   maxCommits: number
   onOpenCommit?: OpenCommit
   onOpenDiff?: OpenDiff
@@ -173,6 +199,7 @@ function RepoSection({
   repo,
   multi,
   lanes,
+  gradient,
   maxCommits,
   onOpenCommit,
   onOpenDiff
@@ -255,7 +282,6 @@ function RepoSection({
   const commits = log?.commits ?? []
   const graphWidth = PADX + (log?.laneCount ?? 1) * LANE
   const graphHeight = commits.length * ROW
-  const pulseDuration = Math.max(commits.length, 1) * PULSE_STEP
 
   const header = (
     <>
@@ -380,10 +406,8 @@ function RepoSection({
                     left: laneX(c.col),
                     width: DOT * 2,
                     height: DOT * 2,
-                    background: laneColor(lanes, c.col),
-                    color: laneColor(lanes, c.col),
-                    animationDuration: `${pulseDuration}s`,
-                    animationDelay: `${-c.row * PULSE_STEP}s`
+                    background: nodeColor(gradient, c.row, commits.length),
+                    color: nodeColor(gradient, c.row, commits.length)
                   }}
                   onMouseEnter={(ev) => {
                     const r = ev.currentTarget.getBoundingClientRect()
@@ -431,6 +455,12 @@ function GitPanel({ cwd, onOpenCommit, onOpenDiff }: GitPanelProps): React.JSX.E
   const [repos, setRepos] = useState<GitRepo[] | null>(null)
   const colors = useGitColors()
   const lanes = colors?.lanes ?? fallbackLanes
+  const gradient: [RGB, RGB] = colors
+    ? [
+        hexToRgb(colors.nodeGradientTop, fallbackGradient[0]),
+        hexToRgb(colors.nodeGradientBottom, fallbackGradient[1])
+      ]
+    : fallbackGradient
 
   useEffect(() => {
     let cancelled = false
@@ -468,6 +498,7 @@ function GitPanel({ cwd, onOpenCommit, onOpenDiff }: GitPanelProps): React.JSX.E
             repo={repo}
             multi={repos.length > 1}
             lanes={lanes}
+            gradient={gradient}
             maxCommits={repos.length > 1 ? MULTI_REPO_COMMITS : SINGLE_REPO_COMMITS}
             onOpenCommit={onOpenCommit}
             onOpenDiff={onOpenDiff}

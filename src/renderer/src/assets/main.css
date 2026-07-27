@@ -1397,31 +1397,12 @@ body {
   box-shadow: 0 0 0 2px var(--git-bg, #171c2b);
   cursor: pointer;
   z-index: 1;
-  animation-name: git-node-pulse;
-  animation-timing-function: ease-out;
-  animation-iteration-count: infinite;
-}
-
-@keyframes git-node-pulse {
-  0% {
-    filter: brightness(1.7) drop-shadow(0 0 4px currentColor) drop-shadow(0 0 9px currentColor);
-  }
-  9%,
-  100% {
-    filter: brightness(1);
-  }
 }
 
 .git-node:hover {
   box-shadow:
     0 0 0 2px var(--git-bg, #171c2b),
     0 0 0 4px currentColor;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .git-node {
-    animation: none;
-  }
 }
 
 .git-row-text {
@@ -1894,9 +1875,73 @@ body {
   border-radius: 4px;
 }
 
+.terminal-wrap {
+  position: relative;
+  height: 100%;
+  width: 100%;
+}
+
 .terminal-pane {
   height: 100%;
   width: 100%;
+}
+
+.terminal-search {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: #181825;
+  border: 1px solid #313244;
+  border-radius: 5px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.terminal-search-input {
+  width: 150px;
+  padding: 2px 4px;
+  color: #cdd6f4;
+  background: #1e1e2e;
+  border: 1px solid #45475a;
+  border-radius: 3px;
+  font-size: 12px;
+  font-family: 'Hack Nerd Font Mono', monospace;
+  outline: none;
+}
+
+.terminal-search-input:focus {
+  border-color: #89b4fa;
+}
+
+.terminal-search-count {
+  min-width: 34px;
+  color: #6c7086;
+  font-size: 11px;
+  text-align: center;
+}
+
+.terminal-search-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: #6c7086;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.terminal-search-nav:hover {
+  color: #cdd6f4;
+  background: #313244;
 }
 
 /* Let xterm's viewport fill the pane. */
