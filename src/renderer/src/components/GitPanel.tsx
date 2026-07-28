@@ -20,7 +20,7 @@ type RGB = [number, number, number]
 
 const fallbackLanes = ['#6fb2f0', '#7fd8e8', '#9d9ce8', '#c09ae0']
 const fallbackGradient: [RGB, RGB] = [
-  [0xa8, 0x55, 0xf7],
+  [0x89, 0xdc, 0xeb],
   [0x3b, 0x82, 0xf6]
 ]
 
@@ -41,11 +41,14 @@ function laneColor(lanes: string[], col: number): string {
   return lanes[col % lanes.length]
 }
 
-function nodeColor(gradient: [RGB, RGB], row: number, total: number): string {
-  const [top, bottom] = gradient
-  const t = total > 1 ? row / (total - 1) : 0
-  const ch = (i: number): number => Math.round(top[i] + (bottom[i] - top[i]) * t)
-  return `rgb(${ch(0)}, ${ch(1)}, ${ch(2)})`
+const NODE_WAVE_SECONDS = 6
+
+function rgbStr(c: RGB): string {
+  return `rgb(${c[0]}, ${c[1]}, ${c[2]})`
+}
+
+function nodePhase(row: number, total: number): number {
+  return total > 1 ? row / (total - 1) : 0
 }
 
 function laneX(col: number): number {
@@ -379,7 +382,16 @@ function RepoSection({
 
       {open && !(showFiles && files.length > 0) && (
         <div className="git-log">
-          <div className="git-graph" style={{ height: graphHeight }}>
+          <div
+            className="git-graph"
+            style={
+              {
+                height: graphHeight,
+                '--grad-top': rgbStr(gradient[0]),
+                '--grad-bottom': rgbStr(gradient[1])
+              } as React.CSSProperties
+            }
+          >
             <svg
               className="git-graph-svg"
               width={graphWidth}
@@ -406,8 +418,7 @@ function RepoSection({
                     left: laneX(c.col),
                     width: DOT * 2,
                     height: DOT * 2,
-                    background: nodeColor(gradient, c.row, commits.length),
-                    color: nodeColor(gradient, c.row, commits.length)
+                    animationDelay: `${-(nodePhase(c.row, commits.length) * NODE_WAVE_SECONDS)}s`
                   }}
                   onMouseEnter={(ev) => {
                     const r = ev.currentTarget.getBoundingClientRect()
