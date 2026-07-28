@@ -100,7 +100,7 @@ function TabBar({
         }}
         onClick={() => (adding ? submit() : setAdding(true))}
         disabled={!canManageCommands}
-        title="Add command button"
+        title="Add command"
       >
         +
       </button>

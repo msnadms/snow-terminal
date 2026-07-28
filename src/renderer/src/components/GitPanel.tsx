@@ -16,36 +16,13 @@ const DOT = 4
 const SINGLE_REPO_COMMITS = 200
 const MULTI_REPO_COMMITS = 10
 
-type RGB = [number, number, number]
-
 const fallbackLanes = ['#6fb2f0', '#7fd8e8', '#9d9ce8', '#c09ae0']
-const fallbackGradient: [RGB, RGB] = [
-  [0x89, 0xdc, 0xeb],
-  [0x3b, 0x82, 0xf6]
-]
-
-function hexToRgb(hex: string, fallback: RGB): RGB {
-  const m = hex.trim().replace(/^#/, '')
-  const short = m.length === 3 || m.length === 4
-  if (!short && m.length !== 6 && m.length !== 8) return fallback
-  const size = short ? 1 : 2
-  const at = (i: number): number => {
-    const part = m.slice(i * size, i * size + size)
-    return parseInt(short ? part + part : part, 16)
-  }
-  const [r, g, b] = [at(0), at(1), at(2)]
-  return [r, g, b].some(Number.isNaN) ? fallback : [r, g, b]
-}
 
 function laneColor(lanes: string[], col: number): string {
   return lanes[col % lanes.length]
 }
 
 const NODE_WAVE_SECONDS = 6
-
-function rgbStr(c: RGB): string {
-  return `rgb(${c[0]}, ${c[1]}, ${c[2]})`
-}
 
 function nodePhase(row: number, total: number): number {
   return total > 1 ? row / (total - 1) : 0
@@ -192,7 +169,7 @@ interface RepoSectionProps {
   repo: GitRepo
   multi: boolean
   lanes: string[]
-  gradient: [RGB, RGB]
+  gradients: boolean
   maxCommits: number
   onOpenCommit?: OpenCommit
   onOpenDiff?: OpenDiff
@@ -202,7 +179,7 @@ function RepoSection({
   repo,
   multi,
   lanes,
-  gradient,
+  gradients,
   maxCommits,
   onOpenCommit,
   onOpenDiff
@@ -383,14 +360,8 @@ function RepoSection({
       {open && !(showFiles && files.length > 0) && (
         <div className="git-log">
           <div
-            className="git-graph"
-            style={
-              {
-                height: graphHeight,
-                '--grad-top': rgbStr(gradient[0]),
-                '--grad-bottom': rgbStr(gradient[1])
-              } as React.CSSProperties
-            }
+            className={gradients ? 'git-graph' : 'git-graph git-graph-flat'}
+            style={{ height: graphHeight }}
           >
             <svg
               className="git-graph-svg"
@@ -414,12 +385,18 @@ function RepoSection({
               <div key={c.hash} className="git-row" style={{ height: ROW }}>
                 <span
                   className="git-node"
-                  style={{
-                    left: laneX(c.col),
-                    width: DOT * 2,
-                    height: DOT * 2,
-                    animationDelay: `${-(nodePhase(c.row, commits.length) * NODE_WAVE_SECONDS)}s`
-                  }}
+                  style={
+                    {
+                      left: laneX(c.col),
+                      width: DOT * 2,
+                      height: DOT * 2,
+                      '--grad-top': laneColor(lanes, c.col),
+                      '--grad-bottom': gradients
+                        ? laneColor(lanes, c.col + 1)
+                        : laneColor(lanes, c.col),
+                      animationDelay: `${-(nodePhase(c.row, commits.length) * NODE_WAVE_SECONDS)}s`
+                    } as React.CSSProperties
+                  }
                   onMouseEnter={(ev) => {
                     const r = ev.currentTarget.getBoundingClientRect()
                     setTip({ commit: c, x: r.right + 8, y: r.top })
@@ -458,20 +435,20 @@ function RepoSection({
 
 interface GitPanelProps {
   cwd?: string
+  gradients?: boolean
   onOpenCommit?: OpenCommit
   onOpenDiff?: OpenDiff
 }
 
-function GitPanel({ cwd, onOpenCommit, onOpenDiff }: GitPanelProps): React.JSX.Element {
+function GitPanel({
+  cwd,
+  gradients = true,
+  onOpenCommit,
+  onOpenDiff
+}: GitPanelProps): React.JSX.Element {
   const [repos, setRepos] = useState<GitRepo[] | null>(null)
   const colors = useGitColors()
   const lanes = colors?.lanes ?? fallbackLanes
-  const gradient: [RGB, RGB] = colors
-    ? [
-        hexToRgb(colors.nodeGradientTop, fallbackGradient[0]),
-        hexToRgb(colors.nodeGradientBottom, fallbackGradient[1])
-      ]
-    : fallbackGradient
 
   useEffect(() => {
     let cancelled = false
@@ -509,7 +486,7 @@ function GitPanel({ cwd, onOpenCommit, onOpenDiff }: GitPanelProps): React.JSX.E
             repo={repo}
             multi={repos.length > 1}
             lanes={lanes}
-            gradient={gradient}
+            gradients={gradients}
             maxCommits={repos.length > 1 ? MULTI_REPO_COMMITS : SINGLE_REPO_COMMITS}
             onOpenCommit={onOpenCommit}
             onOpenDiff={onOpenDiff}

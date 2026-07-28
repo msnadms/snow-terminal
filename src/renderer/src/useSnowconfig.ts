@@ -7,11 +7,17 @@ export function useSnowconfig(): {
   presets: Preset[]
   name: string | null
   startupCommand: string | null
+  gradients: boolean
+  theme: string | null
+  tourSeen: boolean
   error: string | null
 } {
   const [presets, setPresets] = useState<Preset[]>([])
   const [name, setName] = useState<string | null>(null)
   const [startupCommand, setStartupCommand] = useState<string | null>(null)
+  const [gradients, setGradients] = useState(true)
+  const [theme, setTheme] = useState<string | null>(null)
+  const [tourSeen, setTourSeen] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -24,6 +30,9 @@ export function useSnowconfig(): {
       setPresets(result.config.presets)
       setName(result.config.name ?? null)
       setStartupCommand(result.config.startupCommand ?? null)
+      setGradients(result.config.gradients ?? true)
+      setTheme(result.config.theme ?? null)
+      setTourSeen(result.config.tourSeen ?? false)
     }
 
     window.api.snowconfig.get().then(receive)
@@ -35,5 +44,5 @@ export function useSnowconfig(): {
     }
   }, [])
 
-  return { presets, name, startupCommand, error }
+  return { presets, name, startupCommand, gradients, theme, tourSeen, error }
 }

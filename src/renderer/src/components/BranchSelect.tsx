@@ -128,7 +128,7 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
   const visible = needle ? source.filter((name) => name.toLowerCase().includes(needle)) : source
 
   return (
-    <div className="picker-select" ref={rootRef}>
+    <div className="picker-select picker-branch" ref={rootRef}>
       <button
         className={`picker-button${switching.className}`}
         disabled={switching.pending}

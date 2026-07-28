@@ -173,6 +173,7 @@ const workflow = {
 
 const theme = {
   get: (): Promise<ThemeResult> => ipcRenderer.invoke('theme:get'),
+  list: (): Promise<string[]> => ipcRenderer.invoke('theme:list'),
   onChanged: (callback: (result: ThemeResult) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, result: ThemeResult): void => callback(result)
     ipcRenderer.on('theme:changed', listener)
@@ -202,6 +203,9 @@ const snowconfig = {
   removeCommand: (presetIndex: number, index: number): Promise<SnowconfigResult> =>
     ipcRenderer.invoke('snowconfig:removeCommand', presetIndex, index),
   chooseDir: (): Promise<string | null> => ipcRenderer.invoke('snowconfig:chooseDir'),
+  setTheme: (theme: string): Promise<SnowconfigResult> =>
+    ipcRenderer.invoke('snowconfig:setTheme', theme),
+  setTourSeen: (): Promise<SnowconfigResult> => ipcRenderer.invoke('snowconfig:setTourSeen'),
   onChanged: (callback: (result: SnowconfigResult) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, result: SnowconfigResult): void => callback(result)
     ipcRenderer.on('snowconfig:changed', listener)

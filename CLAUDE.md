@@ -114,18 +114,58 @@ there too; each watcher filters `fs.watch` events by basename, so log writes nev
 
 #### `theme.json`
 
-Two sections, both scoped to the git view: `git` (chrome and diff backgrounds) and `syntax` (diff
-highlight token colors). `src/main/theme.ts` owns it: it writes the defaults on first launch, reads and
-validates on `theme:get`, and `fs.watch`es the directory to broadcast `theme:changed` on edit. Unknown
-or malformed values fall back to the defaults per key, so a bad edit degrades instead of breaking —
-`mergeColors` drives that off the keys of `defaultTheme`, so the defaults are the only key list.
-Because the default file is written with `flag: 'wx'`, an existing `theme.json` never grows the
-`syntax` block on disk; the keys are whatever `defaultTheme.syntax` lists.
+Themes live in `~/.config/snow/themes/` as a library of named files (`theme.json`, `theme_light.json`,
+…). Which one is **active** is chosen by the `.snowconfig` `theme` field (the base filename, default
+`"theme"`); `themePath()` resolves `themes/<name>.json` off `activeThemeName()` and is the single place
+that does — `themeFile()` sanitizes the name to `[A-Za-z0-9_-]` so a hand-edited value can't escape the
+directory. `theme:get` reads the active file; `theme:list` enumerates the base names for the home-page
+picker; `writeDefaultTheme` only ever seeds `theme.json`. The watcher watches the whole `themes/`
+directory (any `.json` write re-reads the active theme and broadcasts `theme:changed`), so editing the
+active file hot-reloads it. A **switch** writes `.snowconfig`, not `themes/`, so the theme watcher
+doesn't fire — instead the renderer's shared theme store (`themeStore.ts`) re-fetches `theme:get` on
+`snowconfig:changed`, which is why it subscribes to both events. `theme.ts` importing
+`activeThemeName` from `snowconfig.ts` is the one cross-config dependency and stays acyclic
+(`snowconfig.ts` imports nothing back).
 
-`useGitColors` (`src/renderer/src/useGitColors.ts`) pushes each color onto `document.documentElement`
-as a custom property that `main.css` consumes with the default as its fallback: `git` through the
-explicit `cssVars` map (`--git-*`, since those names are not mechanical), `syntax` as `--syntax-` plus
-the kebab-cased key. `lanes` is returned to `GitPanel` since SVG strokes need the value in JS.
+The picker is `ThemeSelect` (bottom-left of the home page): it lists `theme:list`, shows the active
+name, and writes the choice through `snowconfig:setTheme`. It is styled with the `--ui-*` vars, so the
+dropdown itself recolors with the theme it selects.
+
+Three sections: `ui` (the app chrome outside the git view — action bar, tab bar, tabs, buttons,
+dropdowns, dialogs, home page, terminal backgrounds), `git` (git-view chrome and diff backgrounds),
+and `syntax` (diff highlight token colors). `src/main/theme.ts` owns it: it writes the defaults on
+first launch, reads and validates on `theme:get`, and `fs.watch`es the directory to broadcast
+`theme:changed` on edit. Unknown or malformed values fall back to the defaults per key, so a bad edit
+degrades instead of breaking — `mergeColors` drives that off the keys of `defaultTheme`, so the
+defaults are the only key list. Because the default file is written with `flag: 'wx'`, an existing
+`theme.json` never grows a newly-added block (e.g. `ui`) on disk; the keys are whatever the matching
+`defaultTheme` section lists, and a missing section merges wholesale to defaults.
+
+`themeStore.ts` is the single renderer theme subscription: it fetches `theme:get` once, listens on
+`theme:changed`/`snowconfig:changed`, and fans the result out to every consumer through
+`useSyncExternalStore` — so opening N terminals no longer means N `theme:get` calls. It pushes each
+color onto `document.documentElement` as a custom property that `main.css` consumes with the default
+as its fallback: `git` through the explicit `cssVars` map (`--git-*`, since those names are not
+mechanical), `ui` as `--ui-` and `syntax` as `--syntax-`, both plus the kebab-cased key. `useGitColors`
+is a thin wrapper returning `theme.git`; `lanes` off it reaches `GitPanel` since SVG strokes need the
+value in JS.
+
+The `--ui-*` properties replaced the Catppuccin hexes the chrome CSS used to hardcode. The
+replacement was scoped to skip the git-view block (`.git-panel` … `.commit-truncated`), which stays
+on `--git-*`/`--syntax-*` — several `--ui-*` defaults (`accent`, `placeholder`, `borderHover`) share a
+hex with a `git`/`syntax` fallback, so a blind swap would have nested `--ui-*` inside those fallbacks.
+`ui.terminalBackground` is deliberately its own key (not `surface`) so the terminal panes theme
+independently: it drives both `.terminal-host`/`.xterm-viewport` in CSS **and** the xterm.js
+`theme.background`. `Terminal.tsx` reads the shared `themeStore` and writes `term.options.theme` so
+panes recolor live (foreground follows `ui.text`; cursor stays hardcoded).
+
+`lanes` is the whole per-column palette: edge strokes take `lanes[parentCol]`, and each commit node
+gets its own gradient from the adjacent pair — `--grad-top: lanes[col]`, `--grad-bottom: lanes[col+1]`
+(both set inline per node), so every column animates through its own color range rather than sharing
+one gradient. When the `.snowconfig` `gradients` toggle is off, `GitPanel` sets `--grad-bottom` equal
+to `--grad-top` and adds `git-graph-flat` (which kills the wave animation), so nodes are the solid lane
+color — still distinct per column. There is deliberately no `nodeGradientTop`/`nodeGradientBottom`
+theme key: node color is derived entirely from `lanes`.
 
 The `--syntax-*` properties are consumed by `.commit-file-section .token.*` rules — scoped to the
 element `DiffBody` itself renders, not to the surrounding scroll container, so highlighting follows
@@ -133,8 +173,8 @@ element `DiffBody` itself renders, not to the surrounding scroll container, so h
 
 `strongText`, `accent`, `buttonBorder`, and `buttonBorderHover` model the button palette the git view
 shares (`.commit-toggle-button`, `.commit-totop-button`, `.commit-subject`, `.commit-file-title`). The
-action bar and the `picker-*` dropdowns still hardcode the same hexes — they predate the theme system
-and are not part of the git view it covers.
+action bar and the `picker-*` dropdowns are the git view's near-neighbours but are chrome, so they
+theme through the `ui` section (`--ui-*`), not these `git` keys.
 
 #### `.snowignore`
 
@@ -155,14 +195,18 @@ is already staged is left alone — snow only filters what it adds.
 Session presets for the home tab, as JSON. `src/main/snowconfig.ts` mirrors `theme.ts`'s lifecycle
 (default written with `flag: 'wx'` on first launch, directory `fs.watch` broadcasting
 `snowconfig:changed`). Shape is
-`{ presets: { name, cwd, default?, commands? }[], name?, startupCommand? }`; entries missing a
-string `name`/`cwd` are dropped, and a leading `~` in `cwd` is expanded to the home dir **only on
+`{ presets: { name, cwd, default?, commands? }[], name?, startupCommand?, gradients?, theme?, tourSeen? }`; entries
+missing a string `name`/`cwd` are dropped, and a leading `~` in `cwd` is expanded to the home dir **only on
 read**, so the renderer gets absolute paths while the file keeps the raw `~`. The top-level `name`
 drives the home tab's `Hello {name}` greeting (falling back to `snow`); `seedName()` on registration
 fills it in **once** when absent by resolving the GitHub name (`gh api user`, then
 `git config user.name`) and rewriting the file, so a user-set `name` is never overwritten and every
 write path preserves it. `startupCommand` is the command each session's main terminal(s) run
-(default `claude` in the renderer when absent).
+(default `claude` in the renderer when absent). `gradients` is a boolean (default `true` when absent)
+that `useSnowconfig` exposes and `App` passes to `GitPanel` to toggle the animated per-column node
+gradients on or off. `theme` is the active theme's base filename under `themes/` (see `theme.json`
+above); the home-page `ThemeSelect` picker writes it through `snowconfig:setTheme`, and `theme.ts`
+reads it back via `activeThemeName()` to pick which file to load.
 
 `commands` is **per preset** — the shell-command buttons the tab bar shows to the right of its `+`
 when the active session belongs to that preset. `App` resolves the active preset by matching the
@@ -181,13 +225,20 @@ shared `pty:exit` listener. Background PTY ids come from the shared `nextTermina
 (`src/renderer/src/terminalId.ts`), the same allocator `Terminal` uses, so they never collide with
 pane ids.
 
+`tourSeen` is a boolean set once the first-run guided `Tour` is dismissed. It lives here **deliberately
+instead of renderer `localStorage`**: a synchronous `localStorage.getItem` on the startup path was
+observed blocking the renderer's main thread for ~5s while Chromium's DOM-Storage backend opened,
+freezing first paint and interactivity. Reading it from the already-loaded snowconfig (async IPC) keeps
+that off the main thread entirely — no renderer code touches `localStorage`.
+
 Every write handler goes through `mutateConfig`, which owns the read → error-bail → write sequence and
-hands the callback the whole parsed config (`{ presets, name, startupCommand }`), so passthrough
-fields are structural — no write path can drop a top-level field. The callback returns `false` to
-abort without writing (bad index, missing preset). Beyond `snowconfig:get` it exposes write handlers —
-`snowconfig:addPreset`, `snowconfig:setDefault(index)` (index `-1` clears the default),
-`snowconfig:removePreset(index)`, `snowconfig:addCommand(presetIndex, command)`, and
-`snowconfig:removeCommand(presetIndex, index)` — that mutate the parsed config and rewrite the file;
+hands the callback the whole parsed config (`{ presets, name, startupCommand, gradients, theme, tourSeen }`), so
+passthrough fields are structural — no write path can drop a top-level field. The callback returns
+`false` to abort without writing (bad index, missing preset). Beyond `snowconfig:get` it exposes write
+handlers — `snowconfig:addPreset`, `snowconfig:setDefault(index)` (index `-1` clears the default),
+`snowconfig:removePreset(index)`, `snowconfig:addCommand(presetIndex, command)`,
+`snowconfig:removeCommand(presetIndex, index)`, `snowconfig:setTheme(name)` (empty clears it back
+to the default `theme`), and `snowconfig:setTourSeen()` (marks the tour dismissed) — that mutate the parsed config and rewrite the file;
 the fs.watch broadcast then keeps every window in sync. `useSnowconfig` (`src/renderer/src/useSnowconfig.ts`) is the single subscription;
 `App` reads it so the tab strip's `+` button opens the `default` preset's cwd (home dir if none), and
 `HomePage` renders each preset with a default checkbox (radio-like via `setDefault`) plus an add
@@ -357,6 +408,6 @@ The default shell is `powershell.exe` on Windows, `$SHELL` (or `/bin/bash`) else
 
 - Do not write comments. Let the code speak for itself.
 - Do not vertically align text with uneven spacing (no padding names/values with extra spaces to line up columns).
-- Renderer terminal font is **Hack Nerd Font Mono**, bundled so Starship glyphs render aligned without a system install: the four Mono weights live in `src/renderer/src/assets/fonts/`, are declared as `@font-face` in `assets/fonts.css`, and `main.tsx` awaits `document.fonts.load` for each weight before mounting `App` so xterm's canvas measures real glyph metrics. The stack still falls back to Menlo/Consolas/Cascadia/monospace.
+- Renderer terminal font is **Hack Nerd Font Mono**, bundled so Starship glyphs render aligned without a system install: the four Mono weights live in `src/renderer/src/assets/fonts/` (~2.7 MB each), are declared as `@font-face` (`font-display: block`) in `assets/fonts.css`. Because `block` hides glyphs until the weight loads, the home page — which uses only the **regular** weight for its nerd-glyph icons — would flash blank icons if mounted before that weight is ready. So `main.tsx` awaits **only the regular weight** before mounting `App` (correct icons, ~¼ the startup font cost of blocking on all four), then loads bold/italic/bold-italic in the background and dispatches a `snow:fonts-ready` window event; `Terminal.tsx` listens for it and refits so xterm's canvas re-measures against real glyph metrics once the terminal weights arrive. The stack still falls back to Menlo/Consolas/Cascadia/monospace.
 - `@renderer` path alias maps to `src/renderer/src/` (see `electron.vite.config.ts` and `tsconfig.web.json`).
 - New privileged capabilities follow the same pattern: add an `ipcMain` handler in main, expose a wrapper in preload's `api`, never give the renderer direct Node access.

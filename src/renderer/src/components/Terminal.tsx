@@ -4,6 +4,8 @@ import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import '@xterm/xterm/css/xterm.css'
 import { nextTerminalId } from '../terminalId'
+import { subscribeTheme, getTheme } from '../themeStore'
+import type { Theme } from '../themeStore'
 
 const searchOptions = {
   decorations: {
@@ -14,6 +16,10 @@ const searchOptions = {
     activeMatchBorder: '#f9e2af',
     activeMatchColorOverviewRuler: '#f38ba8'
   }
+}
+
+function xtermTheme(ui: Theme['ui']): { background: string; foreground: string } {
+  return { background: ui.terminalBackground, foreground: ui.text }
 }
 
 function parseOsc7(payload: string): string | null {
@@ -128,7 +134,15 @@ function Terminal({
     const resizeObserver = new ResizeObserver(resize)
     resizeObserver.observe(container)
 
+    const applyTheme = (): void => {
+      const theme = getTheme()
+      if (theme) term.options.theme = { ...term.options.theme, ...xtermTheme(theme.ui) }
+    }
+    applyTheme()
+    const offTheme = subscribeTheme(applyTheme)
+
     return () => {
+      offTheme()
       resizeObserver.disconnect()
       oscDisposable.dispose()
       searchResults.dispose()

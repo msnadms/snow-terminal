@@ -2,6 +2,7 @@ import { ipcMain, BrowserWindow } from 'electron'
 import fs from 'fs'
 import path from 'path'
 import { configDir } from './config'
+import { activeThemeName } from './snowconfig'
 import { log } from './log'
 
 export interface GitColors {
@@ -31,9 +32,26 @@ export interface GitColors {
   diffDeleteGutter: string
   diffAddText: string
   diffDeleteText: string
-  nodeGradientTop: string
-  nodeGradientBottom: string
   lanes: string[]
+}
+
+export interface UiColors {
+  background: string
+  chrome: string
+  surface: string
+  surfaceHover: string
+  terminalBackground: string
+  border: string
+  borderHover: string
+  borderStrong: string
+  text: string
+  mutedText: string
+  faintText: string
+  placeholder: string
+  accent: string
+  success: string
+  danger: string
+  snow: string
 }
 
 export interface SyntaxColors {
@@ -53,6 +71,7 @@ export interface SyntaxColors {
 }
 
 export interface Theme {
+  ui: UiColors
   git: GitColors
   syntax: SyntaxColors
 }
@@ -64,6 +83,24 @@ export interface ThemeResult {
 }
 
 const defaultTheme: Theme = {
+  ui: {
+    background: '#181825',
+    chrome: '#11111b',
+    surface: '#1e1e2e',
+    surfaceHover: '#313244',
+    terminalBackground: '#1e1e2e',
+    border: '#313244',
+    borderHover: '#45475a',
+    borderStrong: '#585b70',
+    text: '#cdd6f4',
+    mutedText: '#a6adc8',
+    faintText: '#6c7086',
+    placeholder: '#5d6f8f',
+    accent: '#a6dcf0',
+    success: '#a6e3a1',
+    danger: '#f38ba8',
+    snow: '#cdd6f4'
+  },
   git: {
     background: '#171c2b',
     panelBackground: '#121724',
@@ -91,8 +128,6 @@ const defaultTheme: Theme = {
     diffDeleteGutter: '#4a2734',
     diffAddText: '#7fdcc0',
     diffDeleteText: '#e89aac',
-    nodeGradientTop: '#89dceb',
-    nodeGradientBottom: '#3b82f6',
     lanes: ['#6fb2f0', '#7fd8e8', '#9d9ce8', '#c09ae0', '#4f86c6', '#7fdcc0', '#a6c8f0', '#6e7fb8']
   },
   syntax: {
@@ -112,8 +147,17 @@ const defaultTheme: Theme = {
   }
 }
 
+export function themesDir(): string {
+  return path.join(configDir(), 'themes')
+}
+
+function themeFile(name: string): string {
+  const safe = name.replace(/[^a-zA-Z0-9_-]/g, '') || 'theme'
+  return path.join(themesDir(), `${safe}.json`)
+}
+
 export function themePath(): string {
-  return path.join(configDir(), 'theme.json')
+  return themeFile(activeThemeName())
 }
 
 const hexColor = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i
@@ -152,7 +196,11 @@ function readTheme(): ThemeResult {
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>
     return {
-      theme: { git: mergeGit(raw.git), syntax: mergeColors(raw.syntax, defaultTheme.syntax) },
+      theme: {
+        ui: mergeColors(raw.ui, defaultTheme.ui),
+        git: mergeGit(raw.git),
+        syntax: mergeColors(raw.syntax, defaultTheme.syntax)
+      },
       path: file,
       error: null
     }
@@ -164,7 +212,7 @@ function readTheme(): ThemeResult {
 }
 
 function writeDefaultTheme(): void {
-  const file = themePath()
+  const file = themeFile('theme')
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true })
     fs.writeFileSync(file, `${JSON.stringify(defaultTheme, null, 2)}\n`, { flag: 'wx' })
@@ -177,11 +225,9 @@ let watcher: fs.FSWatcher | null = null
 let timer: NodeJS.Timeout | null = null
 
 function watchTheme(): void {
-  const file = themePath()
-  const name = path.basename(file)
   try {
-    const fsWatcher = fs.watch(path.dirname(file), (_event, filename) => {
-      if (filename && path.basename(filename) !== name) return
+    const fsWatcher = fs.watch(themesDir(), (_event, filename) => {
+      if (filename && !filename.endsWith('.json')) return
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
         timer = null
@@ -213,4 +259,15 @@ export function registerThemeHandlers(): void {
   writeDefaultTheme()
   watchTheme()
   ipcMain.handle('theme:get', (): ThemeResult => readTheme())
+  ipcMain.handle('theme:list', (): string[] => {
+    try {
+      return fs
+        .readdirSync(themesDir())
+        .filter((f) => f.endsWith('.json'))
+        .map((f) => f.slice(0, -'.json'.length))
+        .sort()
+    } catch {
+      return ['theme']
+    }
+  })
 }

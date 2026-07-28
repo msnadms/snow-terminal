@@ -130,7 +130,7 @@ function WorkflowSelect({ cwd }: WorkflowSelectProps): React.JSX.Element | null 
     : workflows
 
   return (
-    <div className="picker-select" ref={rootRef}>
+    <div className="picker-select picker-workflow" ref={rootRef}>
       <button
         className={`picker-button${action.className}`}
         disabled={action.pending}

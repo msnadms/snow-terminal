@@ -20,6 +20,9 @@ export interface SnowConfig {
   presets: Preset[]
   name?: string
   startupCommand?: string
+  gradients?: boolean
+  theme?: string
+  tourSeen?: boolean
 }
 
 export interface SnowconfigResult {
@@ -75,10 +78,19 @@ function validateStringField(raw: unknown, key: string): string | null {
   return value.trim() || null
 }
 
+function validateBooleanField(raw: unknown, key: string): boolean | null {
+  if (!raw || typeof raw !== 'object') return null
+  const value = (raw as Record<string, unknown>)[key]
+  return typeof value === 'boolean' ? value : null
+}
+
 interface RawConfig {
   presets: Preset[]
   name: string | null
   startupCommand: string | null
+  gradients: boolean | null
+  theme: string | null
+  tourSeen: boolean | null
   error: string | null
 }
 
@@ -90,6 +102,9 @@ function rawConfig(): RawConfig {
       presets: validate(raw),
       name: validateStringField(raw, 'name'),
       startupCommand: validateStringField(raw, 'startupCommand'),
+      gradients: validateBooleanField(raw, 'gradients'),
+      theme: validateStringField(raw, 'theme'),
+      tourSeen: validateBooleanField(raw, 'tourSeen'),
       error: null
     }
   } catch (err) {
@@ -99,24 +114,42 @@ function rawConfig(): RawConfig {
         presets: validate(defaultConfig),
         name: null,
         startupCommand: null,
+        gradients: null,
+        theme: null,
+        tourSeen: null,
         error: null
       }
-    return { presets: [], name: null, startupCommand: null, error: e.message }
+    return {
+      presets: [],
+      name: null,
+      startupCommand: null,
+      gradients: null,
+      theme: null,
+      tourSeen: null,
+      error: e.message
+    }
   }
 }
 
 function readSnowconfig(): SnowconfigResult {
   const file = snowconfigPath()
-  const { presets, name, startupCommand, error } = rawConfig()
+  const { presets, name, startupCommand, gradients, theme, tourSeen, error } = rawConfig()
   return {
     config: {
       presets: presets.map((p) => ({ ...p, cwd: expandHome(p.cwd) })),
       ...(name ? { name } : {}),
-      ...(startupCommand ? { startupCommand } : {})
+      ...(startupCommand ? { startupCommand } : {}),
+      ...(gradients !== null ? { gradients } : {}),
+      ...(theme ? { theme } : {}),
+      ...(tourSeen !== null ? { tourSeen } : {})
     },
     path: file,
     error
   }
+}
+
+export function activeThemeName(): string {
+  return rawConfig().theme ?? 'theme'
 }
 
 function writeConfig(next: Omit<RawConfig, 'error'>): SnowconfigResult {
@@ -126,6 +159,9 @@ function writeConfig(next: Omit<RawConfig, 'error'>): SnowconfigResult {
     const data: SnowConfig = { presets: next.presets }
     if (next.name) data.name = next.name
     if (next.startupCommand) data.startupCommand = next.startupCommand
+    if (next.gradients !== null) data.gradients = next.gradients
+    if (next.theme) data.theme = next.theme
+    if (next.tourSeen !== null) data.tourSeen = next.tourSeen
     fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`)
   } catch (err) {
     return { config: { presets: [] }, path: file, error: (err as Error).message }
@@ -134,9 +170,9 @@ function writeConfig(next: Omit<RawConfig, 'error'>): SnowconfigResult {
 }
 
 function mutateConfig(mutate: (cfg: Omit<RawConfig, 'error'>) => boolean): SnowconfigResult {
-  const { presets, name, startupCommand, error } = rawConfig()
+  const { presets, name, startupCommand, gradients, theme, tourSeen, error } = rawConfig()
   if (error) return readSnowconfig()
-  const cfg = { presets, name, startupCommand }
+  const cfg = { presets, name, startupCommand, gradients, theme, tourSeen }
   if (!mutate(cfg)) return readSnowconfig()
   return writeConfig(cfg)
 }
@@ -272,6 +308,19 @@ export function registerSnowconfigHandlers(): void {
         if (preset.commands.length === 0) delete preset.commands
         return true
       })
+  )
+  ipcMain.handle('snowconfig:setTheme', (_e, theme: string): SnowconfigResult => {
+    const name = String(theme ?? '').trim()
+    return mutateConfig((cfg) => {
+      cfg.theme = name || null
+      return true
+    })
+  })
+  ipcMain.handle('snowconfig:setTourSeen', (): SnowconfigResult =>
+    mutateConfig((cfg) => {
+      cfg.tourSeen = true
+      return true
+    })
   )
   ipcMain.handle('snowconfig:chooseDir', async (): Promise<string | null> => {
     const win = BrowserWindow.getFocusedWindow()

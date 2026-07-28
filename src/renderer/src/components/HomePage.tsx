@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import type { Preset } from '../useSnowconfig'
 import ContextMenu from './ContextMenu'
 import SnowFall from './SnowFall'
+import ThemeSelect from './ThemeSelect'
 
 interface HomePageProps {
   presets: Preset[]
   name: string | null
+  theme: string
   error: string | null
   onOpenPreset: (cwd: string) => void
 }
@@ -25,6 +27,7 @@ function chooseGreeting(): string {
 function HomePage({
   presets,
   name: greetingName,
+  theme,
   error,
   onOpenPreset
 }: HomePageProps): React.JSX.Element {
@@ -77,6 +80,7 @@ function HomePage({
   return (
     <div className="home-page">
       <SnowFall />
+      <ThemeSelect value={theme} onChange={(name) => window.api.snowconfig.setTheme(name)} />
       <div className="home-content">
         <div className="home-title">
           {greetingName ? `${chooseGreeting()}, ${greetingName}` : 'snow'}

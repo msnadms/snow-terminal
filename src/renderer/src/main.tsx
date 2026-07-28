@@ -13,9 +13,8 @@ function render(): void {
 }
 
 const font = 'Hack Nerd Font Mono'
-Promise.allSettled([
-  document.fonts.load(`13px "${font}"`),
-  document.fonts.load(`bold 13px "${font}"`),
-  document.fonts.load(`italic 13px "${font}"`),
-  document.fonts.load(`bold italic 13px "${font}"`)
-]).finally(render)
+
+document.fonts
+  .load(`13px "${font}"`)
+  .catch(() => undefined)
+  .finally(render)

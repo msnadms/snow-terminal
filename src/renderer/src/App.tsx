@@ -6,6 +6,7 @@ import Session from './components/Session'
 import BrowserTab from './components/BrowserTab'
 import TabBar from './components/TabBar'
 import HomePage from './components/HomePage'
+import Tour from './components/Tour'
 import WorkingDiffView from './components/WorkingDiffView'
 import { basename, shortHash } from './format'
 import { nextTerminalId } from './terminalId'
@@ -27,8 +28,17 @@ function App(): React.JSX.Element {
   const [running, setRunning] = useState<Record<string, number>>({})
   const [browserTitles, setBrowserTitles] = useState<Record<number, string>>({})
   const [frozen, setFrozen] = useState<{ cwd?: string } | null>(null)
+  const [tour, setTour] = useState(false)
   const nextIdRef = useRef(1)
-  const { presets, name: configName, startupCommand, error: presetsError } = useSnowconfig()
+  const {
+    presets,
+    name: configName,
+    startupCommand,
+    gradients,
+    theme: themeName,
+    tourSeen,
+    error: presetsError
+  } = useSnowconfig()
 
   const activeTab = tabs.find((t) => t.id === activeId)
   const cwd =
@@ -155,6 +165,23 @@ function App(): React.JSX.Element {
     })
   }, [])
 
+  useEffect(() => {
+    if (tourSeen) return
+    if (activeTab?.kind !== 'shell' || !cwd) return
+    let cancelled = false
+    window.api.git.isRepo(cwd).then((repo) => {
+      if (!cancelled && repo) setTour(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [tourSeen, activeTab?.kind, cwd])
+
+  const closeTour = (): void => {
+    window.api.snowconfig.setTourSeen()
+    setTour(false)
+  }
+
   const closeSession = (id: number): void => {
     const index = tabs.findIndex((t) => t.id === id)
     if (index === -1) return
@@ -212,6 +239,7 @@ function App(): React.JSX.Element {
               <HomePage
                 presets={presets}
                 name={configName}
+                theme={themeName ?? 'theme'}
                 error={presetsError}
                 onOpenPreset={(dir) => addSession(dir)}
               />
@@ -262,8 +290,14 @@ function App(): React.JSX.Element {
             })}
           </div>
         </div>
-        <GitPanel cwd={gitCwd} onOpenCommit={openCommit} onOpenDiff={openDiff} />
+        <GitPanel
+          cwd={gitCwd}
+          gradients={gradients}
+          onOpenCommit={openCommit}
+          onOpenDiff={openDiff}
+        />
       </div>
+      {tour && <Tour onClose={closeTour} />}
     </div>
   )
 }
