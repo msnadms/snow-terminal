@@ -24,12 +24,12 @@ const steps: Step[] = [
   },
   {
     title: 'Working tree diff',
-    body: 'Click the branch name to review every uncommitted change together as one diff.',
+    body: 'Click the branch name to review every uncommitted change together as one diff. Right-click it to open that diff in a split beside the current session instead of a new tab.',
     selectors: ['.git-branch-link', '.git-branch']
   },
   {
     title: 'Commit diff',
-    body: 'Each dot on the graph is a commit. Click one to open that commit’s full diff in a tab.',
+    body: 'Each dot on the graph is a commit. Click one to open that commit’s full diff in a tab, or right-click to open it in a split beside the current session.',
     selectors: ['.git-node', '.git-log']
   },
   {

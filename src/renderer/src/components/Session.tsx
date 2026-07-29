@@ -1,3 +1,6 @@
+import type { Split } from '../App'
+import CommitView from './CommitView'
+import WorkingDiffView from './WorkingDiffView'
 import Terminal from './Terminal'
 
 interface SessionProps {
@@ -5,7 +8,10 @@ interface SessionProps {
   cwd?: string
   paneIds: number[]
   startupCommand: string
+  split?: Split
   onClosePane: (paneId: number) => void
+  onCloseSplit: () => void
+  onOpenCommit: (cwd: string, hash: string) => void
   onCwd: (cwd: string) => void
 }
 
@@ -14,7 +20,10 @@ function Session({
   cwd,
   paneIds,
   startupCommand,
+  split,
   onClosePane,
+  onCloseSplit,
+  onOpenCommit,
   onCwd
 }: SessionProps): React.JSX.Element {
   return (
@@ -39,6 +48,27 @@ function Session({
             />
           </div>
         ))}
+        {split && (
+          <div className="terminal-diff-split">
+            {split.kind === 'commit' ? (
+              <CommitView
+                active={active}
+                cwd={split.cwd}
+                hash={split.hash}
+                onOpenCommit={onOpenCommit}
+                onClose={onCloseSplit}
+              />
+            ) : (
+              <WorkingDiffView
+                active={active}
+                cwd={split.cwd}
+                focusKey={0}
+                onOpenCommit={onOpenCommit}
+                onClose={onCloseSplit}
+              />
+            )}
+          </div>
+        )}
       </div>
       <div className="terminal-secondary">
         <Terminal cwd={cwd} onCwd={onCwd} active={active} />

@@ -10,9 +10,16 @@ interface CommitViewProps {
   cwd: string
   hash: string
   onOpenCommit?: (cwd: string, hash: string) => void
+  onClose?: () => void
 }
 
-function CommitView({ active, cwd, hash, onOpenCommit }: CommitViewProps): React.JSX.Element {
+function CommitView({
+  active,
+  cwd,
+  hash,
+  onOpenCommit,
+  onClose
+}: CommitViewProps): React.JSX.Element {
   const [detail, setDetail] = useState<GitCommitDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -78,7 +85,11 @@ function CommitView({ active, cwd, hash, onOpenCommit }: CommitViewProps): React
     )
   }
 
-  return <DiffScroll active={active}>{body()}</DiffScroll>
+  return (
+    <DiffScroll active={active} onClose={onClose}>
+      {body()}
+    </DiffScroll>
+  )
 }
 
 export default CommitView

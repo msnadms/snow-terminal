@@ -14,6 +14,8 @@ import { useSnowconfig } from './useSnowconfig'
 
 type ActiveId = number | 'home'
 
+export type Split = { kind: 'commit'; cwd: string; hash: string } | { kind: 'diff'; cwd: string }
+
 type Tab =
   | { kind: 'shell'; id: number; cwd?: string; startupCommand?: string }
   | { kind: 'commit'; id: number; cwd: string; hash: string }
@@ -25,6 +27,7 @@ function App(): React.JSX.Element {
   const [activeId, setActiveId] = useState<ActiveId>('home')
   const [cwds, setCwds] = useState<Record<number, string | undefined>>({})
   const [panes, setPanes] = useState<Record<number, number[]>>({})
+  const [splits, setSplits] = useState<Record<number, Split>>({})
   const [running, setRunning] = useState<Record<string, number>>({})
   const [browserTitles, setBrowserTitles] = useState<Record<number, string>>({})
   const [frozen, setFrozen] = useState<{ cwd?: string } | null>(null)
@@ -127,6 +130,28 @@ function App(): React.JSX.Element {
     setPanes((prev) => ({ ...prev, [activeTab.id]: [...(prev[activeTab.id] ?? []), paneId] }))
   }
 
+  const openSplit = (split: Split): void => {
+    if (!activeTab || activeTab.kind !== 'shell') return
+    setSplits((prev) => ({ ...prev, [activeTab.id]: split }))
+  }
+
+  const openCommitSplit = (cwd: string, hash: string): void => {
+    openSplit({ kind: 'commit', cwd, hash })
+  }
+
+  const openDiffSplit = (cwd: string): void => {
+    openSplit({ kind: 'diff', cwd })
+  }
+
+  const closeSplit = (sessionId: number): void => {
+    setSplits((prev) => {
+      if (!(sessionId in prev)) return prev
+      const next = { ...prev }
+      delete next[sessionId]
+      return next
+    })
+  }
+
   const closePane = (sessionId: number, paneId: number): void => {
     setPanes((prev) => {
       const current = prev[sessionId]
@@ -198,6 +223,7 @@ function App(): React.JSX.Element {
     }
     setCwds(dropKey)
     setPanes(dropKey)
+    setSplits(dropKey)
     setBrowserTitles(dropKey)
   }
 
@@ -285,6 +311,9 @@ function App(): React.JSX.Element {
                   cwd={tab.cwd}
                   paneIds={panes[tab.id] ?? []}
                   startupCommand={tab.startupCommand ?? startupCommand ?? 'claude'}
+                  split={splits[tab.id]}
+                  onCloseSplit={() => closeSplit(tab.id)}
+                  onOpenCommit={openCommit}
                   onClosePane={(paneId) => closePane(tab.id, paneId)}
                   onCwd={(next) => setCwds((prev) => ({ ...prev, [tab.id]: next }))}
                 />
@@ -296,7 +325,9 @@ function App(): React.JSX.Element {
           cwd={gitCwd}
           gradients={gradients}
           onOpenCommit={openCommit}
+          onOpenCommitSplit={activeTab?.kind === 'shell' ? openCommitSplit : undefined}
           onOpenDiff={openDiff}
+          onOpenDiffSplit={activeTab?.kind === 'shell' ? openDiffSplit : undefined}
         />
       </div>
       {tour && <Tour onClose={closeTour} />}

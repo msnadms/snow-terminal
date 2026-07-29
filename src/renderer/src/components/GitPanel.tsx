@@ -172,7 +172,9 @@ interface RepoSectionProps {
   gradients: boolean
   maxCommits: number
   onOpenCommit?: OpenCommit
+  onOpenCommitSplit?: OpenCommit
   onOpenDiff?: OpenDiff
+  onOpenDiffSplit?: (cwd: string) => void
 }
 
 function RepoSection({
@@ -182,7 +184,9 @@ function RepoSection({
   gradients,
   maxCommits,
   onOpenCommit,
-  onOpenDiff
+  onOpenCommitSplit,
+  onOpenDiff,
+  onOpenDiffSplit
 }: RepoSectionProps): React.JSX.Element {
   const [status, setStatus] = useState<GitStatus | null>(null)
   const [log, setLog] = useState<GitLog | null>(null)
@@ -270,11 +274,20 @@ function RepoSection({
       {branch ? (
         <span
           className="git-branch git-branch-link"
-          title={`${branch}\nClick to view uncommitted changes`}
+          title={`${branch}\nClick to view uncommitted changes${
+            onOpenDiffSplit ? '\nRight-click to open in a split' : ''
+          }`}
           onClick={(event) => {
             event.stopPropagation()
             setTip(null)
             onOpenDiff?.(cwd, branch)
+          }}
+          onContextMenu={(event) => {
+            if (!onOpenDiffSplit) return
+            event.preventDefault()
+            event.stopPropagation()
+            setTip(null)
+            onOpenDiffSplit(cwd)
           }}
         >
           {branch}
@@ -403,6 +416,12 @@ function RepoSection({
                   }}
                   onMouseLeave={() => setTip(null)}
                   onClick={() => onOpenCommit?.(cwd, c.hash)}
+                  onContextMenu={(ev) => {
+                    if (!onOpenCommitSplit) return
+                    ev.preventDefault()
+                    setTip(null)
+                    onOpenCommitSplit(cwd, c.hash)
+                  }}
                 />
                 <span className="git-row-text" style={{ paddingLeft: graphWidth }}>
                   <span className="git-author">{c.author}</span>
@@ -437,14 +456,18 @@ interface GitPanelProps {
   cwd?: string
   gradients?: boolean
   onOpenCommit?: OpenCommit
+  onOpenCommitSplit?: OpenCommit
   onOpenDiff?: OpenDiff
+  onOpenDiffSplit?: (cwd: string) => void
 }
 
 function GitPanel({
   cwd,
   gradients = true,
   onOpenCommit,
-  onOpenDiff
+  onOpenCommitSplit,
+  onOpenDiff,
+  onOpenDiffSplit
 }: GitPanelProps): React.JSX.Element {
   const [repos, setRepos] = useState<GitRepo[] | null>(null)
   const colors = useGitColors()
@@ -489,7 +512,9 @@ function GitPanel({
             gradients={gradients}
             maxCommits={repos.length > 1 ? MULTI_REPO_COMMITS : SINGLE_REPO_COMMITS}
             onOpenCommit={onOpenCommit}
+            onOpenCommitSplit={onOpenCommitSplit}
             onOpenDiff={onOpenDiff}
+            onOpenDiffSplit={onOpenDiffSplit}
           />
         ))}
       </div>

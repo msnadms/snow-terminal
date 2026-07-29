@@ -4,6 +4,7 @@ import type { Find } from '@renderer/useFind'
 
 interface DiffScrollProps {
   active: boolean
+  onClose?: () => void
   children: React.ReactNode
 }
 
@@ -53,7 +54,7 @@ function FindBar({
   )
 }
 
-function DiffScroll({ active, children }: DiffScrollProps): React.JSX.Element {
+function DiffScroll({ active, onClose, children }: DiffScrollProps): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const [scrolled, setScrolled] = useState(false)
   const find = useFind(hostRef, active)
@@ -68,6 +69,15 @@ function DiffScroll({ active, children }: DiffScrollProps): React.JSX.Element {
       <div className="commit-tools">
         <div className="commit-tools-row">
           {find.open && <FindBar {...find} />}
+          {onClose && (
+            <button
+              className="terminal-close commit-close-button"
+              title="Close diff"
+              onClick={onClose}
+            >
+              
+            </button>
+          )}
           {scrolled && (
             <button
               className="commit-totop-button"

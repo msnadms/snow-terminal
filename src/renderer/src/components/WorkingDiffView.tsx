@@ -11,6 +11,7 @@ interface WorkingDiffViewProps {
   focus?: string
   focusKey: number
   onOpenCommit?: (cwd: string, hash: string) => void
+  onClose?: () => void
 }
 
 function WorkingDiffView({
@@ -18,7 +19,8 @@ function WorkingDiffView({
   cwd,
   focus,
   focusKey,
-  onOpenCommit
+  onOpenCommit,
+  onClose
 }: WorkingDiffViewProps): React.JSX.Element {
   const [diff, setDiff] = useState<GitWorkingDiff | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -100,7 +102,11 @@ function WorkingDiffView({
     )
   }
 
-  return <DiffScroll active={active}>{body()}</DiffScroll>
+  return (
+    <DiffScroll active={active} onClose={onClose}>
+      {body()}
+    </DiffScroll>
+  )
 }
 
 export default WorkingDiffView
