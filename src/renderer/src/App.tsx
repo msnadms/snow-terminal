@@ -10,11 +10,13 @@ import Tour from './components/Tour'
 import WorkingDiffView from './components/WorkingDiffView'
 import { basename, shortHash } from './format'
 import { nextTerminalId } from './terminalId'
-import { useSnowconfig } from './useSnowconfig'
+import { useSnowconfig, type Preset } from './useSnowconfig'
 
 type ActiveId = number | 'home'
 
 export type Split = { kind: 'commit'; cwd: string; hash: string } | { kind: 'diff'; cwd: string }
+
+export type Pane = { id: number; cwd?: string; startupCommand?: string }
 
 type Tab =
   | { kind: 'shell'; id: number; cwd?: string; startupCommand?: string }
@@ -26,7 +28,7 @@ function App(): React.JSX.Element {
   const [tabs, setTabs] = useState<Tab[]>([])
   const [activeId, setActiveId] = useState<ActiveId>('home')
   const [cwds, setCwds] = useState<Record<number, string | undefined>>({})
-  const [panes, setPanes] = useState<Record<number, number[]>>({})
+  const [panes, setPanes] = useState<Record<number, Pane[]>>({})
   const [splits, setSplits] = useState<Record<number, Split>>({})
   const [running, setRunning] = useState<Record<string, number>>({})
   const [browserTitles, setBrowserTitles] = useState<Record<number, string>>({})
@@ -85,7 +87,7 @@ function App(): React.JSX.Element {
     const id = nextIdRef.current++
     setTabs((prev) => [...prev, { kind: 'shell', id, cwd, startupCommand }])
     if (cwd) setCwds((prev) => ({ ...prev, [id]: cwd }))
-    setPanes((prev) => ({ ...prev, [id]: [nextTerminalId()] }))
+    setPanes((prev) => ({ ...prev, [id]: [{ id: nextTerminalId() }] }))
     setActiveId(id)
   }
 
@@ -124,10 +126,13 @@ function App(): React.JSX.Element {
     setActiveId(id)
   }
 
-  const splitActive = (): void => {
+  const splitActive = (preset?: Preset): void => {
     if (!activeTab || activeTab.kind !== 'shell') return
     const paneId = nextTerminalId()
-    setPanes((prev) => ({ ...prev, [activeTab.id]: [...(prev[activeTab.id] ?? []), paneId] }))
+    const pane: Pane = preset
+      ? { id: paneId, cwd: preset.cwd, startupCommand: preset.startupCommand }
+      : { id: paneId }
+    setPanes((prev) => ({ ...prev, [activeTab.id]: [...(prev[activeTab.id] ?? []), pane] }))
   }
 
   const openSplit = (split: Split): void => {
@@ -156,7 +161,7 @@ function App(): React.JSX.Element {
     setPanes((prev) => {
       const current = prev[sessionId]
       if (!current || current.length <= 1) return prev
-      return { ...prev, [sessionId]: current.filter((p) => p !== paneId) }
+      return { ...prev, [sessionId]: current.filter((p) => p.id !== paneId) }
     })
   }
 
@@ -248,7 +253,9 @@ function App(): React.JSX.Element {
               addSession(preset?.cwd, preset?.startupCommand)
             }}
             onOpenBrowser={() => openBrowser()}
-            onSplit={splitActive}
+            onSplit={() => splitActive()}
+            presets={presets}
+            onSplitWithPreset={(preset) => splitActive(preset)}
             onToggleCommand={toggleCommand}
             onAddCommand={(command) => {
               if (activePresetIndex >= 0)
@@ -309,7 +316,7 @@ function App(): React.JSX.Element {
                   key={tab.id}
                   active={activeId === tab.id}
                   cwd={tab.cwd}
-                  paneIds={panes[tab.id] ?? []}
+                  panes={panes[tab.id] ?? []}
                   startupCommand={tab.startupCommand ?? startupCommand ?? 'claude'}
                   split={splits[tab.id]}
                   onCloseSplit={() => closeSplit(tab.id)}

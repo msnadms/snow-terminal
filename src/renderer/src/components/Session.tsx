@@ -1,4 +1,4 @@
-import type { Split } from '../App'
+import type { Pane, Split } from '../App'
 import CommitView from './CommitView'
 import WorkingDiffView from './WorkingDiffView'
 import Terminal from './Terminal'
@@ -6,7 +6,7 @@ import Terminal from './Terminal'
 interface SessionProps {
   active: boolean
   cwd?: string
-  paneIds: number[]
+  panes: Pane[]
   startupCommand: string
   split?: Split
   onClosePane: (paneId: number) => void
@@ -18,7 +18,7 @@ interface SessionProps {
 function Session({
   active,
   cwd,
-  paneIds,
+  panes,
   startupCommand,
   split,
   onClosePane,
@@ -29,20 +29,20 @@ function Session({
   return (
     <div className="terminal-host" style={{ display: active ? 'flex' : 'none' }}>
       <div className="terminal-main">
-        {paneIds.map((id, i) => (
-          <div className="terminal-split" key={id}>
-            {paneIds.length > 1 && (
+        {panes.map((pane, i) => (
+          <div className="terminal-split" key={pane.id}>
+            {panes.length > 1 && (
               <button
                 className="terminal-close"
-                onClick={() => onClosePane(id)}
+                onClick={() => onClosePane(pane.id)}
                 title="Close terminal"
               >
                 
               </button>
             )}
             <Terminal
-              cwd={cwd}
-              startupCommand={startupCommand}
+              cwd={pane.cwd ?? cwd}
+              startupCommand={pane.startupCommand ?? startupCommand}
               active={active}
               focusOnActivate={i === 0}
             />

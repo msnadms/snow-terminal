@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import ContextMenu from './ContextMenu'
+import type { Preset } from '../useSnowconfig'
 
 interface TabBarProps {
   sessions: { id: number }[]
@@ -7,11 +8,13 @@ interface TabBarProps {
   labels: Record<number, string>
   commands: string[]
   runningCommands: string[]
+  presets: Preset[]
   onSelect: (id: number | 'home') => void
   onClose: (id: number) => void
   onAdd: () => void
   onOpenBrowser: () => void
   onSplit: () => void
+  onSplitWithPreset: (preset: Preset) => void
   onToggleCommand: (command: string) => void
   onAddCommand: (command: string) => void
   onRemoveCommand: (index: number) => void
@@ -25,11 +28,13 @@ function TabBar({
   labels,
   commands,
   runningCommands,
+  presets,
   onSelect,
   onClose,
   onAdd,
   onOpenBrowser,
   onSplit,
+  onSplitWithPreset,
   onToggleCommand,
   onAddCommand,
   onRemoveCommand,
@@ -39,6 +44,7 @@ function TabBar({
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState('')
   const [menu, setMenu] = useState<{ index: number; x: number; y: number } | null>(null)
+  const [splitMenu, setSplitMenu] = useState<{ x: number; y: number } | null>(null)
 
   const submit = (): void => {
     const command = draft.trim()
@@ -144,7 +150,17 @@ function TabBar({
         )
       })}
       <span className="tabbar-divider" />
-      <button className="tab-split" onClick={onSplit} disabled={!canSplit} title="Split terminal">
+      <button
+        className="tab-split"
+        onClick={onSplit}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          const r = e.currentTarget.getBoundingClientRect()
+          setSplitMenu({ x: r.left, y: r.bottom + 4 })
+        }}
+        disabled={!canSplit}
+        title="Split terminal (right-click for presets)"
+      >
         
       </button>
       {menu && commands[menu.index] && (
@@ -152,6 +168,22 @@ function TabBar({
           <button className="context-menu-item" onClick={() => removeCommand(menu.index)}>
             Remove “{commands[menu.index]}”
           </button>
+        </ContextMenu>
+      )}
+      {splitMenu && (
+        <ContextMenu x={splitMenu.x} y={splitMenu.y} onClose={() => setSplitMenu(null)}>
+          {presets.map((preset, i) => (
+            <button
+              key={i}
+              className="context-menu-item context-menu-item--action"
+              onClick={() => {
+                onSplitWithPreset(preset)
+                setSplitMenu(null)
+              }}
+            >
+              Split with {preset.name}
+            </button>
+          ))}
         </ContextMenu>
       )}
     </div>
