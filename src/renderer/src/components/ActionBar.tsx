@@ -8,6 +8,9 @@ import { useLatestRun } from '@renderer/useLatestRun'
 
 interface ActionBarProps {
   cwd?: string
+  repoName?: string
+  repoCount?: number
+  onSwitchRepo?: () => void
   frozen: boolean
   onFreeze: (frozen: boolean) => void
   onOpenPullRequest: (url: string) => void
@@ -53,6 +56,9 @@ function syncFaceOf(tracking: string | null, ahead: number, behind: number): Syn
 
 function ActionBar({
   cwd,
+  repoName,
+  repoCount = 0,
+  onSwitchRepo,
   frozen,
   onFreeze,
   onOpenPullRequest
@@ -244,6 +250,22 @@ function ActionBar({
         </button>
       )}
       <div className="actionbar-right">
+        {repoName && (
+          <div className="actionbar-repo">
+            <span className="actionbar-repo-name" title={cwd}>
+              {repoName}
+            </span>
+            {repoCount > 1 && (
+              <button
+                className="actionbar-repo-switch"
+                onClick={onSwitchRepo}
+                title="Switch the action bar to the next repo in the split"
+              >
+                ⇄
+              </button>
+            )}
+          </div>
+        )}
         <WorkflowSelect key={`workflow-${cwd ?? 'none'}`} cwd={cwd} />
         <BranchSelect key={cwd ?? 'none'} cwd={cwd} />
         <button

@@ -7,14 +7,13 @@ type GitLog = Awaited<ReturnType<typeof window.api.git.log>>
 type GitStatus = Awaited<ReturnType<typeof window.api.git.status>>
 type GitCommit = GitLog['commits'][number]
 type GitStatusFile = GitStatus['files'][number]
-type GitRepo = Awaited<ReturnType<typeof window.api.git.discover>>[number]
+export type GitRepo = Awaited<ReturnType<typeof window.api.git.discover>>[number]
 
 const ROW = 30
 const LANE = 16
 const PADX = 12
 const DOT = 4
-const SINGLE_REPO_COMMITS = 200
-const MULTI_REPO_COMMITS = 10
+const LOG_COMMITS = 200
 
 const fallbackLanes = ['#6fb2f0', '#7fd8e8', '#9d9ce8', '#c09ae0']
 
@@ -170,7 +169,6 @@ interface RepoSectionProps {
   multi: boolean
   lanes: string[]
   gradients: boolean
-  maxCommits: number
   onOpenCommit?: OpenCommit
   onOpenCommitSplit?: OpenCommit
   onOpenDiff?: OpenDiff
@@ -182,7 +180,6 @@ function RepoSection({
   multi,
   lanes,
   gradients,
-  maxCommits,
   onOpenCommit,
   onOpenCommitSplit,
   onOpenDiff,
@@ -204,7 +201,7 @@ function RepoSection({
       try {
         const [s, l] = await Promise.all([
           window.api.git.status(cwd),
-          window.api.git.log(cwd, maxCommits)
+          window.api.git.log(cwd, LOG_COMMITS)
         ])
         if (!isCurrent()) return
         setStatus(s)
@@ -230,7 +227,7 @@ function RepoSection({
       offSnowignore()
       window.api.git.unwatch(cwd)
     }
-  }, [cwd, maxCommits, latestRun])
+  }, [cwd, latestRun])
 
   const edges = useMemo(() => (log ? buildEdges(log.commits, lanes) : []), [log, lanes])
   const labels = useMemo(() => fileLabels((status?.files ?? []).map((f) => f.path)), [status])
@@ -323,7 +320,7 @@ function RepoSection({
   )
 
   return (
-    <div className="git-repo">
+    <div className={open ? 'git-repo git-repo-open' : 'git-repo'}>
       {multi ? (
         <button
           type="button"
@@ -453,7 +450,7 @@ function RepoSection({
 }
 
 interface GitPanelProps {
-  cwd?: string
+  repos: GitRepo[] | null
   gradients?: boolean
   onOpenCommit?: OpenCommit
   onOpenCommitSplit?: OpenCommit
@@ -462,33 +459,15 @@ interface GitPanelProps {
 }
 
 function GitPanel({
-  cwd,
+  repos,
   gradients = true,
   onOpenCommit,
   onOpenCommitSplit,
   onOpenDiff,
   onOpenDiffSplit
 }: GitPanelProps): React.JSX.Element {
-  const [repos, setRepos] = useState<GitRepo[] | null>(null)
   const colors = useGitColors()
   const lanes = colors?.lanes ?? fallbackLanes
-
-  useEffect(() => {
-    let cancelled = false
-
-    window.api.git
-      .discover(cwd)
-      .then((found) => {
-        if (!cancelled) setRepos(found)
-      })
-      .catch(() => {
-        if (!cancelled) setRepos([])
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [cwd])
 
   if (!repos) return <div className="git-panel" />
 
@@ -510,7 +489,6 @@ function GitPanel({
             multi={repos.length > 1}
             lanes={lanes}
             gradients={gradients}
-            maxCommits={repos.length > 1 ? MULTI_REPO_COMMITS : SINGLE_REPO_COMMITS}
             onOpenCommit={onOpenCommit}
             onOpenCommitSplit={onOpenCommitSplit}
             onOpenDiff={onOpenDiff}

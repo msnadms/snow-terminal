@@ -385,19 +385,48 @@ registered workflow and a neutral "Workflows" when it is not.
 ## Session tabs
 
 `App.tsx` owns the tab model: `sessions` (each `{ id, cwd? }`), `activeId` (`number | 'home'`), and a
-per-session `cwds` map fed by each session's bottom-terminal OSC 7. The active session's cwd drives
-`ActionBar` and `GitPanel` exactly as a single `cwd` prop did before. `Session` renders the Claude
+per-session `cwds` map fed by each session's bottom-terminal OSC 7. The active session's terminals
+drive a **set** of repos that `ActionBar` and `GitPanel` share (see _Multi-repo git view_ below).
+`Session` renders the Claude
 (top) + shell (bottom) pair; all sessions stay mounted and inactive ones are hidden with
 `display:none` so their PTYs survive tab switches (they die only on close/unmount). `Terminal` takes
 an `active` prop and re-fits via `requestAnimationFrame` on activation; its fit/resize is guarded on a
 non-zero container size so a hidden (0×0) pane is never shrunk to `FitAddon`'s minimum columns.
 
-The **Freeze** checkbox at the right of the action bar pins the git view to one directory. `App` holds
-`frozen` as `{ cwd } | null` — a wrapper rather than a bare string, so freezing on a tab with no cwd
-yet still freezes instead of reading as "not frozen" — and passes `frozen ? frozen.cwd : cwd` to
-`GitPanel` only. `ActionBar` keeps taking the live `cwd`, so every action still targets the active
-tab's repo; the freeze is a view filter, not a mode. It pins the _directory_, not the content: git
-watchers keep running, so the pinned repo's log and status stay live.
+### Multi-repo git view
+
+The active tab can touch more than one repo — its base cwd plus each split pane's live cwd. `App`
+builds `repoEntries` (`{ cwd, presetCwd }`, deduped by cwd via `uniqueBy`) from the active tab, joins
+their cwds into a stable `discoverKey`, and runs **one** `git:discover` per cwd, merging the results
+(deduped by `repo.path`) into a single `repos` list. Keying the effect on the serialized `discoverKey`
+rather than the array identity is load-bearing: `repoEntries` gets a fresh identity on every OSC 7
+report, so depending on it directly would re-discover on every shell prompt. `discover` returns
+canonical worktree-root paths and expands a non-repo parent directory into its child repos, so a pane
+sitting in a `~/projects` folder surfaces every repo under it.
+
+That one `repos` list is the single source of truth for the whole git view. It is passed straight to
+`GitPanel` — now a **pure renderer** that no longer discovers; it lists every repo as an accordion,
+with `.git-repo-open` giving the expanded section the scroll space — **and** it drives `actionRepos`,
+the action bar's repo set. `actionRepos` re-associates each discovered root with a preset by finding
+the `repoEntries` entry whose cwd lives inside that root (slash-normalized prefix match) and carrying
+its `presetCwd`, so preset command buttons still resolve for the repo you opened while a
+parent-expanded child (which no pane owns) simply gets none. The action bar targets one repo at a time
+(`activeRepo`, chosen by `pickedRepo`/`repoIndex` with a `⇄` switcher that cycles `actionRepos`); its
+name and switch button render only when there is a repo / more than one.
+
+There is deliberately **no** second worktree-root round-trip from the renderer. `discover` already
+canonicalizes to roots in the main process, so the action bar reuses that result rather than resolving
+roots again through a separate `git:worktreeRoot` IPC — one discovery feeds both surfaces, and the two
+can never drift (which they did while the action bar ran its own resolution: a parent-dir pane showed
+child repos in the panel but nothing in the action bar).
+
+The **Freeze** checkbox pins the git view. `App` holds `frozen` as `{ entries } | null` — a snapshot of
+`repoEntries` (the entries, not bare cwds, so preset association survives the freeze) — and everything
+downstream reads `activeEntries = frozen ? frozen.entries : repoEntries`. Because **both** the
+discovered `repos` and `actionRepos` derive from `activeEntries`, freezing pins the panel _and_ the
+action bar together: branch/PR/commit actions keep targeting the pinned repo, not the live tab. It pins
+the _directories_, not the content — git watchers keep running, so the pinned repos' log and status
+stay live.
 
 ## node-pty (native module) constraints
 

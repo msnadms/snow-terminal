@@ -713,12 +713,17 @@ async function discoverRepos(cwd?: string): Promise<GitRepo[]> {
     return []
   }
 
-  const found: GitRepo[] = []
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name.startsWith('.')) continue
-    const child = path.join(dir, entry.name)
-    if (await isRepoDir(child)) found.push({ path: child, name: entry.name })
-  }
+  const found = (
+    await Promise.all(
+      entries.map(async (entry): Promise<GitRepo | null> => {
+        if (!entry.isDirectory() || entry.name.startsWith('.')) return null
+        const child = path.join(dir, entry.name)
+        if (!(await isRepoDir(child))) return null
+        const childRoot = (await worktreeRoot(child)) ?? child
+        return { path: childRoot, name: path.basename(childRoot) }
+      })
+    )
+  ).filter((repo): repo is GitRepo => repo !== null)
   return found.sort((a, b) => a.name.localeCompare(b.name))
 }
 

@@ -138,6 +138,47 @@ body {
   color: var(--ui-accent, #89dceb);
 }
 
+.actionbar-repo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  -webkit-app-region: no-drag;
+}
+
+.actionbar-repo-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ui-text, #cdd6f4);
+}
+
+.actionbar-repo-switch {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ui-text, #cdd6f4);
+  background: var(--ui-surface, #1e1e2e);
+  border: 1px solid var(--ui-border, #313244);
+  border-radius: 4px;
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    border-color 160ms ease;
+}
+
+.actionbar-repo-switch:hover {
+  border-color: var(--ui-border-hover, #45475a);
+  color: var(--ui-accent, #a6dcf0);
+}
+
 .picker-select {
   position: relative;
   display: flex;
@@ -992,6 +1033,31 @@ body {
   max-width: 80%;
 }
 
+.home-presets:has(> .home-preset:nth-child(5)) {
+  max-height: 395px;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ui-border, #313244) transparent;
+}
+
+.home-presets::-webkit-scrollbar {
+  width: 6px;
+}
+
+.home-presets::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.home-presets::-webkit-scrollbar-thumb {
+  background: var(--ui-border, #313244);
+  border-radius: 3px;
+}
+
+.home-presets::-webkit-scrollbar-thumb:hover {
+  background: var(--ui-border-hover, #45475a);
+}
+
 .home-preset {
   display: flex;
   align-items: center;
@@ -1330,21 +1396,25 @@ body {
 .git-scroll {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
-  scrollbar-width: none;
-}
-
-.git-scroll::-webkit-scrollbar {
-  display: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .git-repo {
   display: flex;
   flex-direction: column;
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.git-repo-open {
+  flex: 1 1 0;
 }
 
 .git-header {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
@@ -1443,6 +1513,14 @@ body {
   flex-direction: column;
   gap: 10px;
   padding: 6px 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.git-files::-webkit-scrollbar {
+  display: none;
 }
 
 .git-file-group {
@@ -1515,7 +1593,15 @@ body {
 }
 
 .git-log {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
   padding: 6px 0;
+}
+
+.git-log::-webkit-scrollbar {
+  display: none;
 }
 
 .git-graph {

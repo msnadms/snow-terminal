@@ -215,6 +215,13 @@ export function useFind(hostRef: React.RefObject<HTMLDivElement | null>, active:
     const onKey = (event: KeyboardEvent): void => {
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'f') {
         event.preventDefault()
+        const host = hostRef.current
+        const selection = window.getSelection()
+        const picked =
+          host && selection && !selection.isCollapsed && host.contains(selection.anchorNode)
+            ? selection.toString().trim()
+            : ''
+        if (picked) setQuery(picked)
         setOpen(true)
         requestAnimationFrame(() => inputRef.current?.select())
         return
@@ -226,7 +233,7 @@ export function useFind(hostRef: React.RefObject<HTMLDivElement | null>, active:
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [active, open, close])
+  }, [active, open, close, hostRef])
 
   return { open, query, count, index, capped, inputRef, setQuery, step, close }
 }

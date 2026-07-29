@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ActionBar from './components/ActionBar'
 import CommitView from './components/CommitView'
-import GitPanel from './components/GitPanel'
+import GitPanel, { type GitRepo } from './components/GitPanel'
 import Session from './components/Session'
 import BrowserTab from './components/BrowserTab'
 import TabBar from './components/TabBar'
 import HomePage from './components/HomePage'
 import Tour from './components/Tour'
 import WorkingDiffView from './components/WorkingDiffView'
-import { basename, shortHash } from './format'
+import { basename, shortHash, uniqueBy } from './format'
 import { nextTerminalId } from './terminalId'
 import { useSnowconfig, type Preset } from './useSnowconfig'
 
@@ -32,7 +32,9 @@ function App(): React.JSX.Element {
   const [splits, setSplits] = useState<Record<number, Split>>({})
   const [running, setRunning] = useState<Record<string, number>>({})
   const [browserTitles, setBrowserTitles] = useState<Record<number, string>>({})
-  const [frozen, setFrozen] = useState<{ cwd?: string } | null>(null)
+  const [frozen, setFrozen] = useState<{ entries: { cwd: string; presetCwd?: string }[] } | null>(
+    null
+  )
   const [tour, setTour] = useState(false)
   const nextIdRef = useRef(1)
   const {
@@ -50,11 +52,67 @@ function App(): React.JSX.Element {
     activeTab && (activeTab.kind === 'commit' || activeTab.kind === 'diff')
       ? activeTab.cwd
       : cwds[activeTab?.id ?? -1]
-  const gitCwd = frozen ? frozen.cwd : cwd
+  const repoEntries = useMemo<{ cwd: string; presetCwd?: string }[]>(() => {
+    if (!activeTab) return cwd != null ? [{ cwd }] : []
+    if (activeTab.kind === 'commit' || activeTab.kind === 'diff')
+      return [{ cwd: activeTab.cwd, presetCwd: activeTab.cwd }]
+    if (activeTab.kind === 'browser') return []
+    const sessionPanes = panes[activeTab.id] ?? []
+    const base = activeTab.cwd ?? cwds[activeTab.id]
+    const pairs: { cwd: string; presetCwd?: string }[] = []
+    if (base != null) pairs.push({ cwd: base, presetCwd: activeTab.cwd })
+    for (const pane of sessionPanes) {
+      if (pane.cwd != null) pairs.push({ cwd: pane.cwd, presetCwd: pane.cwd })
+    }
+    return uniqueBy(pairs, (entry) => entry.cwd)
+  }, [activeTab, cwd, cwds, panes])
 
-  const activeShellCwd = activeTab?.kind === 'shell' ? activeTab.cwd : undefined
+  const activeEntries = frozen ? frozen.entries : repoEntries
+  const discoverKey = activeEntries.map((entry) => entry.cwd).join('\n')
+
+  const [repos, setRepos] = useState<GitRepo[] | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    const cwds = discoverKey ? discoverKey.split('\n') : [undefined]
+    Promise.all(cwds.map((cwd) => window.api.git.discover(cwd).catch(() => [])))
+      .then((results) => {
+        if (!cancelled) setRepos(uniqueBy(results.flat(), (repo) => repo.path))
+      })
+      .catch(() => {
+        if (!cancelled) setRepos([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [discoverKey])
+
+  const actionRepos = useMemo(() => {
+    const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
+    return (repos ?? []).map((repo) => {
+      const root = norm(repo.path)
+      const owner = activeEntries.find((entry) => {
+        const c = norm(entry.cwd)
+        return c === root || c.startsWith(root + '/')
+      })
+      return { cwd: repo.path, name: repo.name, presetCwd: owner?.presetCwd }
+    })
+  }, [repos, activeEntries])
+
+  const [pickedRepo, setPickedRepo] = useState<string | null>(null)
+  const repoIndex = Math.max(
+    0,
+    actionRepos.findIndex((e) => e.cwd === pickedRepo)
+  )
+  const activeRepo = actionRepos[repoIndex]
+  const actionCwd = activeRepo?.cwd
+  const switchRepo = (): void => {
+    if (actionRepos.length < 2) return
+    setPickedRepo(actionRepos[(repoIndex + 1) % actionRepos.length].cwd)
+  }
+
+  const activePresetCwd = activeRepo?.presetCwd
   const activePresetIndex =
-    activeShellCwd != null ? presets.findIndex((p) => p.cwd === activeShellCwd) : -1
+    activePresetCwd != null ? presets.findIndex((p) => p.cwd === activePresetCwd) : -1
   const activePreset = activePresetIndex >= 0 ? presets[activePresetIndex] : undefined
   const presetCommands = activePreset?.commands ?? []
   const runKey = (presetCwd: string, command: string): string => `${presetCwd}\n${command}`
@@ -235,9 +293,12 @@ function App(): React.JSX.Element {
   return (
     <div className="app">
       <ActionBar
-        cwd={cwd}
+        cwd={actionCwd}
+        repoName={activeRepo?.name}
+        repoCount={actionRepos.length}
+        onSwitchRepo={switchRepo}
         frozen={frozen !== null}
-        onFreeze={(on) => setFrozen(on ? { cwd } : null)}
+        onFreeze={(on) => setFrozen(on ? { entries: repoEntries } : null)}
         onOpenPullRequest={(url) => openBrowser(url)}
       />
       <div className="content">
@@ -329,7 +390,7 @@ function App(): React.JSX.Element {
           </div>
         </div>
         <GitPanel
-          cwd={gitCwd}
+          repos={repos}
           gradients={gradients}
           onOpenCommit={openCommit}
           onOpenCommitSplit={activeTab?.kind === 'shell' ? openCommitSplit : undefined}

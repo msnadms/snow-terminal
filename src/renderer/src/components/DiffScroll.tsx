@@ -68,7 +68,6 @@ function DiffScroll({ active, onClose, children }: DiffScrollProps): React.JSX.E
     >
       <div className="commit-tools">
         <div className="commit-tools-row">
-          {find.open && <FindBar {...find} />}
           {onClose && (
             <button
               className="terminal-close commit-close-button"
@@ -78,6 +77,7 @@ function DiffScroll({ active, onClose, children }: DiffScrollProps): React.JSX.E
               
             </button>
           )}
+          {find.open && <FindBar {...find} />}
           {scrolled && (
             <button
               className="commit-totop-button"
