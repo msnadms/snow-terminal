@@ -904,6 +904,15 @@ body {
   z-index: 0;
 }
 
+.home-snow-pile {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+}
+
 .home-snow-flake {
   position: absolute;
   border-radius: 50%;
@@ -911,6 +920,7 @@ body {
   animation-name: home-snow-fall;
   animation-timing-function: linear;
   animation-iteration-count: infinite;
+  z-index: 1;
 }
 
 @keyframes home-snow-fall {
@@ -920,7 +930,8 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .home-snow {
+  .home-snow,
+  .home-snow-pile {
     display: none;
   }
 }
@@ -1000,12 +1011,47 @@ body {
   font: inherit;
 }
 
+.home-preset-edit {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.home-preset-edit-input {
+  height: 24px;
+}
+
 .home-preset-default {
   flex: 0 0 auto;
+  appearance: none;
+  -webkit-appearance: none;
   width: 15px;
   height: 15px;
-  accent-color: var(--ui-accent, #a6dcf0);
+  margin: 0;
+  border: 1px solid var(--ui-border, #45475a);
+  border-radius: 3px;
+  background-color: var(--ui-terminal-background, #1e1e2e);
   cursor: pointer;
+  position: relative;
+}
+
+.home-preset-default:checked {
+  background-color: var(--ui-accent, #a6dcf0);
+  border-color: var(--ui-accent, #a6dcf0);
+}
+
+.home-preset-default:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--ui-terminal-background, #1e1e2e);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
 }
 
 .home-preset-name {
@@ -1040,6 +1086,7 @@ body {
   border-radius: 4px;
   outline: none;
   font: inherit;
+  font-size: 11px;
   user-select: text;
 }
 
@@ -1063,6 +1110,7 @@ body {
   border-radius: 4px;
   cursor: pointer;
   font: inherit;
+  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1096,6 +1144,7 @@ body {
   border-radius: 4px;
   cursor: pointer;
   font: inherit;
+  font-size: 11px;
 }
 
 .home-add-button:hover:not(:disabled) {
@@ -1592,7 +1641,7 @@ body {
   --diff-text-color: var(--git-text, #b3c2da);
   --diff-font-family:
     'Hack Nerd Font Mono', 'Hack Nerd Font', Menlo, Consolas, 'Cascadia Code', monospace;
-  --diff-selection-background-color: #45475a;
+  --diff-selection-background-color: var(--git-diff-selection, #45475a);
   --diff-gutter-insert-background-color: var(--git-diff-add-gutter, #1e4a40);
   --diff-gutter-delete-background-color: var(--git-diff-del-gutter, #4a2734);
   --diff-code-insert-background-color: var(--git-diff-add-bg, #142c28);
@@ -1702,8 +1751,8 @@ body {
 }
 
 ::highlight(snow-find) {
-  background-color: #4a4460;
-  color: #f0edf7;
+  background-color: var(--git-diff-selection, #45475a);
+  color: var(--git-text, #b3c2da);
 }
 
 ::highlight(snow-find-current) {
@@ -1815,7 +1864,7 @@ body {
 }
 
 .commit-file-row:hover {
-  background: #26263a;
+  background: var(--git-diff-hover, #26263a);
 }
 
 .commit-file-path {

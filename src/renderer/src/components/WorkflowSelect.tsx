@@ -25,7 +25,7 @@ function parkedTitle(entry: WorkflowEntry): string {
   if (!entry.parked) return `No parked changes on ${entry.branch}`
   const files = parkedCount(entry.parked.files)
   const when = entry.parked.date ? new Date(entry.parked.date).toLocaleString() : ''
-  return when ? `${files} — ${when}` : files
+  return when ? `${files} - ${when}` : files
 }
 
 function WorkflowSelect({ cwd }: WorkflowSelectProps): React.JSX.Element | null {
@@ -137,10 +137,10 @@ function WorkflowSelect({ cwd }: WorkflowSelectProps): React.JSX.Element | null 
         onClick={toggle}
         title={
           action.error ||
-          (readError && `Could not read your workflows — ${readError}`) ||
+          (readError && `Could not read your workflows - ${readError}`) ||
           (registered
             ? `Workflow: ${current}`
-            : `${current} is not a registered workflow — snow leaves it alone`)
+            : `${current} is not a registered workflow - snow leaves it alone`)
         }
       >
         <span className="picker-icon">{''}</span>
@@ -231,7 +231,7 @@ function WorkflowSelect({ cwd }: WorkflowSelectProps): React.JSX.Element | null 
             <div className="git-dialog-title">Remove workflow {removing.branch}?</div>
             <pre className="git-dialog-detail">
               {[
-                `The branch ${removing.branch} is not deleted — snow just stops tracking it as a workflow.`,
+                `The branch ${removing.branch} is not deleted - snow just stops tracking it as a workflow.`,
                 removing.parked
                   ? `\n${parkedStay(removing.parked.files)} Recover them with:\n  git stash list\n  git stash pop <entry>`
                   : ''

@@ -14,6 +14,7 @@ export interface Preset {
   cwd: string
   default?: boolean
   commands?: string[]
+  startupCommand?: string
 }
 
 export interface SnowConfig {
@@ -66,16 +67,24 @@ function validate(raw: unknown): Preset[] {
     if (o.default === true) preset.default = true
     const commands = validateCommandList(o.commands)
     if (commands.length) preset.commands = commands
+    if (typeof o.startupCommand === 'string') {
+      const startupCommand = o.startupCommand.trim()
+      if (startupCommand) preset.startupCommand = startupCommand
+    }
     result.push(preset)
   }
   return result
 }
 
-function validateStringField(raw: unknown, key: string): string | null {
+function validatePresentString(raw: unknown, key: string): string | null {
   if (!raw || typeof raw !== 'object') return null
   const value = (raw as Record<string, unknown>)[key]
   if (typeof value !== 'string') return null
-  return value.trim() || null
+  return value.trim()
+}
+
+function validateStringField(raw: unknown, key: string): string | null {
+  return validatePresentString(raw, key) || null
 }
 
 function validateBooleanField(raw: unknown, key: string): boolean | null {
@@ -101,7 +110,7 @@ function rawConfig(): RawConfig {
     return {
       presets: validate(raw),
       name: validateStringField(raw, 'name'),
-      startupCommand: validateStringField(raw, 'startupCommand'),
+      startupCommand: validatePresentString(raw, 'startupCommand'),
       gradients: validateBooleanField(raw, 'gradients'),
       theme: validateStringField(raw, 'theme'),
       tourSeen: validateBooleanField(raw, 'tourSeen'),
@@ -138,7 +147,7 @@ function readSnowconfig(): SnowconfigResult {
     config: {
       presets: presets.map((p) => ({ ...p, cwd: expandHome(p.cwd) })),
       ...(name ? { name } : {}),
-      ...(startupCommand ? { startupCommand } : {}),
+      ...(startupCommand !== null ? { startupCommand } : {}),
       ...(gradients !== null ? { gradients } : {}),
       ...(theme ? { theme } : {}),
       ...(tourSeen !== null ? { tourSeen } : {})
@@ -158,7 +167,7 @@ function writeConfig(next: Omit<RawConfig, 'error'>): SnowconfigResult {
     fs.mkdirSync(path.dirname(file), { recursive: true })
     const data: SnowConfig = { presets: next.presets }
     if (next.name) data.name = next.name
-    if (next.startupCommand) data.startupCommand = next.startupCommand
+    if (next.startupCommand !== null) data.startupCommand = next.startupCommand
     if (next.gradients !== null) data.gradients = next.gradients
     if (next.theme) data.theme = next.theme
     if (next.tourSeen !== null) data.tourSeen = next.tourSeen
@@ -258,12 +267,13 @@ export function registerSnowconfigHandlers(): void {
   ipcMain.handle('snowconfig:get', (): SnowconfigResult => readSnowconfig())
   ipcMain.handle(
     'snowconfig:addPreset',
-    (_e, preset: { name: string; cwd: string }): SnowconfigResult => {
+    (_e, preset: { name: string; cwd: string; startupCommand?: string }): SnowconfigResult => {
       const name = String(preset?.name ?? '').trim()
       const cwd = String(preset?.cwd ?? '').trim()
+      const startupCommand = String(preset?.startupCommand ?? '').trim()
       if (!name || !cwd) return readSnowconfig()
       return mutateConfig((cfg) => {
-        cfg.presets.push({ name, cwd })
+        cfg.presets.push(startupCommand ? { name, cwd, startupCommand } : { name, cwd })
         return true
       })
     }
@@ -306,6 +316,18 @@ export function registerSnowconfigHandlers(): void {
         if (!Number.isInteger(index) || index < 0 || index >= preset.commands.length) return false
         preset.commands.splice(index, 1)
         if (preset.commands.length === 0) delete preset.commands
+        return true
+      })
+  )
+  ipcMain.handle(
+    'snowconfig:setStartupCommand',
+    (_e, presetIndex: number, command: string): SnowconfigResult =>
+      mutateConfig((cfg) => {
+        const preset = cfg.presets[presetIndex]
+        if (!preset) return false
+        const trimmed = String(command ?? '').trim()
+        if (trimmed) preset.startupCommand = trimmed
+        else delete preset.startupCommand
         return true
       })
   )

@@ -192,8 +192,11 @@ const snowignore = {
 
 const snowconfig = {
   get: (): Promise<SnowconfigResult> => ipcRenderer.invoke('snowconfig:get'),
-  addPreset: (preset: { name: string; cwd: string }): Promise<SnowconfigResult> =>
-    ipcRenderer.invoke('snowconfig:addPreset', preset),
+  addPreset: (preset: {
+    name: string
+    cwd: string
+    startupCommand?: string
+  }): Promise<SnowconfigResult> => ipcRenderer.invoke('snowconfig:addPreset', preset),
   setDefault: (index: number): Promise<SnowconfigResult> =>
     ipcRenderer.invoke('snowconfig:setDefault', index),
   removePreset: (index: number): Promise<SnowconfigResult> =>
@@ -202,6 +205,8 @@ const snowconfig = {
     ipcRenderer.invoke('snowconfig:addCommand', presetIndex, command),
   removeCommand: (presetIndex: number, index: number): Promise<SnowconfigResult> =>
     ipcRenderer.invoke('snowconfig:removeCommand', presetIndex, index),
+  setStartupCommand: (presetIndex: number, command: string): Promise<SnowconfigResult> =>
+    ipcRenderer.invoke('snowconfig:setStartupCommand', presetIndex, command),
   chooseDir: (): Promise<string | null> => ipcRenderer.invoke('snowconfig:chooseDir'),
   setTheme: (theme: string): Promise<SnowconfigResult> =>
     ipcRenderer.invoke('snowconfig:setTheme', theme),

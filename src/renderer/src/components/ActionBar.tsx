@@ -153,7 +153,7 @@ function ActionBar({
     if (!result?.ok) return
     setMessage(result.subject ?? '')
     if (result.body) {
-      setFailure({ title: 'Commit undone — its body was not restored', detail: result.body })
+      setFailure({ title: 'Commit undone - its body was not restored', detail: result.body })
     }
   }
 
@@ -185,7 +185,7 @@ function ActionBar({
           className={`actionbar-button${undo.className}`}
           disabled={busy}
           onClick={runUndo}
-          title={undo.error || 'Undo last commit — its changes stay in the worktree'}
+          title={undo.error || 'Undo last commit - its changes stay in the worktree'}
         >
           <div className="nerd-glyph">{glyphs.undo}</div>
         </button>
@@ -252,7 +252,7 @@ function ActionBar({
           onClick={() => onFreeze(!frozen)}
           title={
             frozen
-              ? 'Git view frozen — click to follow the active tab again'
+              ? 'Git view frozen - click to follow the active tab again'
               : 'Freeze the git view on the current directory'
           }
         >

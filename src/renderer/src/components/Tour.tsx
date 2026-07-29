@@ -34,7 +34,7 @@ const steps: Step[] = [
   },
   {
     title: 'Git actions',
-    body: 'Commit + push, sync, update from the default branch, open a pull request, and freeze the view — all live here.',
+    body: 'Commit + push, sync, update from the default branch, open a pull request, and freeze the view - all live here.',
     selectors: ['.actionbar']
   },
   {

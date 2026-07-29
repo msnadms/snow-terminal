@@ -141,7 +141,7 @@ function fileLabels(paths: string[]): Map<string, string> {
 }
 
 function statusLabel(file: GitStatusFile): string {
-  const suffix = file.ignored ? ' — skipped by .snowignore' : ''
+  const suffix = file.ignored ? ' - skipped by .snowignore' : ''
   if (conflictCodes.has(`${file.index}${file.working_dir}`)) return `conflicted${suffix}`
   if (file.index === '?') return `untracked${suffix}`
   const parts: string[] = []

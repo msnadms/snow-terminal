@@ -195,14 +195,19 @@ is already staged is left alone — snow only filters what it adds.
 Session presets for the home tab, as JSON. `src/main/snowconfig.ts` mirrors `theme.ts`'s lifecycle
 (default written with `flag: 'wx'` on first launch, directory `fs.watch` broadcasting
 `snowconfig:changed`). Shape is
-`{ presets: { name, cwd, default?, commands? }[], name?, startupCommand?, gradients?, theme?, tourSeen? }`; entries
+`{ presets: { name, cwd, default?, commands?, startupCommand? }[], name?, startupCommand?, gradients?, theme?, tourSeen? }`; entries
 missing a string `name`/`cwd` are dropped, and a leading `~` in `cwd` is expanded to the home dir **only on
 read**, so the renderer gets absolute paths while the file keeps the raw `~`. The top-level `name`
 drives the home tab's `Hello {name}` greeting (falling back to `snow`); `seedName()` on registration
 fills it in **once** when absent by resolving the GitHub name (`gh api user`, then
 `git config user.name`) and rewriting the file, so a user-set `name` is never overwritten and every
 write path preserves it. `startupCommand` is the command each session's main terminal(s) run
-(default `claude` in the renderer when absent). `gradients` is a boolean (default `true` when absent)
+(default `claude` in the renderer when absent); a preset may carry its **own** `startupCommand` that
+overrides the top-level one for sessions opened from that preset. The chosen command is captured on
+the shell tab at open time (`addSession(cwd, startupCommand)`), **not** re-derived from `cwd` — two
+presets can share a directory, so a `cwd` match would pick the wrong one. `Session` renders
+`tab.startupCommand ?? startupCommand ?? 'claude'`. The home-page add-preset form takes it as an
+optional field. `gradients` is a boolean (default `true` when absent)
 that `useSnowconfig` exposes and `App` passes to `GitPanel` to toggle the animated per-column node
 gradients on or off. `theme` is the active theme's base filename under `themes/` (see `theme.json`
 above); the home-page `ThemeSelect` picker writes it through `snowconfig:setTheme`, and `theme.ts`

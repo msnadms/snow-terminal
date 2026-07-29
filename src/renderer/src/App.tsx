@@ -15,7 +15,7 @@ import { useSnowconfig } from './useSnowconfig'
 type ActiveId = number | 'home'
 
 type Tab =
-  | { kind: 'shell'; id: number; cwd?: string }
+  | { kind: 'shell'; id: number; cwd?: string; startupCommand?: string }
   | { kind: 'commit'; id: number; cwd: string; hash: string }
   | { kind: 'diff'; id: number; cwd: string; branch: string; focus?: string; focusKey: number }
   | { kind: 'browser'; id: number; url: string }
@@ -78,9 +78,9 @@ function App(): React.JSX.Element {
     return result
   }, [tabs, cwds, browserTitles])
 
-  const addSession = (cwd?: string): void => {
+  const addSession = (cwd?: string, startupCommand?: string): void => {
     const id = nextIdRef.current++
-    setTabs((prev) => [...prev, { kind: 'shell', id, cwd }])
+    setTabs((prev) => [...prev, { kind: 'shell', id, cwd, startupCommand }])
     if (cwd) setCwds((prev) => ({ ...prev, [id]: cwd }))
     setPanes((prev) => ({ ...prev, [id]: [nextTerminalId()] }))
     setActiveId(id)
@@ -217,7 +217,10 @@ function App(): React.JSX.Element {
             labels={labels}
             onSelect={setActiveId}
             onClose={closeSession}
-            onAdd={() => addSession(presets.find((p) => p.default)?.cwd)}
+            onAdd={() => {
+              const preset = presets.find((p) => p.default)
+              addSession(preset?.cwd, preset?.startupCommand)
+            }}
             onOpenBrowser={() => openBrowser()}
             onSplit={splitActive}
             onToggleCommand={toggleCommand}
@@ -235,15 +238,14 @@ function App(): React.JSX.Element {
             canSplit={activeTab?.kind === 'shell'}
           />
           <div className="terminal-stack">
-            {activeId === 'home' && (
-              <HomePage
-                presets={presets}
-                name={configName}
-                theme={themeName ?? 'theme'}
-                error={presetsError}
-                onOpenPreset={(dir) => addSession(dir)}
-              />
-            )}
+            <HomePage
+              active={activeId === 'home'}
+              presets={presets}
+              name={configName}
+              theme={themeName ?? 'theme'}
+              error={presetsError}
+              onOpenPreset={addSession}
+            />
             {tabs.map((tab) => {
               if (tab.kind === 'commit')
                 return (
@@ -282,7 +284,7 @@ function App(): React.JSX.Element {
                   active={activeId === tab.id}
                   cwd={tab.cwd}
                   paneIds={panes[tab.id] ?? []}
-                  startupCommand={startupCommand ?? 'claude'}
+                  startupCommand={tab.startupCommand ?? startupCommand ?? 'claude'}
                   onClosePane={(paneId) => closePane(tab.id, paneId)}
                   onCwd={(next) => setCwds((prev) => ({ ...prev, [tab.id]: next }))}
                 />

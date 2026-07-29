@@ -5,11 +5,12 @@ import SnowFall from './SnowFall'
 import ThemeSelect from './ThemeSelect'
 
 interface HomePageProps {
+  active: boolean
   presets: Preset[]
   name: string | null
   theme: string
   error: string | null
-  onOpenPreset: (cwd: string) => void
+  onOpenPreset: (cwd: string, startupCommand?: string) => void
 }
 
 function basename(p: string): string {
@@ -25,6 +26,7 @@ function chooseGreeting(): string {
 }
 
 function HomePage({
+  active,
   presets,
   name: greetingName,
   theme,
@@ -33,22 +35,26 @@ function HomePage({
 }: HomePageProps): React.JSX.Element {
   const [name, setName] = useState('')
   const [cwd, setCwd] = useState('')
+  const [startupCommand, setStartupCommand] = useState('')
   const [menu, setMenu] = useState<{ index: number; x: number; y: number } | null>(null)
+  const [edit, setEdit] = useState<{ index: number; value: string } | null>(null)
   const formRef = useRef<HTMLFormElement>(null)
   const nameRef = useRef<HTMLInputElement>(null)
+  const editRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    if (!name && !cwd) return
+    if (!name && !cwd && !startupCommand) return
 
     const onPointerDown = (e: PointerEvent): void => {
       if (formRef.current?.contains(e.target as Node)) return
       setName('')
       setCwd('')
+      setStartupCommand('')
     }
 
     window.addEventListener('pointerdown', onPointerDown)
     return () => window.removeEventListener('pointerdown', onPointerDown)
-  }, [name, cwd])
+  }, [name, cwd, startupCommand])
 
   const chooseFolder = async (): Promise<void> => {
     const dir = await window.api.snowconfig.chooseDir()
@@ -62,10 +68,16 @@ function HomePage({
     e.preventDefault()
     const trimmedName = name.trim()
     const trimmedCwd = cwd.trim()
+    const trimmedStartup = startupCommand.trim()
     if (!trimmedName || !trimmedCwd) return
-    window.api.snowconfig.addPreset({ name: trimmedName, cwd: trimmedCwd })
+    window.api.snowconfig.addPreset({
+      name: trimmedName,
+      cwd: trimmedCwd,
+      ...(trimmedStartup ? { startupCommand: trimmedStartup } : {})
+    })
     setName('')
     setCwd('')
+    setStartupCommand('')
   }
 
   const toggleDefault = (index: number, isDefault: boolean): void => {
@@ -77,9 +89,22 @@ function HomePage({
     window.api.snowconfig.removePreset(index)
   }
 
+  const startEdit = (index: number): void => {
+    setMenu(null)
+    setEdit({ index, value: presets[index]?.startupCommand ?? '' })
+    requestAnimationFrame(() => editRef.current?.focus())
+  }
+
+  const commitEdit = (e: React.FormEvent): void => {
+    e.preventDefault()
+    if (!edit) return
+    window.api.snowconfig.setStartupCommand(edit.index, edit.value.trim())
+    setEdit(null)
+  }
+
   return (
-    <div className="home-page">
-      <SnowFall />
+    <div className="home-page" style={{ display: active ? 'flex' : 'none' }}>
+      <SnowFall active={active} />
       <ThemeSelect value={theme} onChange={(name) => window.api.snowconfig.setTheme(name)} />
       <div className="home-content">
         <div className="home-title">
@@ -104,10 +129,31 @@ function HomePage({
                 setMenu({ index: i, x: e.clientX, y: e.clientY })
               }}
             >
-              <button className="home-preset-open" onClick={() => onOpenPreset(preset.cwd)}>
-                <span className="home-preset-name">{preset.name}</span>
-                <span className="home-preset-cwd">{preset.cwd}</span>
-              </button>
+              {edit?.index === i ? (
+                <form className="home-preset-edit" onSubmit={commitEdit}>
+                  <input
+                    ref={editRef}
+                    className="home-add-input home-preset-edit-input"
+                    placeholder="startup command (blank clears)"
+                    value={edit.value}
+                    onChange={(e) => setEdit({ index: i, value: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') setEdit(null)
+                    }}
+                  />
+                  <button className="home-add-button" type="submit">
+                    Save
+                  </button>
+                </form>
+              ) : (
+                <button
+                  className="home-preset-open"
+                  onClick={() => onOpenPreset(preset.cwd, preset.startupCommand)}
+                >
+                  <span className="home-preset-name">{preset.name}</span>
+                  <span className="home-preset-cwd">{preset.cwd}</span>
+                </button>
+              )}
               <input
                 type="checkbox"
                 className="home-preset-default"
@@ -126,6 +172,12 @@ function HomePage({
             placeholder="name"
             value={name}
             onChange={(e) => setName(e.target.value)}
+          />
+          <input
+            className="home-add-input"
+            placeholder="command"
+            value={startupCommand}
+            onChange={(e) => setStartupCommand(e.target.value)}
           />
           <button
             type="button"
@@ -147,6 +199,9 @@ function HomePage({
       </div>
       {menu && presets[menu.index] && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
+          <button className="context-menu-item" onClick={() => startEdit(menu.index)}>
+            Edit startup command…
+          </button>
           <button className="context-menu-item" onClick={() => removePreset(menu.index)}>
             Remove “{presets[menu.index].name}”
           </button>

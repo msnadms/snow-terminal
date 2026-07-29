@@ -90,7 +90,7 @@ function WorkingDiffView({
             files={diff.files}
             patch={diff.patch}
             truncated={diff.truncated}
-            truncatedNote="Diff too large to display in full — run git diff in a shell to see the rest."
+            truncatedNote="Diff too large to display in full - run git diff in a shell to see the rest."
             focus={focus}
             focusKey={focusKey}
             onOpenCommit={onOpenCommit}

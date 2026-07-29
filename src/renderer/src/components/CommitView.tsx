@@ -71,7 +71,7 @@ function CommitView({ active, cwd, hash, onOpenCommit }: CommitViewProps): React
           files={detail.files}
           patch={detail.patch}
           truncated={detail.truncated}
-          truncatedNote={`Diff too large to display in full — open ${shortHash(detail.hash)} in a shell to see the rest.`}
+          truncatedNote={`Diff too large to display in full - open ${shortHash(detail.hash)} in a shell to see the rest.`}
           onOpenCommit={onOpenCommit}
         />
       </>

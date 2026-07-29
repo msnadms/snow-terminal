@@ -30,7 +30,9 @@ const cssVars: Record<Exclude<keyof GitColors, 'lanes'>, string> = {
   diffAddGutter: '--git-diff-add-gutter',
   diffDeleteGutter: '--git-diff-del-gutter',
   diffAddText: '--git-diff-add-text',
-  diffDeleteText: '--git-diff-del-text'
+  diffDeleteText: '--git-diff-del-text',
+  diffHover: '--git-diff-hover',
+  diffSelection: '--git-diff-selection'
 }
 
 const kebab = (key: string): string => key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)
