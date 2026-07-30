@@ -21,7 +21,7 @@ type GitUndo = Awaited<ReturnType<typeof window.api.git.undoCommit>>
 type GitPullRequest = Awaited<ReturnType<typeof window.api.git.openPullRequest>>
 
 const glyphs = {
-  commit: '  ',
+  commit: ' ',
   syncDefault: ' ',
   update: ' ',
   undo: '',
@@ -150,7 +150,7 @@ function ActionBar({
 
   const submit = async (): Promise<void> => {
     if (!canSubmit) return
-    const result = await commit.run(() => window.api.git.commitPush(cwd, message.trim()))
+    const result = await commit.run(() => window.api.git.commit(cwd, message.trim()))
     if (result?.ok) setMessage('')
   }
 
@@ -182,7 +182,7 @@ function ActionBar({
         className={`actionbar-button${commit.className}`}
         disabled={!canSubmit}
         onClick={submit}
-        title={commit.error || ignoreError || 'Add, Commit, Push'}
+        title={commit.error || ignoreError || 'Add, Commit'}
       >
         <div className="nerd-glyph">{glyphs.commit}</div>
       </button>

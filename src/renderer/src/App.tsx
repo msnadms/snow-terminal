@@ -141,11 +141,19 @@ function App(): React.JSX.Element {
     return result
   }, [tabs, cwds, browserTitles])
 
-  const addSession = (cwd?: string, startupCommand?: string): void => {
+  const addSession = (cwd?: string, presetStartup?: string, splits?: string[]): void => {
     const id = nextIdRef.current++
-    setTabs((prev) => [...prev, { kind: 'shell', id, cwd, startupCommand }])
+    setTabs((prev) => [...prev, { kind: 'shell', id, cwd, startupCommand: presetStartup }])
     if (cwd) setCwds((prev) => ({ ...prev, [id]: cwd }))
-    setPanes((prev) => ({ ...prev, [id]: [{ id: nextTerminalId() }] }))
+    const splitPanes: Pane[] = (splits ?? [])
+      .map((name) => presets.find((p) => p.name === name))
+      .filter((p): p is Preset => p != null)
+      .map((p) => ({
+        id: nextTerminalId(),
+        cwd: p.cwd,
+        startupCommand: p.startupCommand ?? startupCommand ?? 'claude'
+      }))
+    setPanes((prev) => ({ ...prev, [id]: [{ id: nextTerminalId() }, ...splitPanes] }))
     setActiveId(id)
   }
 
@@ -188,7 +196,11 @@ function App(): React.JSX.Element {
     if (!activeTab || activeTab.kind !== 'shell') return
     const paneId = nextTerminalId()
     const pane: Pane = preset
-      ? { id: paneId, cwd: preset.cwd, startupCommand: preset.startupCommand }
+      ? {
+          id: paneId,
+          cwd: preset.cwd,
+          startupCommand: preset.startupCommand ?? startupCommand ?? 'claude'
+        }
       : { id: paneId }
     setPanes((prev) => ({ ...prev, [activeTab.id]: [...(prev[activeTab.id] ?? []), pane] }))
   }
@@ -311,7 +323,7 @@ function App(): React.JSX.Element {
             onClose={closeSession}
             onAdd={() => {
               const preset = presets.find((p) => p.default)
-              addSession(preset?.cwd, preset?.startupCommand)
+              addSession(preset?.cwd, preset?.startupCommand, preset?.splits)
             }}
             onOpenBrowser={() => openBrowser()}
             onSplit={() => splitActive()}

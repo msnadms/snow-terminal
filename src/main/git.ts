@@ -71,7 +71,7 @@ export interface GitWorkingDiff {
   truncated: boolean
 }
 
-export interface GitCommitPushResult {
+export interface GitCommitResult {
   ok: boolean
   error?: string
   detail?: string
@@ -1319,8 +1319,8 @@ export function registerGitHandlers(): void {
   ipcMain.handle('git:discover', (_event, cwd?: string): Promise<GitRepo[]> => discoverRepos(cwd))
 
   ipcMain.handle(
-    'git:commitPush',
-    async (_event, cwd: string | undefined, message: string): Promise<GitCommitPushResult> => {
+    'git:commit',
+    async (_event, cwd: string | undefined, message: string): Promise<GitCommitResult> => {
       const subject = (message ?? '').trim()
       if (!subject) return { ok: false, error: 'Commit message required' }
 
@@ -1350,18 +1350,6 @@ export function registerGitHandlers(): void {
           await git.commit(subject)
         } catch (error) {
           return { ok: false, error: errorText(error), detail: errorDetail(error) }
-        }
-
-        try {
-          const status = await git.status()
-          if (status.tracking || !status.current) {
-            await git.push()
-          } else {
-            const remote = (await remoteName(cwd)) ?? 'origin'
-            await git.push(['--set-upstream', remote, status.current])
-          }
-        } catch (error) {
-          return { ok: false, error: `Committed, push failed: ${errorText(error)}` }
         }
 
         return { ok: true }

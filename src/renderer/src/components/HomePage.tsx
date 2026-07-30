@@ -10,7 +10,7 @@ interface HomePageProps {
   name: string | null
   theme: string
   error: string | null
-  onOpenPreset: (cwd: string, startupCommand?: string) => void
+  onOpenPreset: (cwd: string, startupCommand?: string, splits?: string[]) => void
 }
 
 function basename(p: string): string {
@@ -70,6 +70,7 @@ function HomePage({
     const trimmedCwd = cwd.trim()
     const trimmedStartup = startupCommand.trim()
     if (!trimmedName || !trimmedCwd) return
+    if (presets.some((p) => p.name === trimmedName)) return
     window.api.snowconfig.addPreset({
       name: trimmedName,
       cwd: trimmedCwd,
@@ -89,6 +90,16 @@ function HomePage({
     window.api.snowconfig.removePreset(index)
   }
 
+  const addSplit = (index: number, name: string): void => {
+    setMenu(null)
+    window.api.snowconfig.addSplit(index, name)
+  }
+
+  const removeSplit = (index: number): void => {
+    setMenu(null)
+    window.api.snowconfig.removeSplit(index)
+  }
+
   const startEdit = (index: number): void => {
     setMenu(null)
     setEdit({ index, value: presets[index]?.startupCommand ?? '' })
@@ -101,6 +112,8 @@ function HomePage({
     window.api.snowconfig.setStartupCommand(edit.index, edit.value.trim())
     setEdit(null)
   }
+
+  const nameExists = presets.some((p) => p.name === name.trim())
 
   return (
     <div className="home-page" style={{ display: active ? 'flex' : 'none' }}>
@@ -148,9 +161,19 @@ function HomePage({
               ) : (
                 <button
                   className="home-preset-open"
-                  onClick={() => onOpenPreset(preset.cwd, preset.startupCommand)}
+                  onClick={() => onOpenPreset(preset.cwd, preset.startupCommand, preset.splits)}
                 >
-                  <span className="home-preset-name">{preset.name}</span>
+                  <span className="home-preset-name">
+                    {preset.name}
+                    {preset.splits && preset.splits.length > 0 && (
+                      <span
+                        className="home-preset-splits"
+                        title={`Opens as splits: ${preset.splits.join(', ')}`}
+                      >
+                        {`+${preset.splits.length}`}
+                      </span>
+                    )}
+                  </span>
                   <span className="home-preset-cwd">{preset.cwd}</span>
                 </button>
               )}
@@ -191,7 +214,8 @@ function HomePage({
           <button
             className="home-add-button"
             type="submit"
-            disabled={!!error || !name.trim() || !cwd.trim()}
+            disabled={!!error || !name.trim() || !cwd.trim() || nameExists}
+            title={nameExists ? `A preset named “${name.trim()}” already exists` : undefined}
           >
             Add preset
           </button>
@@ -202,6 +226,25 @@ function HomePage({
           <button className="context-menu-item" onClick={() => startEdit(menu.index)}>
             Edit startup command…
           </button>
+          {presets.some((_, i) => i !== menu.index) && (
+            <div className="context-menu-label">Add split</div>
+          )}
+          {presets.map((preset, i) =>
+            i === menu.index ? null : (
+              <button
+                key={i}
+                className="context-menu-item context-menu-subitem"
+                onClick={() => addSplit(menu.index, preset.name)}
+              >
+                {preset.name}
+              </button>
+            )
+          )}
+          {(presets[menu.index].splits?.length ?? 0) > 0 && (
+            <button className="context-menu-item" onClick={() => removeSplit(menu.index)}>
+              Remove last split
+            </button>
+          )}
           <button className="context-menu-item" onClick={() => removePreset(menu.index)}>
             Remove “{presets[menu.index].name}”
           </button>

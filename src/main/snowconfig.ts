@@ -15,6 +15,7 @@ export interface Preset {
   default?: boolean
   commands?: string[]
   startupCommand?: string
+  splits?: string[]
 }
 
 export interface SnowConfig {
@@ -71,6 +72,8 @@ function validate(raw: unknown): Preset[] {
       const startupCommand = o.startupCommand.trim()
       if (startupCommand) preset.startupCommand = startupCommand
     }
+    const splits = validateCommandList(o.splits)
+    if (splits.length) preset.splits = splits
     result.push(preset)
   }
   return result
@@ -318,6 +321,28 @@ export function registerSnowconfigHandlers(): void {
         if (preset.commands.length === 0) delete preset.commands
         return true
       })
+  )
+  ipcMain.handle(
+    'snowconfig:addSplit',
+    (_e, presetIndex: number, name: string): SnowconfigResult => {
+      const trimmed = String(name ?? '').trim()
+      if (!trimmed) return readSnowconfig()
+      return mutateConfig((cfg) => {
+        const preset = cfg.presets[presetIndex]
+        if (!preset) return false
+        preset.splits = [...(preset.splits ?? []), trimmed]
+        return true
+      })
+    }
+  )
+  ipcMain.handle('snowconfig:removeSplit', (_e, presetIndex: number): SnowconfigResult =>
+    mutateConfig((cfg) => {
+      const preset = cfg.presets[presetIndex]
+      if (!preset || !preset.splits || preset.splits.length === 0) return false
+      preset.splits.pop()
+      if (preset.splits.length === 0) delete preset.splits
+      return true
+    })
   )
   ipcMain.handle(
     'snowconfig:setStartupCommand',

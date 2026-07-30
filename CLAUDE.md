@@ -184,7 +184,7 @@ launch, directory `fs.watch` broadcasting `snowignore:changed`, `snowignore:get`
 with the `ignore` package. Its `filterPaths()` expects repo-root-relative forward-slash paths — what
 `git status --porcelain` emits, even when run from a subdirectory.
 
-`git.ts` consults it in two places: `git:commitPush` stages an explicit filtered file list instead of
+`git.ts` consults it in two places: `git:commit` stages an explicit filtered file list instead of
 `git add -A`, and `git:status` reports `stageable` (the filtered count) alongside the unfiltered
 `changed`. `ActionBar` gates its button on `stageable` and re-checks on `snowignore:changed`;
 `GitPanel` still uses `changed`, so the dirty indicator reflects real repo state. A matched file that
@@ -195,7 +195,7 @@ is already staged is left alone — snow only filters what it adds.
 Session presets for the home tab, as JSON. `src/main/snowconfig.ts` mirrors `theme.ts`'s lifecycle
 (default written with `flag: 'wx'` on first launch, directory `fs.watch` broadcasting
 `snowconfig:changed`). Shape is
-`{ presets: { name, cwd, default?, commands?, startupCommand? }[], name?, startupCommand?, gradients?, theme?, tourSeen? }`; entries
+`{ presets: { name, cwd, default?, commands?, startupCommand?, splits? }[], name?, startupCommand?, gradients?, theme?, tourSeen? }` (`splits` are other presets' names); entries
 missing a string `name`/`cwd` are dropped, and a leading `~` in `cwd` is expanded to the home dir **only on
 read**, so the renderer gets absolute paths while the file keeps the raw `~`. The top-level `name`
 drives the home tab's `Hello {name}` greeting (falling back to `snow`); `seedName()` on registration
@@ -230,6 +230,20 @@ shared `pty:exit` listener. Background PTY ids come from the shared `nextTermina
 (`src/renderer/src/terminalId.ts`), the same allocator `Terminal` uses, so they never collide with
 pane ids.
 
+`splits` is a **per-preset** `string[]` of **other presets' names**: opening a preset seeds one extra
+top pane _beyond_ the base pane for each entry, and that pane opens in the referenced preset's own
+`cwd` running the referenced preset's **own** `startupCommand` (mirroring `splitActive(preset)`).
+Crucially the split pane's command resolves against the _referenced_ preset —
+`p.startupCommand ?? <top-level startupCommand> ?? 'claude'` — and is set explicitly on the pane so it
+never falls through to the _opening_ preset's command, which is what lets two presets with different
+startup commands sit side by side. `addSession` resolves each name against the live `presets` list and
+silently skips any that no longer exist, so a stale reference just drops its pane. Both open paths (`HomePage`'s preset button and the tab strip's
+`+` for the default preset) pass `preset.splits` through. The home page shows a `⊞ N` badge per preset
+and its right-click `ContextMenu` lists the **other** presets under an "Add split" label plus a
+**Remove last split** item, backed by the `snowconfig:addSplit(presetIndex, name)` (appends the name)
+and `snowconfig:removeSplit(presetIndex)` (pops the last) handlers; the file is otherwise
+hand-editable like every other field.
+
 `tourSeen` is a boolean set once the first-run guided `Tour` is dismissed. It lives here **deliberately
 instead of renderer `localStorage`**: a synchronous `localStorage.getItem` on the startup path was
 observed blocking the renderer's main thread for ~5s while Chromium's DOM-Storage backend opened,
@@ -242,7 +256,8 @@ passthrough fields are structural — no write path can drop a top-level field. 
 `false` to abort without writing (bad index, missing preset). Beyond `snowconfig:get` it exposes write
 handlers — `snowconfig:addPreset`, `snowconfig:setDefault(index)` (index `-1` clears the default),
 `snowconfig:removePreset(index)`, `snowconfig:addCommand(presetIndex, command)`,
-`snowconfig:removeCommand(presetIndex, index)`, `snowconfig:setTheme(name)` (empty clears it back
+`snowconfig:removeCommand(presetIndex, index)`, `snowconfig:addSplit(presetIndex, name)`,
+`snowconfig:removeSplit(presetIndex)`, `snowconfig:setTheme(name)` (empty clears it back
 to the default `theme`), and `snowconfig:setTourSeen()` (marks the tour dismissed) — that mutate the parsed config and rewrite the file;
 the fs.watch broadcast then keeps every window in sync. `useSnowconfig` (`src/renderer/src/useSnowconfig.ts`) is the single subscription;
 `App` reads it so the tab strip's `+` button opens the `default` preset's cwd (home dir if none), and
@@ -346,7 +361,7 @@ checkout closure, which is why every switch path shares the exact same semantics
 `workflow:create` routes through `switchBranch` too — branching from the remote's default rather
 than an existing ref is just what its closure does:
 `checkout -b <name> --no-track <remote>/<default>`. **`--no-track` is load-bearing**: without it the
-branch tracks `origin/<default>`, and `git:commitPush` would take its `status.tracking` path and push
+branch tracks `origin/<default>`, and `git:sync` would take its `status.tracking` path and push
 a feature branch at the default branch's upstream. `restoreOnEnter` is a no-op on the way in, since
 the new name is not registered until `addRecord` runs after the checkout — except when the registry
 still holds an entry for a branch of that name that was since deleted, where re-creating it recovers

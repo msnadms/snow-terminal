@@ -4,7 +4,7 @@ import type {
   GitBranches,
   GitCheckoutResult,
   GitCommitDetail,
-  GitCommitPushResult,
+  GitCommitResult,
   GitLog,
   GitPullRequestResult,
   GitRepo,
@@ -135,8 +135,8 @@ const git = {
     branch: string,
     carry: boolean
   ): Promise<GitCheckoutResult> => ipcRenderer.invoke('git:createBranch', cwd, branch, carry),
-  commitPush: (cwd: string | undefined, message: string): Promise<GitCommitPushResult> =>
-    ipcRenderer.invoke('git:commitPush', cwd, message),
+  commit: (cwd: string | undefined, message: string): Promise<GitCommitResult> =>
+    ipcRenderer.invoke('git:commit', cwd, message),
   syncDefault: (cwd?: string): Promise<GitSyncDefaultResult> =>
     ipcRenderer.invoke('git:syncDefault', cwd),
   updateFromDefault: (cwd?: string): Promise<GitUpdateDefaultResult> =>
@@ -207,6 +207,10 @@ const snowconfig = {
     ipcRenderer.invoke('snowconfig:removeCommand', presetIndex, index),
   setStartupCommand: (presetIndex: number, command: string): Promise<SnowconfigResult> =>
     ipcRenderer.invoke('snowconfig:setStartupCommand', presetIndex, command),
+  addSplit: (presetIndex: number, name: string): Promise<SnowconfigResult> =>
+    ipcRenderer.invoke('snowconfig:addSplit', presetIndex, name),
+  removeSplit: (presetIndex: number): Promise<SnowconfigResult> =>
+    ipcRenderer.invoke('snowconfig:removeSplit', presetIndex),
   chooseDir: (): Promise<string | null> => ipcRenderer.invoke('snowconfig:chooseDir'),
   setTheme: (theme: string): Promise<SnowconfigResult> =>
     ipcRenderer.invoke('snowconfig:setTheme', theme),
