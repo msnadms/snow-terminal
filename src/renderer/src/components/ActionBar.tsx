@@ -36,6 +36,12 @@ interface SyncFace {
   title: string
 }
 
+function focusFirstTerminal(): void {
+  const hosts = Array.from(document.querySelectorAll<HTMLElement>('.terminal-host'))
+  const active = hosts.find((h) => h.style.display !== 'none')
+  active?.querySelector<HTMLElement>('.terminal-main .xterm-helper-textarea')?.focus()
+}
+
 function syncFaceOf(tracking: string | null, ahead: number, behind: number): SyncFace {
   if (!tracking) return { text: '↑', title: 'Publish this branch' }
   if (ahead > 0 && behind > 0) return { text: '↕', title: `Diverged from ${tracking}` }
@@ -170,8 +176,13 @@ function ActionBar({
 
   const face = syncFaceOf(tracking, ahead, behind)
 
+  const onBarClick = (e: React.MouseEvent): void => {
+    const button = (e.target as HTMLElement).closest('.actionbar-button')
+    if (button && !button.classList.contains('actionbar-freeze')) focusFirstTerminal()
+  }
+
   return (
-    <div className="actionbar">
+    <div className="actionbar" onClick={onBarClick}>
       <input
         className="actionbar-input"
         placeholder="Commit message"
@@ -180,7 +191,10 @@ function ActionBar({
         disabled={!ready || busy}
         onChange={(e) => setMessage(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') submit()
+          if (e.key === 'Enter') {
+            submit()
+            focusFirstTerminal()
+          }
         }}
       />
       <button

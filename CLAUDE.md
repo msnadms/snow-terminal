@@ -501,6 +501,13 @@ parent-expanded child (which no pane owns) simply gets none. The action bar targ
 (`activeRepo`, chosen by `pickedRepo`/`repoIndex` with a `⇄` switcher that cycles `actionRepos`); its
 name and switch button render only when there is a repo / more than one.
 
+Clicking any git-action button (commit, undo, sync-default, update, sync, PR — the `.actionbar-button`
+elements, but **not** the `.actionbar-freeze` view toggle) hands focus back to the active session's
+first terminal, via one delegated `onClick` on the bar (`focusFirstTerminal`) that resolves the visible
+`.terminal-host` and focuses its first `.terminal-main .xterm-helper-textarea` — the same DOM-query
+focus approach `Session`'s vim binds use, so no ref is threaded from `App` into `ActionBar`. Disabled
+buttons never dispatch the click, so a greyed-out action can't steal focus.
+
 There is deliberately **no** second worktree-root round-trip from the renderer. `discover` already
 canonicalizes to roots in the main process, so the action bar reuses that result rather than resolving
 roots again through a separate `git:worktreeRoot` IPC — one discovery feeds both surfaces, and the two
