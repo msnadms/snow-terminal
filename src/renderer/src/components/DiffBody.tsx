@@ -225,7 +225,7 @@ function DiffBody({
             ) : (
               <span className="commit-file-stat">
                 <span className="commit-add">+{file.additions}</span>
-                <span className="commit-del">−{file.deletions}</span>
+                <span className="commit-del">-{file.deletions}</span>
               </span>
             )}
           </button>

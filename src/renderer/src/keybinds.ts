@@ -2,9 +2,12 @@ import { useEffect, useRef } from 'react'
 
 export type KeybindAction =
   | 'newTab'
+  | 'closeTab'
   | 'newSplit'
   | 'diffSplit'
   | 'runCommand'
+  | 'switchRepo'
+  | 'focusCommit'
   | 'focusLeft'
   | 'focusDown'
   | 'focusUp'
@@ -12,9 +15,12 @@ export type KeybindAction =
 
 export const defaultKeybinds: Record<KeybindAction, string> = {
   newTab: 'Mod+Shift+T',
+  closeTab: 'Mod+Shift+W',
   newSplit: 'Mod+Shift+~',
   diffSplit: 'Mod+Shift+G',
   runCommand: 'Mod+Shift+Q',
+  switchRepo: 'Mod+Shift+?',
+  focusCommit: 'Mod+Shift+M',
   focusLeft: 'Mod+Shift+H',
   focusDown: 'Mod+Shift+J',
   focusUp: 'Mod+Shift+K',

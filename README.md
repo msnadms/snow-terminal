@@ -90,9 +90,11 @@ default. Combos are `+`-joined: `Ctrl` / `Cmd` / `Meta` / `Alt` / `Shift`, plus
 | Action                                               | Default                         | Notes                                                 |
 | ---------------------------------------------------- | ------------------------------- | ----------------------------------------------------- |
 | `newTab`                                             | `Mod+Shift+T`                   | New session from the default preset                   |
+| `closeTab`                                           | `Mod+Shift+W`                   | Close the active tab                                  |
 | `newSplit`                                           | `Mod+Shift+~`                   | Split the active session                              |
 | `diffSplit`                                          | `Mod+Shift+G`                   | Open the working-tree diff as a split                 |
 | `runCommand`                                         | `Mod+Shift+Q`                   | Toggle the preset's first command button              |
+| `switchRepo`                                         | `Mod+Shift+?`                   | Switch the action bar's repo (when more than one)     |
 | `focusLeft` / `focusDown` / `focusUp` / `focusRight` | `Mod+Shift+H` / `J` / `K` / `L` | Move pane focus (vim directions)                      |
 | `splitPreset`                                        | `Mod+Shift`                     | Prefix; `<prefix>+1..9` splits with nth preset        |
 | `openPreset`                                         | `Mod+Alt`                       | Prefix; `<prefix>+1..9` opens nth preset in a new tab |

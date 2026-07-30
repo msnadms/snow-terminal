@@ -451,6 +451,8 @@ function RepoSection({
 
 interface GitPanelProps {
   repos: GitRepo[] | null
+  width?: number
+  collapsed?: boolean
   gradients?: boolean
   onOpenCommit?: OpenCommit
   onOpenCommitSplit?: OpenCommit
@@ -460,6 +462,8 @@ interface GitPanelProps {
 
 function GitPanel({
   repos,
+  width,
+  collapsed = false,
   gradients = true,
   onOpenCommit,
   onOpenCommitSplit,
@@ -468,19 +472,24 @@ function GitPanel({
 }: GitPanelProps): React.JSX.Element {
   const colors = useGitColors()
   const lanes = colors?.lanes ?? fallbackLanes
+  const style: React.CSSProperties | undefined = collapsed
+    ? { display: 'none' }
+    : width != null
+      ? { flexBasis: width }
+      : undefined
 
-  if (!repos) return <div className="git-panel" />
+  if (!repos) return <div className="git-panel" style={style} />
 
   if (repos.length === 0) {
     return (
-      <div className="git-panel">
+      <div className="git-panel" style={style}>
         <div className="git-empty">Not a git repository</div>
       </div>
     )
   }
 
   return (
-    <div className="git-panel">
+    <div className="git-panel" style={style}>
       <div className="git-scroll">
         {repos.map((repo) => (
           <RepoSection

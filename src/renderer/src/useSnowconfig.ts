@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 
 type SnowconfigResult = Awaited<ReturnType<typeof window.api.snowconfig.get>>
 export type Preset = SnowconfigResult['config']['presets'][number]
+export type Layout = NonNullable<SnowconfigResult['config']['layout']>
 
 export function useSnowconfig(): {
   presets: Preset[]
@@ -11,6 +12,7 @@ export function useSnowconfig(): {
   theme: string | null
   tourSeen: boolean
   keybinds: Record<string, string>
+  layout: Layout
   error: string | null
 } {
   const [presets, setPresets] = useState<Preset[]>([])
@@ -20,6 +22,7 @@ export function useSnowconfig(): {
   const [theme, setTheme] = useState<string | null>(null)
   const [tourSeen, setTourSeen] = useState(false)
   const [keybinds, setKeybinds] = useState<Record<string, string>>({})
+  const [layout, setLayout] = useState<Layout>({})
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -36,6 +39,7 @@ export function useSnowconfig(): {
       setTheme(result.config.theme ?? null)
       setTourSeen(result.config.tourSeen ?? false)
       setKeybinds(result.config.keybinds ?? {})
+      setLayout(result.config.layout ?? {})
     }
 
     window.api.snowconfig.get().then(receive)
@@ -47,5 +51,5 @@ export function useSnowconfig(): {
     }
   }, [])
 
-  return { presets, name, startupCommand, gradients, theme, tourSeen, keybinds, error }
+  return { presets, name, startupCommand, gradients, theme, tourSeen, keybinds, layout, error }
 }

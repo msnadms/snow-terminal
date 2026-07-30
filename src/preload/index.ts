@@ -19,7 +19,7 @@ import type { BrowserBounds, BrowserState } from '../main/browser'
 import type { WorkflowList, WorkflowResult } from '../main/workflow'
 import type { ThemeResult } from '../main/theme'
 import type { SnowignoreResult } from '../main/snowignore'
-import type { SnowconfigResult } from '../main/snowconfig'
+import type { SnowconfigResult, Layout } from '../main/snowconfig'
 
 function idDispatcher<P extends { id: number }>(
   channel: string
@@ -215,6 +215,8 @@ const snowconfig = {
   setTheme: (theme: string): Promise<SnowconfigResult> =>
     ipcRenderer.invoke('snowconfig:setTheme', theme),
   setTourSeen: (): Promise<SnowconfigResult> => ipcRenderer.invoke('snowconfig:setTourSeen'),
+  setLayout: (patch: Partial<Layout>): Promise<SnowconfigResult> =>
+    ipcRenderer.invoke('snowconfig:setLayout', patch),
   onChanged: (callback: (result: SnowconfigResult) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, result: SnowconfigResult): void => callback(result)
     ipcRenderer.on('snowconfig:changed', listener)

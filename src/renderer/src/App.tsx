@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ActionBar from './components/ActionBar'
 import CommitView from './components/CommitView'
 import GitPanel, { type GitRepo } from './components/GitPanel'
@@ -6,14 +6,20 @@ import Session from './components/Session'
 import BrowserTab from './components/BrowserTab'
 import TabBar from './components/TabBar'
 import HomePage from './components/HomePage'
+import ResizeHandle from './components/ResizeHandle'
+import PanelRestore from './components/PanelRestore'
 import Tour from './components/Tour'
 import WorkingDiffView from './components/WorkingDiffView'
 import { basename, shortHash, uniqueBy } from './format'
 import { nextTerminalId } from './terminalId'
 import { useKeybinds, usePresetDigitKeybind } from './keybinds'
+import { useCollapsiblePane } from './useCollapsiblePane'
 import { useSnowconfig, type Preset } from './useSnowconfig'
 
 type ActiveId = number | 'home'
+
+const GIT_MIN = 220
+const GIT_COLLAPSE = 120
 
 export type Split = { kind: 'commit'; cwd: string; hash: string } | { kind: 'diff'; cwd: string }
 
@@ -38,6 +44,10 @@ function App(): React.JSX.Element {
   )
   const [tour, setTour] = useState(false)
   const nextIdRef = useRef(1)
+  const tabsRef = useRef(tabs)
+  useEffect(() => {
+    tabsRef.current = tabs
+  }, [tabs])
   const {
     presets,
     name: configName,
@@ -46,8 +56,21 @@ function App(): React.JSX.Element {
     theme: themeName,
     tourSeen,
     keybinds,
+    layout,
     error: presetsError
   } = useSnowconfig()
+
+  const gitPane = useCollapsiblePane({
+    min: GIT_MIN,
+    collapseAt: GIT_COLLAPSE,
+    defaultSize: 320,
+    savedSize: layout.gitWidth,
+    savedCollapsed: layout.gitCollapsed,
+    maxSize: () => window.innerWidth - 320,
+    persist: (size, collapsed) =>
+      window.api.snowconfig.setLayout({ gitWidth: size, gitCollapsed: collapsed })
+  })
+  const [activeBottomCollapsed, setActiveBottomCollapsed] = useState(false)
 
   const activeTab = tabs.find((t) => t.id === activeId)
   const cwd =
@@ -159,8 +182,10 @@ function App(): React.JSX.Element {
     setActiveId(id)
   }
 
-  const openCommit = (cwd: string, hash: string): void => {
-    const existing = tabs.find((t) => t.kind === 'commit' && t.cwd === cwd && t.hash === hash)
+  const openCommit = useCallback((cwd: string, hash: string): void => {
+    const existing = tabsRef.current.find(
+      (t) => t.kind === 'commit' && t.cwd === cwd && t.hash === hash
+    )
     if (existing) {
       setActiveId(existing.id)
       return
@@ -168,7 +193,7 @@ function App(): React.JSX.Element {
     const id = nextIdRef.current++
     setTabs((prev) => [...prev, { kind: 'commit', id, cwd, hash }])
     setActiveId(id)
-  }
+  }, [])
 
   const openDiff = (cwd: string, branch: string, file?: string): void => {
     const existing = tabs.find((t) => t.kind === 'diff' && t.cwd === cwd)
@@ -220,22 +245,30 @@ function App(): React.JSX.Element {
     openSplit({ kind: 'diff', cwd })
   }
 
-  const closeSplit = (sessionId: number): void => {
+  const closeSplit = useCallback((sessionId: number): void => {
     setSplits((prev) => {
       if (!(sessionId in prev)) return prev
       const next = { ...prev }
       delete next[sessionId]
       return next
     })
-  }
+  }, [])
 
-  const closePane = (sessionId: number, paneId: number): void => {
+  const closePane = useCallback((sessionId: number, paneId: number): void => {
     setPanes((prev) => {
       const current = prev[sessionId]
       if (!current || current.length <= 1) return prev
       return { ...prev, [sessionId]: current.filter((p) => p.id !== paneId) }
     })
-  }
+  }, [])
+
+  const handleSessionCwd = useCallback((sessionId: number, next: string): void => {
+    setCwds((prev) => ({ ...prev, [sessionId]: next }))
+  }, [])
+
+  const handleBottomLayout = useCallback((height: number, collapsed: boolean): void => {
+    window.api.snowconfig.setLayout({ bottomHeight: height, bottomCollapsed: collapsed })
+  }, [])
 
   const toggleCommand = (command: string): void => {
     if (!activePreset) return
@@ -309,10 +342,15 @@ function App(): React.JSX.Element {
 
   useKeybinds(keybinds, {
     newTab: () => openPresetSession(presets.find((p) => p.default)),
+    closeTab: activeId !== 'home' ? () => closeSession(activeId) : undefined,
     newSplit: activeTab?.kind === 'shell' ? () => splitActive() : undefined,
     diffSplit:
       activeTab?.kind === 'shell' && actionCwd ? () => openDiffSplit(actionCwd) : undefined,
-    runCommand: presetCommands[0] ? () => toggleCommand(presetCommands[0]) : undefined
+    runCommand: presetCommands[0] ? () => toggleCommand(presetCommands[0]) : undefined,
+    switchRepo: actionRepos.length > 1 ? switchRepo : undefined,
+    focusCommit: actionCwd
+      ? () => document.querySelector<HTMLInputElement>('.actionbar-input')?.focus()
+      : undefined
   })
 
   usePresetDigitKeybind(
@@ -418,29 +456,57 @@ function App(): React.JSX.Element {
               return (
                 <Session
                   key={tab.id}
+                  id={tab.id}
                   active={activeId === tab.id}
                   cwd={tab.cwd}
                   panes={panes[tab.id] ?? []}
                   startupCommand={tab.startupCommand ?? startupCommand ?? 'claude'}
                   split={splits[tab.id]}
                   keybinds={keybinds}
-                  onCloseSplit={() => closeSplit(tab.id)}
+                  savedBottomHeight={layout.bottomHeight}
+                  savedBottomCollapsed={layout.bottomCollapsed}
+                  onBottomLayout={handleBottomLayout}
+                  onBottomCollapsedChange={setActiveBottomCollapsed}
+                  onCloseSplit={closeSplit}
                   onOpenCommit={openCommit}
-                  onClosePane={(paneId) => closePane(tab.id, paneId)}
-                  onCwd={(next) => setCwds((prev) => ({ ...prev, [tab.id]: next }))}
+                  onClosePane={closePane}
+                  onCwd={handleSessionCwd}
                 />
               )
             })}
           </div>
         </div>
+        {!gitPane.collapsed && (
+          <ResizeHandle
+            axis="x"
+            className={`resize-handle-git${
+              activeTab?.kind === 'shell' && activeBottomCollapsed
+                ? ' resize-handle-git-capbottom'
+                : ''
+            }`}
+            onStart={gitPane.onStart}
+            onResize={gitPane.onResize}
+            onEnd={gitPane.onEnd}
+          />
+        )}
         <GitPanel
           repos={repos}
+          width={gitPane.size}
+          collapsed={gitPane.collapsed}
           gradients={gradients}
           onOpenCommit={openCommit}
           onOpenCommitSplit={activeTab?.kind === 'shell' ? openCommitSplit : undefined}
           onOpenDiff={openDiff}
           onOpenDiffSplit={activeTab?.kind === 'shell' ? openDiffSplit : undefined}
         />
+        {gitPane.collapsed && (
+          <PanelRestore
+            className="panel-restore-git"
+            label="git"
+            title="Show git panel"
+            onClick={gitPane.restore}
+          />
+        )}
       </div>
       {tour && <Tour onClose={closeTour} />}
     </div>

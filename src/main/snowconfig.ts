@@ -18,6 +18,13 @@ export interface Preset {
   splits?: string[]
 }
 
+export interface Layout {
+  gitWidth?: number
+  gitCollapsed?: boolean
+  bottomHeight?: number
+  bottomCollapsed?: boolean
+}
+
 export interface SnowConfig {
   presets: Preset[]
   name?: string
@@ -26,6 +33,7 @@ export interface SnowConfig {
   theme?: string
   tourSeen?: boolean
   keybinds?: Record<string, string>
+  layout?: Layout
 }
 
 export interface SnowconfigResult {
@@ -97,6 +105,26 @@ function validateBooleanField(raw: unknown, key: string): boolean | null {
   return typeof value === 'boolean' ? value : null
 }
 
+function coerceLayout(value: unknown): Layout {
+  const result: Layout = {}
+  if (!value || typeof value !== 'object') return result
+  const o = value as Record<string, unknown>
+  if (typeof o.gitWidth === 'number' && Number.isFinite(o.gitWidth)) result.gitWidth = o.gitWidth
+  const gitCollapsed = validateBooleanField(o, 'gitCollapsed')
+  if (gitCollapsed !== null) result.gitCollapsed = gitCollapsed
+  if (typeof o.bottomHeight === 'number' && Number.isFinite(o.bottomHeight))
+    result.bottomHeight = o.bottomHeight
+  const bottomCollapsed = validateBooleanField(o, 'bottomCollapsed')
+  if (bottomCollapsed !== null) result.bottomCollapsed = bottomCollapsed
+  return result
+}
+
+function validateLayout(raw: unknown, key: string): Layout | null {
+  if (!raw || typeof raw !== 'object') return null
+  const result = coerceLayout((raw as Record<string, unknown>)[key])
+  return Object.keys(result).length ? result : null
+}
+
 function validateKeybinds(raw: unknown, key: string): Record<string, string> | null {
   if (!raw || typeof raw !== 'object') return null
   const value = (raw as Record<string, unknown>)[key]
@@ -118,6 +146,7 @@ interface RawConfig {
   theme: string | null
   tourSeen: boolean | null
   keybinds: Record<string, string> | null
+  layout: Layout | null
   error: string | null
 }
 
@@ -133,6 +162,7 @@ function rawConfig(): RawConfig {
       theme: validateStringField(raw, 'theme'),
       tourSeen: validateBooleanField(raw, 'tourSeen'),
       keybinds: validateKeybinds(raw, 'keybinds'),
+      layout: validateLayout(raw, 'layout'),
       error: null
     }
   } catch (err) {
@@ -146,6 +176,7 @@ function rawConfig(): RawConfig {
         theme: null,
         tourSeen: null,
         keybinds: null,
+        layout: null,
         error: null
       }
     return {
@@ -156,6 +187,7 @@ function rawConfig(): RawConfig {
       theme: null,
       tourSeen: null,
       keybinds: null,
+      layout: null,
       error: e.message
     }
   }
@@ -163,7 +195,8 @@ function rawConfig(): RawConfig {
 
 function readSnowconfig(): SnowconfigResult {
   const file = snowconfigPath()
-  const { presets, name, startupCommand, gradients, theme, tourSeen, keybinds, error } = rawConfig()
+  const { presets, name, startupCommand, gradients, theme, tourSeen, keybinds, layout, error } =
+    rawConfig()
   return {
     config: {
       presets: presets.map((p) => ({ ...p, cwd: expandHome(p.cwd) })),
@@ -172,7 +205,8 @@ function readSnowconfig(): SnowconfigResult {
       ...(gradients !== null ? { gradients } : {}),
       ...(theme ? { theme } : {}),
       ...(tourSeen !== null ? { tourSeen } : {}),
-      ...(keybinds ? { keybinds } : {})
+      ...(keybinds ? { keybinds } : {}),
+      ...(layout ? { layout } : {})
     },
     path: file,
     error
@@ -194,6 +228,7 @@ function writeConfig(next: Omit<RawConfig, 'error'>): SnowconfigResult {
     if (next.theme) data.theme = next.theme
     if (next.tourSeen !== null) data.tourSeen = next.tourSeen
     if (next.keybinds) data.keybinds = next.keybinds
+    if (next.layout) data.layout = next.layout
     fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`)
   } catch (err) {
     return { config: { presets: [] }, path: file, error: (err as Error).message }
@@ -202,9 +237,10 @@ function writeConfig(next: Omit<RawConfig, 'error'>): SnowconfigResult {
 }
 
 function mutateConfig(mutate: (cfg: Omit<RawConfig, 'error'>) => boolean): SnowconfigResult {
-  const { presets, name, startupCommand, gradients, theme, tourSeen, keybinds, error } = rawConfig()
+  const { presets, name, startupCommand, gradients, theme, tourSeen, keybinds, layout, error } =
+    rawConfig()
   if (error) return readSnowconfig()
-  const cfg = { presets, name, startupCommand, gradients, theme, tourSeen, keybinds }
+  const cfg = { presets, name, startupCommand, gradients, theme, tourSeen, keybinds, layout }
   if (!mutate(cfg)) return readSnowconfig()
   return writeConfig(cfg)
 }
@@ -386,6 +422,13 @@ export function registerSnowconfigHandlers(): void {
   ipcMain.handle('snowconfig:setTourSeen', (): SnowconfigResult =>
     mutateConfig((cfg) => {
       cfg.tourSeen = true
+      return true
+    })
+  )
+  ipcMain.handle('snowconfig:setLayout', (_e, patch: Partial<Layout>): SnowconfigResult =>
+    mutateConfig((cfg) => {
+      const next: Layout = { ...(cfg.layout ?? {}), ...coerceLayout(patch) }
+      cfg.layout = Object.keys(next).length ? next : null
       return true
     })
   )

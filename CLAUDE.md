@@ -195,7 +195,7 @@ is already staged is left alone — snow only filters what it adds.
 Session presets for the home tab, as JSON. `src/main/snowconfig.ts` mirrors `theme.ts`'s lifecycle
 (default written with `flag: 'wx'` on first launch, directory `fs.watch` broadcasting
 `snowconfig:changed`). Shape is
-`{ presets: { name, cwd, default?, commands?, startupCommand?, splits? }[], name?, startupCommand?, gradients?, theme?, tourSeen?, keybinds? }` (`splits` are other presets' names); entries
+`{ presets: { name, cwd, default?, commands?, startupCommand?, splits? }[], name?, startupCommand?, gradients?, theme?, tourSeen?, keybinds?, layout? }` (`splits` are other presets' names); entries
 missing a string `name`/`cwd` are dropped, and a leading `~` in `cwd` is expanded to the home dir **only on
 read**, so the renderer gets absolute paths while the file keeps the raw `~`. The top-level `name`
 drives the home tab's `Hello {name}` greeting (falling back to `snow`); `seedName()` on registration
@@ -212,6 +212,25 @@ that `useSnowconfig` exposes and `App` passes to `GitPanel` to toggle the animat
 gradients on or off. `theme` is the active theme's base filename under `themes/` (see `theme.json`
 above); the home-page `ThemeSelect` picker writes it through `snowconfig:setTheme`, and `theme.ts`
 reads it back via `activeThemeName()` to pick which file to load.
+
+`layout` is an optional `{ gitWidth?, gitCollapsed?, bottomHeight?, bottomCollapsed? }` object that
+persists the resizable-pane sizes across sessions (deliberately in the config, not renderer
+`localStorage`, for the same reason as `tourSeen`). The renderer never mirrors it into state with an
+effect: both the git panel (in `App`) and the bottom terminal (in `Session`) drive their size through
+the shared `useCollapsiblePane` hook (`src/renderer/src/useCollapsiblePane.ts`), which derives
+`size`/`collapsed` as `override ?? saved ?? default` — a live drag override that falls back to the
+persisted config value, then a hardcoded default — so neither pane keeps a `useState` mirror seeded
+from props. The hook is parameterized by `min`/`collapseAt`/`defaultSize`/`maxSize`/`persist`, which is
+the only thing that differs between the two edge panes; the split-grow logic in `Session`
+(`resizeSplit`, redistributing `flex-grow` between two sibling panes) is a genuinely different
+mechanism and stays separate. Writes are debounced to drag **end**, not every mouse-move: `ResizeHandle`
+gained an `onEnd` (fired on `pointerup`, reading the latest callbacks through an effect-updated ref, and
+coalescing `onResize` to one call per animation frame) that calls `snowconfig:setLayout` with the final
+size; the shared `PanelRestore` button persists its un-collapse the same way through the hook's
+`restore`. Bottom-terminal layout is global (a new session adopts the last-saved size), so `App` passes
+one stable `onBottomLayout` down to every `Session`. `Session` and `Terminal` are wrapped in
+`React.memo` and `App` hands `Session` only stable (`useCallback`) callbacks keyed by session `id`, so a
+drag on one pane doesn't reconcile the whole terminal tree.
 
 `commands` is **per preset** — the shell-command buttons the tab bar shows to the right of its `+`
 when the active session belongs to that preset. `App` resolves the active preset by matching the
@@ -254,8 +273,8 @@ that off the main thread entirely — no renderer code touches `localStorage`.
 It is **hand-edited only** — a pure passthrough field like `gradients`, with no `snowconfig:*` write
 handler — and any action absent from the map falls back to `defaultKeybinds`. The action set and its
 defaults live in the renderer (`src/renderer/src/keybinds.ts`), not main, since main never dispatches
-them: `newTab`, `newSplit`, and `diffSplit` (open the working-tree diff as a split beside the active
-session). Combo strings are `+`-joined modifier tokens plus one key — `Ctrl`/`Cmd`/`Meta`/`Alt`/`Shift`
+them: `newTab`, `closeTab` (close the active tab), `newSplit`, and `diffSplit` (open the working-tree
+diff as a split beside the active session). Combo strings are `+`-joined modifier tokens plus one key — `Ctrl`/`Cmd`/`Meta`/`Alt`/`Shift`
 and `Mod` (= `Cmd` on macOS, `Ctrl` elsewhere, the default in every shipped binding). A matched bind
 runs on a **single, module-level capture-phase** `keydown` listener on `window`: `useCaptureKeydown` (the
 shared primitive) adds each hook's handler ref to a module `registry` and attaches that one listener the
@@ -268,7 +287,14 @@ actions; only actions with a **defined** handler match, so a bind whose action i
 (e.g. `diffSplit` on a non-shell tab) falls through to the terminal untouched. `runCommand` (default
 `Mod+Shift+Q`) toggles the active preset's **first** command button (`presetCommands[0]`) through the
 same `toggleCommand` path the tab-bar button uses — starting the background PTY, or killing it if that
-command is already running — and its handler is `undefined` when the preset has no commands.
+command is already running — and its handler is `undefined` when the preset has no commands. `closeTab`
+(default `Mod+Shift+W`) closes the active tab through the same `closeSession` path the tab's × uses, and
+its handler is `undefined` on the home page (which has no closeable tab). `switchRepo` (default
+`Mod+Shift+?`) cycles the action bar's `activeRepo` through the same `switchRepo`/`⇄` path, and its
+handler is `undefined` unless more than one repo is in view. `focusCommit` (default `Mod+Shift+M`)
+focuses the action bar's commit-message `<input>`, resolved by its `.actionbar-input` class (the same
+DOM-query approach the focus binds use) rather than a threaded ref; its handler is `undefined` when no
+repo is in view (`actionCwd` absent).
 
 `focusLeft`/`focusDown`/`focusUp`/`focusRight` (default `Mod+Shift+H`/`J`/`K`/`L`, vim directions) move
 keyboard focus between a session's terminals. They are owned by **`Session`**, not `App`, because the
@@ -296,14 +322,15 @@ likewise gate on `activeTab.kind === 'shell'`. All handler sets are disjoint, so
 coexist harmlessly.
 
 Every write handler goes through `mutateConfig`, which owns the read → error-bail → write sequence and
-hands the callback the whole parsed config (`{ presets, name, startupCommand, gradients, theme, tourSeen, keybinds }`), so
+hands the callback the whole parsed config (`{ presets, name, startupCommand, gradients, theme, tourSeen, keybinds, layout }`), so
 passthrough fields are structural — no write path can drop a top-level field. The callback returns
 `false` to abort without writing (bad index, missing preset). Beyond `snowconfig:get` it exposes write
 handlers — `snowconfig:addPreset`, `snowconfig:setDefault(index)` (index `-1` clears the default),
 `snowconfig:removePreset(index)`, `snowconfig:addCommand(presetIndex, command)`,
 `snowconfig:removeCommand(presetIndex, index)`, `snowconfig:addSplit(presetIndex, name)`,
 `snowconfig:removeSplit(presetIndex)`, `snowconfig:setTheme(name)` (empty clears it back
-to the default `theme`), and `snowconfig:setTourSeen()` (marks the tour dismissed) — that mutate the parsed config and rewrite the file;
+to the default `theme`), `snowconfig:setTourSeen()` (marks the tour dismissed), and
+`snowconfig:setLayout(patch)` (merges the given keys into `layout`) — that mutate the parsed config and rewrite the file;
 the fs.watch broadcast then keeps every window in sync. `useSnowconfig` (`src/renderer/src/useSnowconfig.ts`) is the single subscription;
 `App` reads it so the tab strip's `+` button opens the `default` preset's cwd (home dir if none), and
 `HomePage` renders each preset with a default checkbox (radio-like via `setDefault`) plus an add
