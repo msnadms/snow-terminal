@@ -195,7 +195,7 @@ is already staged is left alone — snow only filters what it adds.
 Session presets for the home tab, as JSON. `src/main/snowconfig.ts` mirrors `theme.ts`'s lifecycle
 (default written with `flag: 'wx'` on first launch, directory `fs.watch` broadcasting
 `snowconfig:changed`). Shape is
-`{ presets: { name, cwd, default?, commands?, startupCommand?, splits? }[], name?, startupCommand?, gradients?, theme?, tourSeen? }` (`splits` are other presets' names); entries
+`{ presets: { name, cwd, default?, commands?, startupCommand?, splits? }[], name?, startupCommand?, gradients?, theme?, tourSeen?, keybinds? }` (`splits` are other presets' names); entries
 missing a string `name`/`cwd` are dropped, and a leading `~` in `cwd` is expanded to the home dir **only on
 read**, so the renderer gets absolute paths while the file keeps the raw `~`. The top-level `name`
 drives the home tab's `Hello {name}` greeting (falling back to `snow`); `seedName()` on registration
@@ -215,7 +215,7 @@ reads it back via `activeThemeName()` to pick which file to load.
 
 `commands` is **per preset** — the shell-command buttons the tab bar shows to the right of its `+`
 when the active session belongs to that preset. `App` resolves the active preset by matching the
-active shell tab's *original* cwd (`activeTab.cwd`, fixed at open time — not the live OSC-7 cwd, so
+active shell tab's _original_ cwd (`activeTab.cwd`, fixed at open time — not the live OSC-7 cwd, so
 it survives `cd`) against `presets[].cwd`, and derives `activePresetIndex` fresh each render rather
 than storing it, so it never drifts when presets are reordered. Each button is a **toggle**: clicking
 spawns a hidden background PTY (no xterm attached) running the command in the preset's cwd, and
@@ -250,8 +250,53 @@ observed blocking the renderer's main thread for ~5s while Chromium's DOM-Storag
 freezing first paint and interactivity. Reading it from the already-loaded snowconfig (async IPC) keeps
 that off the main thread entirely — no renderer code touches `localStorage`.
 
+`keybinds` is an optional top-level `{ action: combo }` map that rebinds the app's keyboard shortcuts.
+It is **hand-edited only** — a pure passthrough field like `gradients`, with no `snowconfig:*` write
+handler — and any action absent from the map falls back to `defaultKeybinds`. The action set and its
+defaults live in the renderer (`src/renderer/src/keybinds.ts`), not main, since main never dispatches
+them: `newTab`, `newSplit`, and `diffSplit` (open the working-tree diff as a split beside the active
+session). Combo strings are `+`-joined modifier tokens plus one key — `Ctrl`/`Cmd`/`Meta`/`Alt`/`Shift`
+and `Mod` (= `Cmd` on macOS, `Ctrl` elsewhere, the default in every shipped binding). A matched bind
+runs on a **single, module-level capture-phase** `keydown` listener on `window`: `useCaptureKeydown` (the
+shared primitive) adds each hook's handler ref to a module `registry` and attaches that one listener the
+first time any hook mounts, and `dispatch` walks the registry, stopping at the first handler that reports
+it handled the event (returns `true`). Capturing lets a matched handler `stopPropagation` before the
+event reaches an xterm textarea, so shortcuts fire even while a terminal is focused; each handler is read
+through a ref refreshed every render so the listener sees live state without re-subscribing. Handlers are
+disjoint, so registry order never decides between two binds. `useKeybinds(binds, handlers)` dispatches the named
+actions; only actions with a **defined** handler match, so a bind whose action is currently unavailable
+(e.g. `diffSplit` on a non-shell tab) falls through to the terminal untouched. `runCommand` (default
+`Mod+Shift+Q`) toggles the active preset's **first** command button (`presetCommands[0]`) through the
+same `toggleCommand` path the tab-bar button uses — starting the background PTY, or killing it if that
+command is already running — and its handler is `undefined` when the preset has no commands.
+
+`focusLeft`/`focusDown`/`focusUp`/`focusRight` (default `Mod+Shift+H`/`J`/`K`/`L`, vim directions) move
+keyboard focus between a session's terminals. They are owned by **`Session`**, not `App`, because the
+geometry lives there: a session is a row of top split panes (`.terminal-main > .terminal-split`) above a
+single bottom shell (`.terminal-secondary`). `H`/`L` step left/right through the top panes, `J` drops
+from a top pane to the bottom shell, and `K` returns from the bottom shell to the last top pane it left
+(tracked in `lastTopRef`, defaulting to the first). It resolves the focused pane by walking up from
+`document.activeElement` and focuses the target by its xterm `.xterm-helper-textarea`, so no imperative
+handle has to be threaded through `Terminal`. `Session` registers these only while `active` (passing
+`{}` otherwise), so exactly one mounted session responds even though all stay mounted.
+
+`splitPreset` and `openPreset` are the odd ones out — **positional** families rather than single combos.
+Each config value is a modifier prefix (defaults `Mod+Shift` and `Mod+Alt`, resolved inside the hook off
+`defaultDigitModifiers`); `usePresetDigitKeybind(binds, action, onPreset)` matches `<modifier>+<1-9>` and
+calls `onPreset(n-1)` (one-based key → zero-based preset index),
+no-opping when that index is empty. The digit is read from `e.code` (`Digit1`/`Numpad1`), not `e.key`,
+because `Shift+1` reports a punctuation `key` on most layouts. Each reuses `useCaptureKeydown` (joining the
+same shared registry) rather than the named-action map, since the digit is derived from the event, not
+looked up per action; `modifiersMatch` is exact, so `Mod+Shift+1` and `Mod+Alt+1` never collide. `App` owns both:
+`openPreset` always **opens** the nth preset as a new session (`addSession(cwd, startupCommand, splits)`),
+from any tab. `splitPreset`'s target depends on the active tab — **on the home page** it opens the nth
+preset (same as `openPreset`); on a **shell** tab it _splits_ the active session with that preset; on any
+other tab its handler is `undefined`, so those keys fall through. The named binds `newSplit`/`diffSplit`
+likewise gate on `activeTab.kind === 'shell'`. All handler sets are disjoint, so the capture listeners
+coexist harmlessly.
+
 Every write handler goes through `mutateConfig`, which owns the read → error-bail → write sequence and
-hands the callback the whole parsed config (`{ presets, name, startupCommand, gradients, theme, tourSeen }`), so
+hands the callback the whole parsed config (`{ presets, name, startupCommand, gradients, theme, tourSeen, keybinds }`), so
 passthrough fields are structural — no write path can drop a top-level field. The callback returns
 `false` to abort without writing (bad index, missing preset). Beyond `snowconfig:get` it exposes write
 handlers — `snowconfig:addPreset`, `snowconfig:setDefault(index)` (index `-1` clears the default),

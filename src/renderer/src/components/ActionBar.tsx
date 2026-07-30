@@ -163,6 +163,11 @@ function ActionBar({
     }
   }
 
+  const runPullRequest = async (): Promise<void> => {
+    const result = await pullRequest.run(() => window.api.git.openPullRequest(cwd))
+    if (result?.ok && result.url) onOpenPullRequest(result.url)
+  }
+
   const face = syncFaceOf(tracking, ahead, behind)
 
   return (
@@ -240,10 +245,7 @@ function ActionBar({
         <button
           className={`actionbar-button${pullRequest.className}`}
           disabled={busy}
-          onClick={async () => {
-            const result = await pullRequest.run(() => window.api.git.openPullRequest(cwd))
-            if (result?.ok && result.url) onOpenPullRequest(result.url)
-          }}
+          onClick={runPullRequest}
           title={pullRequest.error || 'Open a pull request'}
         >
           <div className="nerd-glyph">{glyphs.pullRequest}</div>

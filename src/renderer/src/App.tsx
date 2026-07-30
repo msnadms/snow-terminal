@@ -10,6 +10,7 @@ import Tour from './components/Tour'
 import WorkingDiffView from './components/WorkingDiffView'
 import { basename, shortHash, uniqueBy } from './format'
 import { nextTerminalId } from './terminalId'
+import { useKeybinds, usePresetDigitKeybind } from './keybinds'
 import { useSnowconfig, type Preset } from './useSnowconfig'
 
 type ActiveId = number | 'home'
@@ -44,6 +45,7 @@ function App(): React.JSX.Element {
     gradients,
     theme: themeName,
     tourSeen,
+    keybinds,
     error: presetsError
   } = useSnowconfig()
 
@@ -302,6 +304,35 @@ function App(): React.JSX.Element {
     setBrowserTitles(dropKey)
   }
 
+  const openPresetSession = (preset?: Preset): void =>
+    addSession(preset?.cwd, preset?.startupCommand, preset?.splits)
+
+  useKeybinds(keybinds, {
+    newTab: () => openPresetSession(presets.find((p) => p.default)),
+    newSplit: activeTab?.kind === 'shell' ? () => splitActive() : undefined,
+    diffSplit:
+      activeTab?.kind === 'shell' && actionCwd ? () => openDiffSplit(actionCwd) : undefined,
+    runCommand: presetCommands[0] ? () => toggleCommand(presetCommands[0]) : undefined
+  })
+
+  usePresetDigitKeybind(
+    keybinds,
+    'splitPreset',
+    activeId === 'home' || activeTab?.kind === 'shell'
+      ? (index) => {
+          const preset = presets[index]
+          if (!preset) return
+          if (activeId === 'home') openPresetSession(preset)
+          else splitActive(preset)
+        }
+      : undefined
+  )
+
+  usePresetDigitKeybind(keybinds, 'openPreset', (index) => {
+    const preset = presets[index]
+    if (preset) openPresetSession(preset)
+  })
+
   return (
     <div className="app">
       <ActionBar
@@ -392,6 +423,7 @@ function App(): React.JSX.Element {
                   panes={panes[tab.id] ?? []}
                   startupCommand={tab.startupCommand ?? startupCommand ?? 'claude'}
                   split={splits[tab.id]}
+                  keybinds={keybinds}
                   onCloseSplit={() => closeSplit(tab.id)}
                   onOpenCommit={openCommit}
                   onClosePane={(paneId) => closePane(tab.id, paneId)}
