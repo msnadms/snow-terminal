@@ -4,6 +4,7 @@ import FailureDialog from './FailureDialog'
 import WorkflowSelect from './WorkflowSelect'
 import { type Failure } from '@renderer/format'
 import { useGitAction } from '@renderer/useGitAction'
+import { useKeybinds } from '@renderer/keybinds'
 import { useLatestRun } from '@renderer/useLatestRun'
 
 interface ActionBarProps {
@@ -14,6 +15,7 @@ interface ActionBarProps {
   frozen: boolean
   onFreeze: (frozen: boolean) => void
   onOpenPullRequest: (url: string) => void
+  keybinds: Record<string, string>
 }
 
 type GitStatus = Awaited<ReturnType<typeof window.api.git.status>>
@@ -67,7 +69,8 @@ function ActionBar({
   onSwitchRepo,
   frozen,
   onFreeze,
-  onOpenPullRequest
+  onOpenPullRequest,
+  keybinds
 }: ActionBarProps): React.JSX.Element {
   const [isRepo, setIsRepo] = useState(false)
   const [status, setStatus] = useState<GitStatus | null>(null)
@@ -174,6 +177,14 @@ function ActionBar({
     if (result?.ok && result.url) onOpenPullRequest(result.url)
   }
 
+  const runSync = (): void => {
+    sync.run(() => window.api.git.sync(cwd))
+  }
+
+  useKeybinds(keybinds, {
+    pushRemote: canSync && (ahead > 0 || !tracking) ? runSync : undefined
+  })
+
   const face = syncFaceOf(tracking, ahead, behind)
 
   const onBarClick = (e: React.MouseEvent): void => {
@@ -246,7 +257,7 @@ function ActionBar({
       <button
         className={`actionbar-button${sync.className}`}
         disabled={!canSync}
-        onClick={() => sync.run(() => window.api.git.sync(cwd))}
+        onClick={runSync}
         title={sync.error || face.title}
       >
         {face.glyph ? (

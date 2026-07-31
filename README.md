@@ -95,6 +95,8 @@ default. Combos are `+`-joined: `Ctrl` / `Cmd` / `Meta` / `Alt` / `Shift`, plus
 | `diffSplit`                                          | `Mod+Shift+G`                   | Open the working-tree diff as a split                 |
 | `runCommand`                                         | `Mod+Shift+Q`                   | Toggle the preset's first command button              |
 | `switchRepo`                                         | `Mod+Shift+?`                   | Switch the action bar's repo (when more than one)     |
+| `focusCommit`                                        | `Mod+Shift+M`                   | Focus the commit-message input                        |
+| `pushRemote`                                         | `Mod+Shift+P`                   | Push commits (or publish the branch) to the remote    |
 | `focusLeft` / `focusDown` / `focusUp` / `focusRight` | `Mod+Shift+H` / `J` / `K` / `L` | Move pane focus (vim directions)                      |
 | `splitPreset`                                        | `Mod+Shift`                     | Prefix; `<prefix>+1..9` splits with nth preset        |
 | `openPreset`                                         | `Mod+Alt`                       | Prefix; `<prefix>+1..9` opens nth preset in a new tab |

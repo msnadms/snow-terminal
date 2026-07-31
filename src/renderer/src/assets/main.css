@@ -2209,6 +2209,27 @@ body.resizing-y * {
   white-space: nowrap;
 }
 
+.terminal-diff-split .commit-view .diff-blame .diff-gutter-col:first-child {
+  width: 12ch;
+}
+
+.terminal-diff-split .commit-view .diff-blame .diff-gutter:first-child {
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.terminal-diff-split .commit-view .diff-gutter-col {
+  width: 5ch;
+}
+
+.terminal-diff-split .commit-view .diff-gutter {
+  padding: 0 0.2ch;
+}
+
+.terminal-diff-split .commit-blame-author {
+  display: none;
+}
+
 .commit-view .diff-hunk-header,
 .commit-view .diff-decoration-content {
   padding: 2px 10px;

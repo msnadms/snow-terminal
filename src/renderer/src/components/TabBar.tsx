@@ -155,6 +155,7 @@ function TabBar({
         onClick={onSplit}
         onContextMenu={(e) => {
           e.preventDefault()
+          if (!canSplit) return
           const r = e.currentTarget.getBoundingClientRect()
           setSplitMenu({ x: r.left, y: r.bottom + 4 })
         }}

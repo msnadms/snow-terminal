@@ -8,6 +8,7 @@ export type KeybindAction =
   | 'runCommand'
   | 'switchRepo'
   | 'focusCommit'
+  | 'pushRemote'
   | 'focusLeft'
   | 'focusDown'
   | 'focusUp'
@@ -21,6 +22,7 @@ export const defaultKeybinds: Record<KeybindAction, string> = {
   runCommand: 'Mod+Shift+Q',
   switchRepo: 'Mod+Shift+?',
   focusCommit: 'Mod+Shift+M',
+  pushRemote: 'Mod+Shift+P',
   focusLeft: 'Mod+Shift+H',
   focusDown: 'Mod+Shift+J',
   focusUp: 'Mod+Shift+K',

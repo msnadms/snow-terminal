@@ -294,7 +294,13 @@ its handler is `undefined` on the home page (which has no closeable tab). `switc
 handler is `undefined` unless more than one repo is in view. `focusCommit` (default `Mod+Shift+M`)
 focuses the action bar's commit-message `<input>`, resolved by its `.actionbar-input` class (the same
 DOM-query approach the focus binds use) rather than a threaded ref; its handler is `undefined` when no
-repo is in view (`actionCwd` absent).
+repo is in view (`actionCwd` absent). `pushRemote` (default `Mod+Shift+P`) runs the sync button's
+`git:sync` (push) action, but only when there is something to push up — its handler is `undefined`
+unless `ahead > 0` (local commits to push) **or** `!tracking` (an unpublished branch to publish), and
+the sync action is otherwise runnable, mirroring when the sync button pushes rather than
+fetches/pulls. It is registered inside **`ActionBar`**, not `App` (which is why `App` passes
+`keybinds` down to it), because the `ahead` count and `sync` action live there — `App` only has the
+DOM-query binds and never sees git status.
 
 `focusLeft`/`focusDown`/`focusUp`/`focusRight` (default `Mod+Shift+H`/`J`/`K`/`L`, vim directions) move
 keyboard focus between a session's terminals. They are owned by **`Session`**, not `App`, because the

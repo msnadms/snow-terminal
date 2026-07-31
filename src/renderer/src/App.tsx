@@ -380,6 +380,7 @@ function App(): React.JSX.Element {
         frozen={frozen !== null}
         onFreeze={(on) => setFrozen(on ? { entries: repoEntries } : null)}
         onOpenPullRequest={(url) => openBrowser(url)}
+        keybinds={keybinds}
       />
       <div className="content">
         <div className="terminal-area">
