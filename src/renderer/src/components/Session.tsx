@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, memo, useCallback, useRef, useState } from 'react'
 import type { Pane, Split } from '../App'
 import { useKeybinds } from '../keybinds'
 import { useCollapsiblePane } from '../useCollapsiblePane'
@@ -25,7 +25,6 @@ interface SessionProps {
   savedBottomHeight?: number
   savedBottomCollapsed?: boolean
   onBottomLayout: (height: number, collapsed: boolean) => void
-  onBottomCollapsedChange: (collapsed: boolean) => void
   onClosePane: (sessionId: number, paneId: number) => void
   onCloseSplit: (sessionId: number) => void
   onOpenCommit: (cwd: string, hash: string) => void
@@ -47,7 +46,6 @@ function Session({
   savedBottomHeight,
   savedBottomCollapsed,
   onBottomLayout,
-  onBottomCollapsedChange,
   onClosePane,
   onCloseSplit,
   onOpenCommit,
@@ -75,10 +73,6 @@ function Session({
     },
     persist: onBottomLayout
   })
-
-  useEffect(() => {
-    if (active) onBottomCollapsedChange(bottom.collapsed)
-  }, [active, bottom.collapsed, onBottomCollapsedChange])
 
   const handleBottomCwd = useCallback((next: string) => onCwd(id, next), [onCwd, id])
 
@@ -223,7 +217,7 @@ function Session({
       {bottom.collapsed && (
         <PanelRestore
           className="panel-restore-bottom"
-          label=" terminal"
+          label="󰞙"
           title="Show terminal"
           onClick={bottom.restore}
         />

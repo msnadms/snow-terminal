@@ -104,8 +104,8 @@ const defaultTheme: Theme = {
     snow: '#cdd6f4'
   },
   git: {
-    background: '#171c2b',
-    panelBackground: '#121724',
+    background: '#1e1e2e',
+    panelBackground: '#1e1e2e',
     border: '#28334c',
     text: '#b3c2da',
     strongText: '#e4eefb',

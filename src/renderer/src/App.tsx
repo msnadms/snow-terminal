@@ -70,7 +70,6 @@ function App(): React.JSX.Element {
     persist: (size, collapsed) =>
       window.api.snowconfig.setLayout({ gitWidth: size, gitCollapsed: collapsed })
   })
-  const [activeBottomCollapsed, setActiveBottomCollapsed] = useState(false)
 
   const activeTab = tabs.find((t) => t.id === activeId)
   const cwd =
@@ -466,7 +465,6 @@ function App(): React.JSX.Element {
                   savedBottomHeight={layout.bottomHeight}
                   savedBottomCollapsed={layout.bottomCollapsed}
                   onBottomLayout={handleBottomLayout}
-                  onBottomCollapsedChange={setActiveBottomCollapsed}
                   onCloseSplit={closeSplit}
                   onOpenCommit={openCommit}
                   onClosePane={closePane}
@@ -479,11 +477,6 @@ function App(): React.JSX.Element {
         {!gitPane.collapsed && (
           <ResizeHandle
             axis="x"
-            className={`resize-handle-git${
-              activeTab?.kind === 'shell' && activeBottomCollapsed
-                ? ' resize-handle-git-capbottom'
-                : ''
-            }`}
             onStart={gitPane.onStart}
             onResize={gitPane.onResize}
             onEnd={gitPane.onEnd}
@@ -502,7 +495,7 @@ function App(): React.JSX.Element {
         {gitPane.collapsed && (
           <PanelRestore
             className="panel-restore-git"
-            label="git"
+            label="󰞗"
             title="Show git panel"
             onClick={gitPane.restore}
           />

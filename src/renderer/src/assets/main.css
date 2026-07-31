@@ -1265,7 +1265,7 @@ body {
 }
 
 .resize-handle {
-  flex: 0 0 6px;
+  flex: 0 0 0;
   position: relative;
   z-index: 5;
   align-self: stretch;
@@ -1275,38 +1275,17 @@ body {
   cursor: col-resize;
 }
 
-.resize-handle-git {
-  background: var(--ui-terminal-background, #1e1e2e);
-}
-
-.resize-handle-git::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  box-sizing: border-box;
-  height: 30px;
-  background: var(--ui-chrome, #11111b);
-  border-bottom: 1px solid var(--ui-border, #313244);
-}
-
-.resize-handle-x.resize-handle-git.resize-handle-git-capbottom::after {
-  content: '';
-  position: absolute;
-  top: auto;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  box-sizing: border-box;
-  height: 24px;
-  background: var(--ui-chrome, #11111b);
-  border-top: 1px solid var(--ui-border, #313244);
-  transition: none;
-}
-
 .resize-handle-y {
   cursor: row-resize;
+}
+
+.resize-handle-x + .terminal-split,
+.resize-handle-x + .terminal-diff-split {
+  border-left: 1px solid var(--git-border, #28334c);
+}
+
+.resize-handle-y + .terminal-secondary {
+  border-top: 1px solid var(--git-border, #28334c);
 }
 
 .resize-handle::after {
@@ -1317,11 +1296,17 @@ body {
 }
 
 .resize-handle-x::after {
-  inset: 0 2px;
+  top: 0;
+  bottom: 0;
+  left: -2px;
+  width: 8px;
 }
 
 .resize-handle-y::after {
-  inset: 2px 0;
+  left: 0;
+  right: 0;
+  top: -2px;
+  height: 8px;
 }
 
 .resize-handle:hover::after,
@@ -1358,7 +1343,7 @@ body.resizing-y * {
   border: none;
   cursor: pointer;
   font-family: 'Hack Nerd Font Mono', monospace;
-  font-size: 12px;
+  font-size: 24px;
 }
 
 .panel-restore:hover {
