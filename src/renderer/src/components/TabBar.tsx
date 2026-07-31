@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import ContextMenu from './ContextMenu'
+import type { SessionStatus } from '../App'
 import type { Preset } from '../useSnowconfig'
 
 interface TabBarProps {
   sessions: { id: number }[]
   activeId: number | 'home'
   labels: Record<number, string>
+  statuses: Record<number, SessionStatus>
   commands: string[]
   runningCommands: string[]
   presets: Preset[]
@@ -26,6 +28,7 @@ function TabBar({
   sessions,
   activeId,
   labels,
+  statuses,
   commands,
   runningCommands,
   presets,
@@ -80,6 +83,9 @@ function TabBar({
           className={`tab${activeId === id ? ' tab-active' : ''}`}
           onClick={() => onSelect(id)}
         >
+          {statuses[id] && statuses[id] !== 'idle' && activeId !== id && (
+            <span className={`tab-status tab-status-${statuses[id]}`} />
+          )}
           <span className="tab-label">{labels[id] ?? `Session ${id}`}</span>
           <button
             className="tab-close"

@@ -728,6 +728,32 @@ body {
   white-space: nowrap;
 }
 
+.tab-status {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.tab-status-attention {
+  background: var(--ui-success, #a6e3a1);
+}
+
+.tab-status-busy {
+  background: var(--ui-accent, #a6dcf0);
+  animation: tab-status-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes tab-status-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 .tab-close {
   -webkit-app-region: no-drag;
   flex: 0 0 auto;

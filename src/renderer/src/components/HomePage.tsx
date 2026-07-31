@@ -226,20 +226,16 @@ function HomePage({
           <button className="context-menu-item" onClick={() => startEdit(menu.index)}>
             Edit startup command…
           </button>
-          {presets.some((_, i) => i !== menu.index) && (
-            <div className="context-menu-label">Add split</div>
-          )}
-          {presets.map((preset, i) =>
-            i === menu.index ? null : (
-              <button
-                key={i}
-                className="context-menu-item context-menu-subitem"
-                onClick={() => addSplit(menu.index, preset.name)}
-              >
-                {preset.name}
-              </button>
-            )
-          )}
+          <div className="context-menu-label">Add split</div>
+          {presets.map((preset, i) => (
+            <button
+              key={i}
+              className="context-menu-item context-menu-subitem"
+              onClick={() => addSplit(menu.index, preset.name)}
+            >
+              {preset.name}
+            </button>
+          ))}
           {(presets[menu.index].splits?.length ?? 0) > 0 && (
             <button className="context-menu-item" onClick={() => removeSplit(menu.index)}>
               Remove last split

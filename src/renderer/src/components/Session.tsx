@@ -1,5 +1,5 @@
-import { Fragment, memo, useCallback, useRef, useState } from 'react'
-import type { Pane, Split } from '../App'
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { Pane, SessionStatus, Split } from '../App'
 import { useKeybinds } from '../keybinds'
 import { useCollapsiblePane } from '../useCollapsiblePane'
 import CommitView from './CommitView'
@@ -9,7 +9,6 @@ import WorkingDiffView from './WorkingDiffView'
 import Terminal from './Terminal'
 
 const MIN_PANE = 120
-const PANE_COLLAPSE = 60
 const MIN_MAIN = 120
 const MIN_BOTTOM = 80
 const BOTTOM_COLLAPSE = 40
@@ -29,6 +28,7 @@ interface SessionProps {
   onCloseSplit: (sessionId: number) => void
   onOpenCommit: (cwd: string, hash: string) => void
   onCwd: (sessionId: number, cwd: string) => void
+  onStatus: (sessionId: number, status: SessionStatus) => void
 }
 
 function focusPane(container: Element | null | undefined): void {
@@ -49,11 +49,41 @@ function Session({
   onClosePane,
   onCloseSplit,
   onOpenCommit,
-  onCwd
+  onCwd,
+  onStatus
 }: SessionProps): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const mainRef = useRef<HTMLDivElement>(null)
   const lastTopRef = useRef(0)
+
+  const [paneStatuses, setPaneStatuses] = useState<Record<number, 'busy' | 'idle'>>({})
+  const paneStatusCbs = useMemo(() => {
+    const map: Record<number, (s: 'busy' | 'idle') => void> = {}
+    for (const pane of panes) {
+      map[pane.id] = (s) =>
+        setPaneStatuses((prev) => (prev[pane.id] === s ? prev : { ...prev, [pane.id]: s }))
+    }
+    return map
+  }, [panes])
+
+  const busy = panes.some((p) => paneStatuses[p.id] === 'busy')
+  const [attention, setAttention] = useState(false)
+  const [prevBusy, setPrevBusy] = useState(busy)
+  const [wasActive, setWasActive] = useState(active)
+
+  if (busy !== prevBusy) {
+    setPrevBusy(busy)
+    if (!busy && !active) setAttention(true)
+  }
+  if (active !== wasActive) {
+    setWasActive(active)
+    if (active) setAttention(false)
+  }
+
+  const status: SessionStatus = busy ? 'busy' : attention ? 'attention' : 'idle'
+  useEffect(() => {
+    onStatus(id, status)
+  }, [id, status, onStatus])
 
   const [grows, setGrows] = useState<{ sig: string; values: Record<string, number> }>({
     sig: '',
@@ -99,15 +129,7 @@ function Session({
     const b = keys[i + 1]
     if (a == null || b == null || base[a] == null || base[b] == null) return
     const total = base[a] + base[b]
-    let na = Math.max(0, Math.min(total, base[a] + delta))
-    if (na < base[a]) {
-      if (na < PANE_COLLAPSE) na = 0
-      else if (na < MIN_PANE) na = MIN_PANE
-    } else if (na > base[a]) {
-      const nb = total - na
-      if (nb < PANE_COLLAPSE) na = total
-      else if (nb < MIN_PANE) na = total - MIN_PANE
-    }
+    const na = Math.max(MIN_PANE, Math.min(total - MIN_PANE, base[a] + delta))
     setGrows({ sig, values: { ...base, [a]: na, [b]: total - na } })
   }
 
@@ -167,6 +189,7 @@ function Session({
                 startupCommand={pane.startupCommand ?? startupCommand}
                 active={active}
                 focusOnActivate={i === 0}
+                onStatus={paneStatusCbs[pane.id]}
               />
             </div>
           </Fragment>

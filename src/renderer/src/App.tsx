@@ -25,6 +25,8 @@ export type Split = { kind: 'commit'; cwd: string; hash: string } | { kind: 'dif
 
 export type Pane = { id: number; cwd?: string; startupCommand?: string }
 
+export type SessionStatus = 'busy' | 'attention' | 'idle'
+
 type Tab =
   | { kind: 'shell'; id: number; cwd?: string; startupCommand?: string }
   | { kind: 'commit'; id: number; cwd: string; hash: string }
@@ -39,6 +41,7 @@ function App(): React.JSX.Element {
   const [splits, setSplits] = useState<Record<number, Split>>({})
   const [running, setRunning] = useState<Record<string, number>>({})
   const [browserTitles, setBrowserTitles] = useState<Record<number, string>>({})
+  const [statuses, setStatuses] = useState<Record<number, SessionStatus>>({})
   const [frozen, setFrozen] = useState<{ entries: { cwd: string; presetCwd?: string }[] } | null>(
     null
   )
@@ -265,6 +268,10 @@ function App(): React.JSX.Element {
     setCwds((prev) => ({ ...prev, [sessionId]: next }))
   }, [])
 
+  const handleSessionStatus = useCallback((sessionId: number, status: SessionStatus): void => {
+    setStatuses((prev) => (prev[sessionId] === status ? prev : { ...prev, [sessionId]: status }))
+  }, [])
+
   const handleBottomLayout = useCallback((height: number, collapsed: boolean): void => {
     window.api.snowconfig.setLayout({ bottomHeight: height, bottomCollapsed: collapsed })
   }, [])
@@ -334,6 +341,7 @@ function App(): React.JSX.Element {
     setPanes(dropKey)
     setSplits(dropKey)
     setBrowserTitles(dropKey)
+    setStatuses(dropKey)
   }
 
   const openPresetSession = (preset?: Preset): void =>
@@ -388,6 +396,7 @@ function App(): React.JSX.Element {
             sessions={tabs}
             activeId={activeId}
             labels={labels}
+            statuses={statuses}
             onSelect={setActiveId}
             onClose={closeSession}
             onAdd={() => {
@@ -470,6 +479,7 @@ function App(): React.JSX.Element {
                   onOpenCommit={openCommit}
                   onClosePane={closePane}
                   onCwd={handleSessionCwd}
+                  onStatus={handleSessionStatus}
                 />
               )
             })}

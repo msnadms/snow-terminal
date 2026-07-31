@@ -30,9 +30,13 @@ function parseOsc7(payload: string): string | null {
   return path
 }
 
+const IDLE_MS = 1000
+const RESIZE_QUIET_MS = 500
+
 interface TerminalProps {
   cwd?: string
   onCwd?: (cwd: string) => void
+  onStatus?: (status: 'busy' | 'idle') => void
   startupCommand?: string
   active?: boolean
   focusOnActivate?: boolean
@@ -41,16 +45,19 @@ interface TerminalProps {
 function Terminal({
   cwd,
   onCwd,
+  onStatus,
   startupCommand,
   active = true,
   focusOnActivate
 }: TerminalProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const onCwdRef = useRef(onCwd)
+  const onStatusRef = useRef(onStatus)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const searchAddonRef = useRef<SearchAddon | null>(null)
   const termRef = useRef<XTerm | null>(null)
   const idRef = useRef<number | null>(null)
+  const resizeQuietUntilRef = useRef(0)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -59,6 +66,10 @@ function Terminal({
   useEffect(() => {
     onCwdRef.current = onCwd
   }, [onCwd])
+
+  useEffect(() => {
+    onStatusRef.current = onStatus
+  }, [onStatus])
 
   useEffect(() => {
     const container = containerRef.current
@@ -112,7 +123,19 @@ function Terminal({
       return true
     })
 
-    const offData = window.api.terminal.onData(id, (data) => term.write(data))
+    let idleTimer: ReturnType<typeof setTimeout> | null = null
+    const settle = (): void => {
+      idleTimer = null
+      onStatusRef.current?.('idle')
+    }
+    const offData = window.api.terminal.onData(id, (data) => {
+      term.write(data)
+      if (!onStatusRef.current) return
+      if (!idleTimer && Date.now() < resizeQuietUntilRef.current) return
+      if (!idleTimer) onStatusRef.current('busy')
+      else clearTimeout(idleTimer)
+      idleTimer = setTimeout(settle, IDLE_MS)
+    })
 
     const offExit = window.api.terminal.onExit(id, () => {
       term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n')
@@ -127,6 +150,7 @@ function Terminal({
       try {
         fitAddon.fit()
         window.api.terminal.resize(id, term.cols, term.rows)
+        resizeQuietUntilRef.current = Date.now() + RESIZE_QUIET_MS
       } catch {
         // fit() can throw on a detached element
       }
@@ -146,6 +170,7 @@ function Terminal({
       resizeObserver.disconnect()
       oscDisposable.dispose()
       searchResults.dispose()
+      if (idleTimer) clearTimeout(idleTimer)
       offData()
       offExit()
       inputDisposable.dispose()
@@ -170,6 +195,7 @@ function Terminal({
       try {
         fit.fit()
         window.api.terminal.resize(id, term.cols, term.rows)
+        resizeQuietUntilRef.current = Date.now() + RESIZE_QUIET_MS
         if (focusOnActivate) term.focus()
       } catch {
         // pane detached
