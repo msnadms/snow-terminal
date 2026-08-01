@@ -36,6 +36,26 @@ next to the code they touch.
   split layouts, and per-preset command buttons; launch them from the home page.
 - **First-run tour** - a short guided intro the first time you open a repo.
 
+## Installation
+
+### Windows ([Scoop](https://scoop.sh/))
+
+```powershell
+scoop bucket add snow https://github.com/msnadms/scoop-snow
+scoop install snow
+```
+
+Updates come through `scoop update snow`.
+
+### All platforms
+
+Grab an installer for your OS from the
+[latest release](https://github.com/msnadms/snow-terminal/releases/latest):
+
+- **Windows** - `snow-<version>-setup.exe` (installer) or `snow-<version>-win-x64.zip` (portable).
+- **macOS** - `snow-<version>.dmg`.
+- **Linux** - `snow-<version>.AppImage`, or the `.deb` / snap.
+
 ## Configuration
 
 All config lives in `~/.config/snow/` (`$XDG_CONFIG_HOME/snow/` when set).
@@ -175,3 +195,7 @@ $ npm run build:mac
 # For Linux
 $ npm run build:linux
 ```
+
+## License
+
+[MIT](./LICENSE) © Mason Adams

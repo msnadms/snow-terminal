@@ -31,6 +31,7 @@ function parseOsc7(payload: string): string | null {
 }
 
 const IDLE_MS = 1000
+const BUSY_MS = 1000
 const QUIET_MS = 2500
 
 interface TerminalProps {
@@ -131,16 +132,25 @@ function Terminal({
     term.textarea?.addEventListener('blur', bumpQuiet)
 
     let idleTimer: ReturnType<typeof setTimeout> | null = null
+    let busy = false
+    let burstStart = 0
     const settle = (): void => {
       idleTimer = null
-      onStatusRef.current?.('idle')
+      if (busy) {
+        busy = false
+        onStatusRef.current?.('idle')
+      }
     }
     const offData = window.api.terminal.onData(id, (data) => {
       term.write(data)
       if (!onStatusRef.current) return
       if (!idleTimer && Date.now() < quietUntilRef.current) return
-      if (!idleTimer) onStatusRef.current('busy')
+      if (!idleTimer) burstStart = Date.now()
       else clearTimeout(idleTimer)
+      if (!busy && Date.now() - burstStart >= BUSY_MS) {
+        busy = true
+        onStatusRef.current('busy')
+      }
       idleTimer = setTimeout(settle, IDLE_MS)
     })
 

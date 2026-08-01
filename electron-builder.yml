@@ -16,6 +16,10 @@ asarUnpack:
   - '**/node_modules/node-pty/**'
 win:
   executableName: snow
+  target:
+    - nsis
+    - zip
+  artifactName: ${name}-${version}-win-${arch}.${ext}
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
