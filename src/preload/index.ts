@@ -20,6 +20,7 @@ import type { WorkflowList, WorkflowResult } from '../main/workflow'
 import type { ThemeResult } from '../main/theme'
 import type { SnowignoreResult } from '../main/snowignore'
 import type { SnowconfigResult, Layout } from '../main/snowconfig'
+import type { UsageResult } from '../main/usage'
 
 function idDispatcher<P extends { id: number }>(
   channel: string
@@ -224,7 +225,16 @@ const snowconfig = {
   }
 }
 
-const api = { terminal, browser, git, workflow, theme, snowignore, snowconfig }
+const usage = {
+  get: (): Promise<UsageResult> => ipcRenderer.invoke('usage:get'),
+  onChanged: (callback: (result: UsageResult) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, result: UsageResult): void => callback(result)
+    ipcRenderer.on('usage:changed', listener)
+    return () => ipcRenderer.removeListener('usage:changed', listener)
+  }
+}
+
+const api = { terminal, browser, git, workflow, theme, snowignore, snowconfig, usage }
 
 export type Api = typeof api
 

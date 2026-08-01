@@ -11,6 +11,7 @@ import { initRegistry, disposeRegistryWatcher } from './registry'
 import { registerThemeHandlers, disposeThemeWatcher } from './theme'
 import { registerSnowignoreHandlers, disposeSnowignoreWatcher } from './snowignore'
 import { registerSnowconfigHandlers, disposeSnowconfigWatcher } from './snowconfig'
+import { registerUsageHandlers, disposeUsageWatcher } from './usage'
 import { initLogging, closeLogging, log, logPath, watchRenderer } from './log'
 import { configDir } from './config'
 
@@ -117,6 +118,9 @@ app.whenReady().then(() => {
   // Load ~/.config/snow/.snowconfig and watch it for edits.
   registerSnowconfigHandlers()
 
+  // Watch ~/.claude/projects for Claude Code session logs to tally daily/weekly cost.
+  registerUsageHandlers()
+
   log('info', 'app', 'ready', { log: logPath(), config: configDir() })
 
   createWindow()
@@ -146,6 +150,7 @@ app.on('will-quit', () => {
   disposeThemeWatcher()
   disposeSnowignoreWatcher()
   disposeSnowconfigWatcher()
+  disposeUsageWatcher()
   closeLogging()
 })
 

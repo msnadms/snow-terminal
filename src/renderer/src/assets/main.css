@@ -138,6 +138,30 @@ body {
   color: var(--ui-accent, #89dceb);
 }
 
+.usage-meter {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  flex: 0 0 auto;
+  font-size: 12px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  -webkit-app-region: no-drag;
+}
+
+.usage-meter-value {
+  color: var(--ui-text, #cdd6f4);
+}
+
+.usage-meter-label {
+  color: var(--ui-placeholder, #6c7086);
+  margin-right: 4px;
+}
+
+.usage-meter-label:last-child {
+  margin-right: 0;
+}
+
 .actionbar-repo {
   display: flex;
   align-items: center;

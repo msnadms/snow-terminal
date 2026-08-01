@@ -31,7 +31,7 @@ function parseOsc7(payload: string): string | null {
 }
 
 const IDLE_MS = 1000
-const RESIZE_QUIET_MS = 500
+const QUIET_MS = 2500
 
 interface TerminalProps {
   cwd?: string
@@ -57,7 +57,7 @@ function Terminal({
   const searchAddonRef = useRef<SearchAddon | null>(null)
   const termRef = useRef<XTerm | null>(null)
   const idRef = useRef<number | null>(null)
-  const resizeQuietUntilRef = useRef(0)
+  const quietUntilRef = useRef(0)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -123,6 +123,13 @@ function Terminal({
       return true
     })
 
+    const bumpQuiet = (): void => {
+      quietUntilRef.current = Date.now() + QUIET_MS
+    }
+    term.element?.addEventListener('wheel', bumpQuiet, { passive: true })
+    term.textarea?.addEventListener('focus', bumpQuiet)
+    term.textarea?.addEventListener('blur', bumpQuiet)
+
     let idleTimer: ReturnType<typeof setTimeout> | null = null
     const settle = (): void => {
       idleTimer = null
@@ -131,7 +138,7 @@ function Terminal({
     const offData = window.api.terminal.onData(id, (data) => {
       term.write(data)
       if (!onStatusRef.current) return
-      if (!idleTimer && Date.now() < resizeQuietUntilRef.current) return
+      if (!idleTimer && Date.now() < quietUntilRef.current) return
       if (!idleTimer) onStatusRef.current('busy')
       else clearTimeout(idleTimer)
       idleTimer = setTimeout(settle, IDLE_MS)
@@ -150,7 +157,7 @@ function Terminal({
       try {
         fitAddon.fit()
         window.api.terminal.resize(id, term.cols, term.rows)
-        resizeQuietUntilRef.current = Date.now() + RESIZE_QUIET_MS
+        bumpQuiet()
       } catch {
         // fit() can throw on a detached element
       }
@@ -170,6 +177,9 @@ function Terminal({
       resizeObserver.disconnect()
       oscDisposable.dispose()
       searchResults.dispose()
+      term.element?.removeEventListener('wheel', bumpQuiet)
+      term.textarea?.removeEventListener('focus', bumpQuiet)
+      term.textarea?.removeEventListener('blur', bumpQuiet)
       if (idleTimer) clearTimeout(idleTimer)
       offData()
       offExit()
@@ -195,7 +205,7 @@ function Terminal({
       try {
         fit.fit()
         window.api.terminal.resize(id, term.cols, term.rows)
-        resizeQuietUntilRef.current = Date.now() + RESIZE_QUIET_MS
+        quietUntilRef.current = Date.now() + QUIET_MS
         if (focusOnActivate) term.focus()
       } catch {
         // pane detached

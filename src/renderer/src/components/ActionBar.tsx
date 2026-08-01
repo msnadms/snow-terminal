@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import BranchSelect from './BranchSelect'
 import FailureDialog from './FailureDialog'
 import WorkflowSelect from './WorkflowSelect'
+import UsageMeter from './UsageMeter'
 import { type Failure } from '@renderer/format'
 import { useGitAction } from '@renderer/useGitAction'
 import { useKeybinds } from '@renderer/keybinds'
@@ -277,6 +278,7 @@ function ActionBar({
         </button>
       )}
       <div className="actionbar-right">
+        <UsageMeter />
         {repoName && (
           <div className="actionbar-repo">
             <span className="actionbar-repo-name" title={cwd}>
