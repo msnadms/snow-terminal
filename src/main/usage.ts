@@ -6,13 +6,11 @@ import { broadcast } from './config'
 import { log } from './log'
 
 export interface UsageResult {
-  day: number
-  week: number
+  session: number
   error: string | null
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000
-const WEEK_MS = 7 * DAY_MS
+const sessionStart = Date.now()
 
 function projectsDir(): string {
   return path.join(os.homedir(), '.claude', 'projects')
@@ -106,20 +104,16 @@ function parseFile(full: string): Entry[] {
 
 function computeUsage(): UsageResult {
   const dir = projectsDir()
-  const now = Date.now()
-  const dayAgo = now - DAY_MS
-  const weekAgo = now - WEEK_MS
   const seen = new Set<string>()
-  let day = 0
-  let week = 0
+  let session = 0
 
   let projects: string[]
   try {
     projects = fs.readdirSync(dir)
   } catch (err) {
     const e = err as NodeJS.ErrnoException
-    if (e.code === 'ENOENT') return { day: 0, week: 0, error: null }
-    return { day: 0, week: 0, error: e.message }
+    if (e.code === 'ENOENT') return { session: 0, error: null }
+    return { session: 0, error: e.message }
   }
 
   const live = new Set<string>()
@@ -141,7 +135,7 @@ function computeUsage(): UsageResult {
       } catch {
         continue
       }
-      if (stat.mtimeMs < weekAgo) continue
+      if (stat.mtimeMs < sessionStart) continue
       live.add(full)
       const cached = fileCache.get(full)
       const entries =
@@ -160,14 +154,13 @@ function computeUsage(): UsageResult {
   }
 
   for (const { key, ts, cost } of all) {
-    if (ts < weekAgo) continue
+    if (ts < sessionStart) continue
     if (key !== ':' && seen.has(key)) continue
     seen.add(key)
-    week += cost
-    if (ts >= dayAgo) day += cost
+    session += cost
   }
 
-  return { day, week, error: null }
+  return { session, error: null }
 }
 
 let watcher: fs.FSWatcher | null = null

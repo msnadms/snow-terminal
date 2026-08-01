@@ -203,6 +203,17 @@ body {
   color: var(--ui-accent, #a6dcf0);
 }
 
+@media (max-width: 1100px) {
+  .actionbar .usage-meter,
+  .actionbar-repo {
+    display: none;
+  }
+
+  .actionbar .picker-button {
+    max-width: 140px;
+  }
+}
+
 .picker-select {
   position: relative;
   display: flex;
@@ -216,6 +227,7 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   max-width: 220px;
   height: 22px;
   padding: 0 8px;

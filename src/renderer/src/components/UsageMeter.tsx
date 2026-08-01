@@ -14,12 +14,10 @@ function UsageMeter(): React.JSX.Element | null {
     <>
       <div
         className="usage-meter"
-        title="Estimated Claude Code usage on this machine (API-rate cost, last 24h / 7d)"
+        title="Estimated Claude Code usage this snow session (API-rate cost)"
       >
-        <span className="usage-meter-value">{formatCost(usage.day)}</span>
-        <span className="usage-meter-label">day</span>
-        <span className="usage-meter-value">{formatCost(usage.week)}</span>
-        <span className="usage-meter-label">wk</span>
+        <span className="usage-meter-value">{formatCost(usage.session)}</span>
+        <span className="usage-meter-label">session</span>
       </div>
       <div className="actionbar-divider" />
     </>
