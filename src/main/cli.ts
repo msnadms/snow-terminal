@@ -8,25 +8,6 @@ import { presetForDir, type Preset } from './snowconfig'
 
 type CommandState = 'ready' | 'install' | 'update' | 'path'
 
-const usage = `snow - a terminal emulator and AI workflow helper
-
-Usage:
-  snow [folder] [command]
-
-  folder         open a session there. The folder is saved as a preset in
-                 ~/.config/snow/.snowconfig unless one already points at it.
-  command        startup command for a newly created preset (ignored if the
-                 folder already has a preset).
-
-Options:
-  -h, --help     print this message
-  -v, --version  print the version
-`
-
-function hasFlag(argv: string[], ...names: string[]): boolean {
-  return argv.slice(1).some((value) => names.includes(value))
-}
-
 function positionalArgs(argv: string[], cwd: string): string[] {
   return argv
     .slice(1)
@@ -56,14 +37,6 @@ function presetFor(argv: string[], cwd: string): Preset | null {
   return preset
 }
 
-function print(text: string): void {
-  try {
-    process.stdout.write(text)
-  } catch {
-    /* launched without a console */
-  }
-}
-
 function focusWindow(): void {
   const window = BrowserWindow.getAllWindows()[0]
   if (!window) return
@@ -76,14 +49,6 @@ let launched: { argv: string[]; cwd: string } | null = null
 let startupPreset: Preset | null = null
 
 export function startCli(): boolean {
-  if (hasFlag(process.argv, '-h', '--help')) {
-    print(usage)
-    return false
-  }
-  if (hasFlag(process.argv, '-v', '--version')) {
-    print(`snow ${app.getVersion()}\n`)
-    return false
-  }
   if (app.isPackaged && !app.requestSingleInstanceLock()) return false
 
   launched = { argv: process.argv, cwd: process.cwd() }
