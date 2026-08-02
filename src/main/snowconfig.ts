@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, dialog } from 'electron'
+import { ipcMain, BrowserWindow, dialog, shell } from 'electron'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import fs from 'fs'
@@ -16,6 +16,7 @@ export interface Preset {
   commands?: string[]
   startupCommand?: string
   splits?: string[]
+  paneRatios?: number[]
 }
 
 export interface Layout {
@@ -61,6 +62,16 @@ function validateCommandList(value: unknown): string[] {
   return result
 }
 
+function validateRatios(value: unknown): number[] | null {
+  if (!Array.isArray(value) || value.length < 2) return null
+  const result: number[] = []
+  for (const item of value) {
+    if (typeof item !== 'number' || !Number.isFinite(item) || item <= 0) return null
+    result.push(item)
+  }
+  return result
+}
+
 function validate(raw: unknown): Preset[] {
   if (!raw || typeof raw !== 'object') return []
   const list = (raw as Record<string, unknown>).presets
@@ -83,6 +94,8 @@ function validate(raw: unknown): Preset[] {
     }
     const splits = validateCommandList(o.splits)
     if (splits.length) preset.splits = splits
+    const paneRatios = validateRatios(o.paneRatios)
+    if (paneRatios) preset.paneRatios = paneRatios
     result.push(preset)
   }
   return result
@@ -387,6 +400,7 @@ export function registerSnowconfigHandlers(): void {
         const preset = cfg.presets[presetIndex]
         if (!preset) return false
         preset.splits = [...(preset.splits ?? []), trimmed]
+        delete preset.paneRatios
         return true
       })
     }
@@ -397,8 +411,23 @@ export function registerSnowconfigHandlers(): void {
       if (!preset || !preset.splits || preset.splits.length === 0) return false
       preset.splits.pop()
       if (preset.splits.length === 0) delete preset.splits
+      delete preset.paneRatios
       return true
     })
+  )
+  ipcMain.handle(
+    'snowconfig:setPaneRatios',
+    (_e, presetIndex: number, ratios: number[]): SnowconfigResult =>
+      mutateConfig((cfg) => {
+        const preset = cfg.presets[presetIndex]
+        if (!preset) return false
+        const next = validateRatios(ratios)
+        if (!next) return false
+        const prev = preset.paneRatios
+        if (prev && prev.length === next.length && prev.every((v, i) => v === next[i])) return false
+        preset.paneRatios = next
+        return true
+      })
   )
   ipcMain.handle(
     'snowconfig:setStartupCommand',
@@ -440,4 +469,5 @@ export function registerSnowconfigHandlers(): void {
     if (result.canceled || result.filePaths.length === 0) return null
     return result.filePaths[0]
   })
+  ipcMain.handle('snowconfig:openConfigDir', (): Promise<string> => shell.openPath(configDir()))
 }

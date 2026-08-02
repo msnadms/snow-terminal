@@ -195,7 +195,7 @@ is already staged is left alone — snow only filters what it adds.
 Session presets for the home tab, as JSON. `src/main/snowconfig.ts` mirrors `theme.ts`'s lifecycle
 (default written with `flag: 'wx'` on first launch, directory `fs.watch` broadcasting
 `snowconfig:changed`). Shape is
-`{ presets: { name, cwd, default?, commands?, startupCommand?, splits? }[], name?, startupCommand?, gradients?, theme?, tourSeen?, keybinds?, layout? }` (`splits` are other presets' names); entries
+`{ presets: { name, cwd, default?, commands?, startupCommand?, splits?, paneRatios? }[], name?, startupCommand?, gradients?, theme?, tourSeen?, keybinds?, layout? }` (`splits` are other presets' names); entries
 missing a string `name`/`cwd` are dropped, and a leading `~` in `cwd` is expanded to the home dir **only on
 read**, so the renderer gets absolute paths while the file keeps the raw `~`. The top-level `name`
 drives the home tab's `Hello {name}` greeting (falling back to `snow`); `seedName()` on registration
@@ -204,7 +204,7 @@ fills it in **once** when absent by resolving the GitHub name (`gh api user`, th
 write path preserves it. `startupCommand` is the command each session's main terminal(s) run
 (default `claude` in the renderer when absent); a preset may carry its **own** `startupCommand` that
 overrides the top-level one for sessions opened from that preset. The chosen command is captured on
-the shell tab at open time (`addSession(cwd, startupCommand)`), **not** re-derived from `cwd` — two
+the shell tab at open time (`addSession(preset)`), **not** re-derived from `cwd` — two
 presets can share a directory, so a `cwd` match would pick the wrong one. `Session` renders
 `tab.startupCommand ?? startupCommand ?? 'claude'`. The home-page add-preset form takes it as an
 optional field. `gradients` is a boolean (default `true` when absent)
@@ -233,17 +233,21 @@ one stable `onBottomLayout` down to every `Session`. `Session` and `Terminal` ar
 drag on one pane doesn't reconcile the whole terminal tree.
 
 `commands` is **per preset** — the shell-command buttons the tab bar shows to the right of its `+`
-when the active session belongs to that preset. `App` resolves the active preset by matching the
-active shell tab's _original_ cwd (`activeTab.cwd`, fixed at open time — not the live OSC-7 cwd, so
-it survives `cd`) against `presets[].cwd`, and derives `activePresetIndex` fresh each render rather
-than storing it, so it never drifts when presets are reordered. Each button is a **toggle**: clicking
+when the active session belongs to that preset. `App` resolves it through `presetIndexFor`, the single
+preset-identity helper: it matches the `presetName` captured at open time when there is one, and only
+falls back to a `presets[].cwd` match for entries that never came from a preset (a commit or diff tab,
+whose `presetCwd` is just the repo). Matching on **name, not cwd**, is what lets two presets share a
+directory and still get their own command buttons — the same reason `startupCommand` and `paneRatios`
+are captured rather than re-derived. `activePresetIndex` is derived fresh each render rather
+than stored, so it never drifts when presets are reordered. Each button is a **toggle**: clicking
 spawns a hidden background PTY (no xterm attached) running the command in the preset's cwd, and
 clicking again kills it — so a long-running command like `npm run dev` starts and stops from the one
 button. The command is spawned as `<command>; exit` so the shell (and the PTY) dies when the command
 finishes — both PowerShell (`-NoExit`) and the interactive POSIX shell otherwise outlive their
 command, which would leave the button stuck green when the process ends on its own or is killed
-externally. `App` holds the `running` map keyed by `` `${presetCwd}\n${command}` `` → terminal id (so
-the same command under different presets tracks independently) and passes the active preset's running
+externally. `App` holds the `running` map keyed by `` `${presetName}\n${command}` `` → terminal id (so
+the same command under different presets tracks independently — keyed by cwd it would collide for two
+presets sharing a directory, the same trap `presetIndexFor` avoids) and passes the active preset's running
 subset to `TabBar` as `runningCommands`; a self-terminating process clears its own button via the
 shared `pty:exit` listener. Background PTY ids come from the shared `nextTerminalId()`
 (`src/renderer/src/terminalId.ts`), the same allocator `Terminal` uses, so they never collide with
@@ -262,6 +266,25 @@ and its right-click `ContextMenu` lists the **other** presets under an "Add spli
 **Remove last split** item, backed by the `snowconfig:addSplit(presetIndex, name)` (appends the name)
 and `snowconfig:removeSplit(presetIndex)` (pops the last) handlers; the file is otherwise
 hand-editable like every other field.
+
+`paneRatios` remembers how wide those split panes were dragged, as one fraction per top pane summing
+to 1. It is written on **drag end** by `Session`'s horizontal `ResizeHandle`s (the same `onEnd` the
+edge panes use) from the measured pane widths, and read back by `Session` as the `flexGrow` fallback
+when no live drag override exists — scaled by the pane count (`ratio / sum * panes.length`) so each
+pane averages a grow of 1 and a diff split opening beside them still takes an equal share. It is
+**per preset, not global** like `layout`: the ratios are a property of that preset's split
+arrangement, so `App` resolves them through the `presetName` captured on the shell tab at open time
+(a `cwd` match would pick the wrong preset when two share a directory, the same reason
+`startupCommand` is captured rather than re-derived).
+
+The array is only meaningful for one pane count, so both ends gate on it: `Session` ignores a saved
+array whose length ≠ `panes.length`, and `App`'s `handlePaneRatios` refuses to write one whose length
+≠ `1 + splits.length`. That is what keeps an ad-hoc `newSplit` pane, or a split whose referenced
+preset has since been deleted, from persisting ratios the preset can never reproduce. `addSplit` and
+`removeSplit` drop `paneRatios` outright, since a changed pane count invalidates it anyway.
+`setPaneRatios` returns `false` when the ratios already match what is on disk, so the click-without-drag
+that `ResizeHandle`'s `onEnd` also fires never writes the file — and therefore never triggers the watcher
+broadcast that would re-render every window.
 
 `tourSeen` is a boolean set once the first-run guided `Tour` is dismissed. It lives here **deliberately
 instead of renderer `localStorage`**: a synchronous `localStorage.getItem` on the startup path was
@@ -320,7 +343,7 @@ no-opping when that index is empty. The digit is read from `e.code` (`Digit1`/`N
 because `Shift+1` reports a punctuation `key` on most layouts. Each reuses `useCaptureKeydown` (joining the
 same shared registry) rather than the named-action map, since the digit is derived from the event, not
 looked up per action; `modifiersMatch` is exact, so `Mod+Shift+1` and `Mod+Alt+1` never collide. `App` owns both:
-`openPreset` always **opens** the nth preset as a new session (`addSession(cwd, startupCommand, splits)`),
+`openPreset` always **opens** the nth preset as a new session (`addSession(preset)`),
 from any tab. `splitPreset`'s target depends on the active tab — **on the home page** it opens the nth
 preset (same as `openPreset`); on a **shell** tab it _splits_ the active session with that preset; on any
 other tab its handler is `undefined`, so those keys fall through. The named binds `newSplit`/`diffSplit`
@@ -334,16 +357,18 @@ passthrough fields are structural — no write path can drop a top-level field. 
 handlers — `snowconfig:addPreset`, `snowconfig:setDefault(index)` (index `-1` clears the default),
 `snowconfig:removePreset(index)`, `snowconfig:addCommand(presetIndex, command)`,
 `snowconfig:removeCommand(presetIndex, index)`, `snowconfig:addSplit(presetIndex, name)`,
-`snowconfig:removeSplit(presetIndex)`, `snowconfig:setTheme(name)` (empty clears it back
+`snowconfig:removeSplit(presetIndex)`, `snowconfig:setPaneRatios(presetIndex, ratios)`,
+`snowconfig:setTheme(name)` (empty clears it back
 to the default `theme`), `snowconfig:setTourSeen()` (marks the tour dismissed), and
 `snowconfig:setLayout(patch)` (merges the given keys into `layout`) — that mutate the parsed config and rewrite the file;
 the fs.watch broadcast then keeps every window in sync. `useSnowconfig` (`src/renderer/src/useSnowconfig.ts`) is the single subscription;
 `App` reads it so the tab strip's `+` button opens the `default` preset's cwd (home dir if none), and
 `HomePage` renders each preset with a default checkbox (radio-like via `setDefault`) plus an add
 form. Both `HomePage` and `TabBar` delete entries through the shared `ContextMenu` component
-(right-click → Remove). Opening a preset calls `App`'s `addSession(cwd)`, which seeds the session's
-cwd (so git/tab-label are correct before the shell's first OSC 7) and passes it to both terminals'
-spawn.
+(right-click → Remove). Opening a preset calls `App`'s `addSession(preset)` — the whole `Preset` is the
+unit, so every open path (`HomePage`, the tab strip `+`, the `newTab`/`openPreset`/`splitPreset`
+keybinds) shares one signature — which seeds the session's cwd (so git/tab-label are correct before the
+shell's first OSC 7) and passes it to both terminals' spawn.
 
 #### `snow.log`
 
@@ -489,7 +514,7 @@ non-zero container size so a hidden (0×0) pane is never shrunk to `FitAddon`'s 
 ### Multi-repo git view
 
 The active tab can touch more than one repo — its base cwd plus each split pane's live cwd. `App`
-builds `repoEntries` (`{ cwd, presetCwd }`, deduped by cwd via `uniqueBy`) from the active tab, joins
+builds `repoEntries` (`{ cwd, presetCwd, presetName }`, deduped by cwd via `uniqueBy`) from the active tab, joins
 their cwds into a stable `discoverKey`, and runs **one** `git:discover` per cwd, merging the results
 (deduped by `repo.path`) into a single `repos` list. Keying the effect on the serialized `discoverKey`
 rather than the array identity is load-bearing: `repoEntries` gets a fresh identity on every OSC 7
@@ -502,8 +527,11 @@ That one `repos` list is the single source of truth for the whole git view. It i
 with `.git-repo-open` giving the expanded section the scroll space — **and** it drives `actionRepos`,
 the action bar's repo set. `actionRepos` re-associates each discovered root with a preset by finding
 the `repoEntries` entry whose cwd lives inside that root (slash-normalized prefix match) and carrying
-its `presetCwd`, so preset command buttons still resolve for the repo you opened while a
-parent-expanded child (which no pane owns) simply gets none. The action bar targets one repo at a time
+its `presetCwd`/`presetName`, so preset command buttons still resolve for the repo you opened while a
+parent-expanded child (which no pane owns) simply gets none. `presetName` rides all the way from the
+shell tab and from each split `Pane` (both split-creation paths — `addSession`'s `splits` and
+`splitActive(preset)` — tag the pane with the preset that produced it), which is what gives
+`presetIndexFor` a name to match on for every pane a session owns. The action bar targets one repo at a time
 (`activeRepo`, chosen by `pickedRepo`/`repoIndex` with a `⇄` switcher that cycles `actionRepos`); its
 name and switch button render only when there is a repo / more than one.
 

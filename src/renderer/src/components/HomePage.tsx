@@ -10,7 +10,7 @@ interface HomePageProps {
   name: string | null
   theme: string
   error: string | null
-  onOpenPreset: (cwd: string, startupCommand?: string, splits?: string[]) => void
+  onOpenPreset: (preset: Preset) => void
 }
 
 function basename(p: string): string {
@@ -119,6 +119,14 @@ function HomePage({
     <div className="home-page" style={{ display: active ? 'flex' : 'none' }}>
       <SnowFall active={active} />
       <ThemeSelect value={theme} onChange={(name) => window.api.snowconfig.setTheme(name)} />
+      <button
+        className="home-config"
+        onClick={() => window.api.snowconfig.openConfigDir()}
+        title="Open ~/.config/snow"
+      >
+        <span className="home-config-icon">{''}</span>
+        <span>config</span>
+      </button>
       <div className="home-content">
         <div className="home-title">
           {greetingName ? `${chooseGreeting()}, ${greetingName}` : 'snow'}
@@ -159,10 +167,7 @@ function HomePage({
                   </button>
                 </form>
               ) : (
-                <button
-                  className="home-preset-open"
-                  onClick={() => onOpenPreset(preset.cwd, preset.startupCommand, preset.splits)}
-                >
+                <button className="home-preset-open" onClick={() => onOpenPreset(preset)}>
                   <span className="home-preset-name">
                     {preset.name}
                     {preset.splits && preset.splits.length > 0 && (

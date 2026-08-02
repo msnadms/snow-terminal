@@ -212,7 +212,10 @@ const snowconfig = {
     ipcRenderer.invoke('snowconfig:addSplit', presetIndex, name),
   removeSplit: (presetIndex: number): Promise<SnowconfigResult> =>
     ipcRenderer.invoke('snowconfig:removeSplit', presetIndex),
+  setPaneRatios: (presetIndex: number, ratios: number[]): Promise<SnowconfigResult> =>
+    ipcRenderer.invoke('snowconfig:setPaneRatios', presetIndex, ratios),
   chooseDir: (): Promise<string | null> => ipcRenderer.invoke('snowconfig:chooseDir'),
+  openConfigDir: (): Promise<string> => ipcRenderer.invoke('snowconfig:openConfigDir'),
   setTheme: (theme: string): Promise<SnowconfigResult> =>
     ipcRenderer.invoke('snowconfig:setTheme', theme),
   setTourSeen: (): Promise<SnowconfigResult> => ipcRenderer.invoke('snowconfig:setTourSeen'),

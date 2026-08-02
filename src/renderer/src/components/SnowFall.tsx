@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { memo, useEffect, useMemo, useRef } from 'react'
 import { useTheme } from '../themeStore'
 
-const FLAKE_COUNT = 270
+const FLAKE_COUNT = 540
 const TRAVEL_VH = 115
 
 const COL_STEP = 4
@@ -213,4 +213,4 @@ function SnowFall({ active }: { active: boolean }): React.JSX.Element {
   )
 }
 
-export default SnowFall
+export default memo(SnowFall)

@@ -23,7 +23,9 @@ interface SessionProps {
   keybinds: Record<string, string>
   savedBottomHeight?: number
   savedBottomCollapsed?: boolean
+  savedPaneRatios?: number[]
   onBottomLayout: (height: number, collapsed: boolean) => void
+  onPaneRatios: (sessionId: number, ratios: number[]) => void
   onClosePane: (sessionId: number, paneId: number) => void
   onCloseSplit: (sessionId: number) => void
   onOpenCommit: (cwd: string, hash: string) => void
@@ -45,7 +47,9 @@ function Session({
   keybinds,
   savedBottomHeight,
   savedBottomCollapsed,
+  savedPaneRatios,
   onBottomLayout,
+  onPaneRatios,
   onClosePane,
   onCloseSplit,
   onOpenCommit,
@@ -106,9 +110,17 @@ function Session({
 
   const handleBottomCwd = useCallback((next: string) => onCwd(id, next), [onCwd, id])
 
+  const savedGrows: Record<string, number> = {}
+  if (savedPaneRatios && savedPaneRatios.length === panes.length) {
+    const total = savedPaneRatios.reduce((a, b) => a + b, 0)
+    panes.forEach((pane, i) => {
+      savedGrows[String(pane.id)] = (savedPaneRatios[i] / total) * panes.length
+    })
+  }
+
   const keys = [...panes.map((p) => String(p.id)), ...(split ? ['diff'] : [])]
   const sig = keys.join(',')
-  const growValues = grows.sig === sig ? grows.values : {}
+  const growValues = grows.sig === sig ? grows.values : savedGrows
 
   const measure = (): Record<string, number> => {
     const el = mainRef.current
@@ -131,6 +143,18 @@ function Session({
     const total = base[a] + base[b]
     const na = Math.max(MIN_PANE, Math.min(total - MIN_PANE, base[a] + delta))
     setGrows({ sig, values: { ...base, [a]: na, [b]: total - na } })
+  }
+
+  const persistRatios = (): void => {
+    if (panes.length < 2) return
+    const widths = measure()
+    const values = panes.map((p) => widths[String(p.id)])
+    if (values.some((v) => !(v > 0))) return
+    const total = values.reduce((a, b) => a + b, 0)
+    onPaneRatios(
+      id,
+      values.map((v) => Math.round((v / total) * 1000) / 1000)
+    )
   }
 
   const navigate = (dir: 'left' | 'right' | 'up' | 'down'): void => {
@@ -172,6 +196,7 @@ function Session({
                 axis="x"
                 onStart={() => (baseGrows.current = measure())}
                 onResize={(d) => resizeSplit(i - 1, d)}
+                onEnd={persistRatios}
               />
             )}
             <div className="terminal-split" style={{ flexGrow: growValues[String(pane.id)] }}>
@@ -200,6 +225,7 @@ function Session({
               axis="x"
               onStart={() => (baseGrows.current = measure())}
               onResize={(d) => resizeSplit(panes.length - 1, d)}
+              onEnd={persistRatios}
             />
             <div className="terminal-diff-split" style={{ flexGrow: growValues['diff'] }}>
               {split.kind === 'commit' ? (

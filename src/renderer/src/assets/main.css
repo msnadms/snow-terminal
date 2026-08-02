@@ -879,16 +879,25 @@ body {
   display: none;
 }
 
-.home-theme {
+.home-theme,
+.home-config {
   position: absolute;
-  left: 14px;
   bottom: 12px;
   z-index: 2;
   font-family: 'Hack Nerd Font Mono', monospace;
   font-size: 12px;
 }
 
-.home-theme-button {
+.home-theme {
+  left: 14px;
+}
+
+.home-config {
+  right: 14px;
+}
+
+.home-theme-button,
+.home-config {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -899,15 +908,20 @@ body {
   border: 1px solid var(--ui-border, #313244);
   border-radius: 4px;
   cursor: pointer;
+}
+
+.home-theme-button {
   font: inherit;
 }
 
-.home-theme-button:hover {
+.home-theme-button:hover,
+.home-config:hover {
   border-color: var(--ui-border-hover, #45475a);
   color: var(--ui-accent, #a6dcf0);
 }
 
-.home-theme-flake {
+.home-theme-flake,
+.home-config-icon {
   color: var(--ui-accent, #a6dcf0);
 }
 
@@ -961,6 +975,10 @@ body {
 
 .home-theme-item-current {
   color: var(--ui-accent, #a6dcf0);
+}
+
+.home-config-icon {
+  font-size: 14px;
 }
 
 .context-menu {

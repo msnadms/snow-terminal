@@ -23,15 +23,23 @@ const GIT_COLLAPSE = 120
 
 export type Split = { kind: 'commit'; cwd: string; hash: string } | { kind: 'diff'; cwd: string }
 
-export type Pane = { id: number; cwd?: string; startupCommand?: string }
+export type Pane = { id: number; cwd?: string; startupCommand?: string; presetName?: string }
 
 export type SessionStatus = 'busy' | 'attention' | 'idle'
 
 type Tab =
-  | { kind: 'shell'; id: number; cwd?: string; startupCommand?: string }
+  | { kind: 'shell'; id: number; cwd?: string; startupCommand?: string; presetName?: string }
   | { kind: 'commit'; id: number; cwd: string; hash: string }
   | { kind: 'diff'; id: number; cwd: string; branch: string; focus?: string; focusKey: number }
   | { kind: 'browser'; id: number; url: string }
+
+type RepoEntry = { cwd: string; presetCwd?: string; presetName?: string }
+
+function presetIndexFor(presets: Preset[], entry?: Partial<RepoEntry>): number {
+  if (entry?.presetName != null) return presets.findIndex((p) => p.name === entry.presetName)
+  if (entry?.presetCwd != null) return presets.findIndex((p) => p.cwd === entry.presetCwd)
+  return -1
+}
 
 function App(): React.JSX.Element {
   const [tabs, setTabs] = useState<Tab[]>([])
@@ -42,9 +50,7 @@ function App(): React.JSX.Element {
   const [running, setRunning] = useState<Record<string, number>>({})
   const [browserTitles, setBrowserTitles] = useState<Record<number, string>>({})
   const [statuses, setStatuses] = useState<Record<number, SessionStatus>>({})
-  const [frozen, setFrozen] = useState<{ entries: { cwd: string; presetCwd?: string }[] } | null>(
-    null
-  )
+  const [frozen, setFrozen] = useState<{ entries: RepoEntry[] } | null>(null)
   const [tour, setTour] = useState(false)
   const nextIdRef = useRef(1)
   const tabsRef = useRef(tabs)
@@ -79,17 +85,19 @@ function App(): React.JSX.Element {
     activeTab && (activeTab.kind === 'commit' || activeTab.kind === 'diff')
       ? activeTab.cwd
       : cwds[activeTab?.id ?? -1]
-  const repoEntries = useMemo<{ cwd: string; presetCwd?: string }[]>(() => {
+  const repoEntries = useMemo<RepoEntry[]>(() => {
     if (!activeTab) return cwd != null ? [{ cwd }] : []
     if (activeTab.kind === 'commit' || activeTab.kind === 'diff')
       return [{ cwd: activeTab.cwd, presetCwd: activeTab.cwd }]
     if (activeTab.kind === 'browser') return []
     const sessionPanes = panes[activeTab.id] ?? []
     const base = activeTab.cwd ?? cwds[activeTab.id]
-    const pairs: { cwd: string; presetCwd?: string }[] = []
-    if (base != null) pairs.push({ cwd: base, presetCwd: activeTab.cwd })
+    const pairs: RepoEntry[] = []
+    if (base != null)
+      pairs.push({ cwd: base, presetCwd: activeTab.cwd, presetName: activeTab.presetName })
     for (const pane of sessionPanes) {
-      if (pane.cwd != null) pairs.push({ cwd: pane.cwd, presetCwd: pane.cwd })
+      if (pane.cwd != null)
+        pairs.push({ cwd: pane.cwd, presetCwd: pane.cwd, presetName: pane.presetName })
     }
     return uniqueBy(pairs, (entry) => entry.cwd)
   }, [activeTab, cwd, cwds, panes])
@@ -121,7 +129,12 @@ function App(): React.JSX.Element {
         const c = norm(entry.cwd)
         return c === root || c.startsWith(root + '/')
       })
-      return { cwd: repo.path, name: repo.name, presetCwd: owner?.presetCwd }
+      return {
+        cwd: repo.path,
+        name: repo.name,
+        presetCwd: owner?.presetCwd,
+        presetName: owner?.presetName
+      }
     })
   }, [repos, activeEntries])
 
@@ -137,14 +150,12 @@ function App(): React.JSX.Element {
     setPickedRepo(actionRepos[(repoIndex + 1) % actionRepos.length].cwd)
   }
 
-  const activePresetCwd = activeRepo?.presetCwd
-  const activePresetIndex =
-    activePresetCwd != null ? presets.findIndex((p) => p.cwd === activePresetCwd) : -1
+  const activePresetIndex = presetIndexFor(presets, activeRepo)
   const activePreset = activePresetIndex >= 0 ? presets[activePresetIndex] : undefined
   const presetCommands = activePreset?.commands ?? []
-  const runKey = (presetCwd: string, command: string): string => `${presetCwd}\n${command}`
+  const runKey = (presetName: string, command: string): string => `${presetName}\n${command}`
   const runningCommands = activePreset
-    ? presetCommands.filter((c) => running[runKey(activePreset.cwd, c)] != null)
+    ? presetCommands.filter((c) => running[runKey(activePreset.name, c)] != null)
     : []
 
   const labels = useMemo(() => {
@@ -168,17 +179,22 @@ function App(): React.JSX.Element {
     return result
   }, [tabs, cwds, browserTitles])
 
-  const addSession = (cwd?: string, presetStartup?: string, splits?: string[]): void => {
+  const addSession = (preset?: Preset): void => {
     const id = nextIdRef.current++
-    setTabs((prev) => [...prev, { kind: 'shell', id, cwd, startupCommand: presetStartup }])
+    const cwd = preset?.cwd
+    setTabs((prev) => [
+      ...prev,
+      { kind: 'shell', id, cwd, startupCommand: preset?.startupCommand, presetName: preset?.name }
+    ])
     if (cwd) setCwds((prev) => ({ ...prev, [id]: cwd }))
-    const splitPanes: Pane[] = (splits ?? [])
+    const splitPanes: Pane[] = (preset?.splits ?? [])
       .map((name) => presets.find((p) => p.name === name))
       .filter((p): p is Preset => p != null)
       .map((p) => ({
         id: nextTerminalId(),
         cwd: p.cwd,
-        startupCommand: p.startupCommand ?? startupCommand ?? 'claude'
+        startupCommand: p.startupCommand ?? startupCommand ?? 'claude',
+        presetName: p.name
       }))
     setPanes((prev) => ({ ...prev, [id]: [{ id: nextTerminalId() }, ...splitPanes] }))
     setActiveId(id)
@@ -228,7 +244,8 @@ function App(): React.JSX.Element {
       ? {
           id: paneId,
           cwd: preset.cwd,
-          startupCommand: preset.startupCommand ?? startupCommand ?? 'claude'
+          startupCommand: preset.startupCommand ?? startupCommand ?? 'claude',
+          presetName: preset.name
         }
       : { id: paneId }
     setPanes((prev) => ({ ...prev, [activeTab.id]: [...(prev[activeTab.id] ?? []), pane] }))
@@ -276,9 +293,21 @@ function App(): React.JSX.Element {
     window.api.snowconfig.setLayout({ bottomHeight: height, bottomCollapsed: collapsed })
   }, [])
 
+  const handlePaneRatios = useCallback(
+    (sessionId: number, ratios: number[]): void => {
+      const tab = tabsRef.current.find((t) => t.id === sessionId)
+      if (tab?.kind !== 'shell' || !tab.presetName) return
+      const index = presetIndexFor(presets, { presetName: tab.presetName })
+      const preset = presets[index]
+      if (!preset || ratios.length !== 1 + (preset.splits?.length ?? 0)) return
+      window.api.snowconfig.setPaneRatios(index, ratios)
+    },
+    [presets]
+  )
+
   const toggleCommand = (command: string): void => {
     if (!activePreset) return
-    const key = runKey(activePreset.cwd, command)
+    const key = runKey(activePreset.name, command)
     const existing = running[key]
     if (existing != null) {
       window.api.terminal.kill(existing)
@@ -344,11 +373,8 @@ function App(): React.JSX.Element {
     setStatuses(dropKey)
   }
 
-  const openPresetSession = (preset?: Preset): void =>
-    addSession(preset?.cwd, preset?.startupCommand, preset?.splits)
-
   useKeybinds(keybinds, {
-    newTab: () => openPresetSession(presets.find((p) => p.default)),
+    newTab: () => addSession(presets.find((p) => p.default)),
     closeTab: activeId !== 'home' ? () => closeSession(activeId) : undefined,
     newSplit: activeTab?.kind === 'shell' ? () => splitActive() : undefined,
     diffSplit:
@@ -367,7 +393,7 @@ function App(): React.JSX.Element {
       ? (index) => {
           const preset = presets[index]
           if (!preset) return
-          if (activeId === 'home') openPresetSession(preset)
+          if (activeId === 'home') addSession(preset)
           else splitActive(preset)
         }
       : undefined
@@ -375,7 +401,7 @@ function App(): React.JSX.Element {
 
   usePresetDigitKeybind(keybinds, 'openPreset', (index) => {
     const preset = presets[index]
-    if (preset) openPresetSession(preset)
+    if (preset) addSession(preset)
   })
 
   return (
@@ -399,10 +425,7 @@ function App(): React.JSX.Element {
             statuses={statuses}
             onSelect={setActiveId}
             onClose={closeSession}
-            onAdd={() => {
-              const preset = presets.find((p) => p.default)
-              addSession(preset?.cwd, preset?.startupCommand, preset?.splits)
-            }}
+            onAdd={() => addSession(presets.find((p) => p.default))}
             onOpenBrowser={() => openBrowser()}
             onSplit={() => splitActive()}
             presets={presets}
@@ -474,7 +497,9 @@ function App(): React.JSX.Element {
                   keybinds={keybinds}
                   savedBottomHeight={layout.bottomHeight}
                   savedBottomCollapsed={layout.bottomCollapsed}
+                  savedPaneRatios={presets.find((p) => p.name === tab.presetName)?.paneRatios}
                   onBottomLayout={handleBottomLayout}
+                  onPaneRatios={handlePaneRatios}
                   onCloseSplit={closeSplit}
                   onOpenCommit={openCommit}
                   onClosePane={closePane}
