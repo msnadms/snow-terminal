@@ -41,6 +41,14 @@ function presetIndexFor(presets: Preset[], entry?: Partial<RepoEntry>): number {
   return -1
 }
 
+function normalizePath(p: string): string {
+  return p.replace(/\\/g, '/').replace(/\/+$/, '')
+}
+
+function isInside(child: string, parent: string): boolean {
+  return child === parent || child.startsWith(parent + '/')
+}
+
 function App(): React.JSX.Element {
   const [tabs, setTabs] = useState<Tab[]>([])
   const [activeId, setActiveId] = useState<ActiveId>('home')
@@ -122,21 +130,21 @@ function App(): React.JSX.Element {
   }, [discoverKey])
 
   const actionRepos = useMemo(() => {
-    const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
     return (repos ?? []).map((repo) => {
-      const root = norm(repo.path)
-      const owner = activeEntries.find((entry) => {
-        const c = norm(entry.cwd)
-        return c === root || c.startsWith(root + '/')
-      })
+      const root = normalizePath(repo.path)
+      const owner = activeEntries.find((entry) => isInside(normalizePath(entry.cwd), root))
+      const adopted =
+        presetIndexFor(presets, owner) >= 0
+          ? undefined
+          : presets.find((p) => isInside(normalizePath(p.cwd), root))
       return {
         cwd: repo.path,
         name: repo.name,
         presetCwd: owner?.presetCwd,
-        presetName: owner?.presetName
+        presetName: owner?.presetName ?? adopted?.name
       }
     })
-  }, [repos, activeEntries])
+  }, [repos, activeEntries, presets])
 
   const [pickedRepo, setPickedRepo] = useState<string | null>(null)
   const repoIndex = Math.max(
@@ -373,9 +381,18 @@ function App(): React.JSX.Element {
     setStatuses(dropKey)
   }
 
+  const cycleTab = (delta: number): void => {
+    const order: ActiveId[] = ['home', ...tabs.map((t) => t.id)]
+    const index = order.indexOf(activeId)
+    if (index === -1) return
+    setActiveId(order[(index + delta + order.length) % order.length])
+  }
+
   useKeybinds(keybinds, {
     newTab: () => addSession(presets.find((p) => p.default)),
     closeTab: activeId !== 'home' ? () => closeSession(activeId) : undefined,
+    nextTab: tabs.length > 0 ? () => cycleTab(1) : undefined,
+    prevTab: tabs.length > 0 ? () => cycleTab(-1) : undefined,
     newSplit: activeTab?.kind === 'shell' ? () => splitActive() : undefined,
     diffSplit:
       activeTab?.kind === 'shell' && actionCwd ? () => openDiffSplit(actionCwd) : undefined,

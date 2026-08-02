@@ -111,6 +111,8 @@ default. Combos are `+`-joined: `Ctrl` / `Cmd` / `Meta` / `Alt` / `Shift`, plus
 | ---------------------------------------------------- | ------------------------------- | ----------------------------------------------------- |
 | `newTab`                                             | `Mod+Shift+T`                   | New session from the default preset                   |
 | `closeTab`                                           | `Mod+Shift+W`                   | Close the active tab                                  |
+| `nextTab`                                            | `Mod+Shift+}`                   | Select the next tab (wraps through home)              |
+| `prevTab`                                            | `Mod+Shift+{`                   | Select the previous tab (wraps through home)          |
 | `newSplit`                                           | `Mod+Shift+~`                   | Split the active session                              |
 | `diffSplit`                                          | `Mod+Shift+G`                   | Open the working-tree diff as a split                 |
 | `runCommand`                                         | `Mod+Shift+Q`                   | Toggle the preset's first command button              |

@@ -296,7 +296,8 @@ that off the main thread entirely — no renderer code touches `localStorage`.
 It is **hand-edited only** — a pure passthrough field like `gradients`, with no `snowconfig:*` write
 handler — and any action absent from the map falls back to `defaultKeybinds`. The action set and its
 defaults live in the renderer (`src/renderer/src/keybinds.ts`), not main, since main never dispatches
-them: `newTab`, `closeTab` (close the active tab), `newSplit`, and `diffSplit` (open the working-tree
+them: `newTab`, `closeTab` (close the active tab), `nextTab`/`prevTab` (cycle the tab strip),
+`newSplit`, and `diffSplit` (open the working-tree
 diff as a split beside the active session). Combo strings are `+`-joined modifier tokens plus one key — `Ctrl`/`Cmd`/`Meta`/`Alt`/`Shift`
 and `Mod` (= `Cmd` on macOS, `Ctrl` elsewhere, the default in every shipped binding). A matched bind
 runs on a **single, module-level capture-phase** `keydown` listener on `window`: `useCaptureKeydown` (the
@@ -312,7 +313,10 @@ actions; only actions with a **defined** handler match, so a bind whose action i
 same `toggleCommand` path the tab-bar button uses — starting the background PTY, or killing it if that
 command is already running — and its handler is `undefined` when the preset has no commands. `closeTab`
 (default `Mod+Shift+W`) closes the active tab through the same `closeSession` path the tab's × uses, and
-its handler is `undefined` on the home page (which has no closeable tab). `switchRepo` (default
+its handler is `undefined` on the home page (which has no closeable tab). `nextTab`/`prevTab` (defaults
+`Mod+Shift+}`/`Mod+Shift+{` — the **shifted** characters, since `e.key` reports `}` not `]`) step
+`activeId` through `['home', ...tabs]`, the tab strip's own order, wrapping at both ends; their handlers
+are `undefined` when no session tabs exist, so the keys fall through to the terminal on a bare home page. `switchRepo` (default
 `Mod+Shift+?`) cycles the action bar's `activeRepo` through the same `switchRepo`/`⇄` path, and its
 handler is `undefined` unless more than one repo is in view. `focusCommit` (default `Mod+Shift+M`)
 focuses the action bar's commit-message `<input>`, resolved by its `.actionbar-input` class (the same
@@ -527,8 +531,12 @@ That one `repos` list is the single source of truth for the whole git view. It i
 with `.git-repo-open` giving the expanded section the scroll space — **and** it drives `actionRepos`,
 the action bar's repo set. `actionRepos` re-associates each discovered root with a preset by finding
 the `repoEntries` entry whose cwd lives inside that root (slash-normalized prefix match) and carrying
-its `presetCwd`/`presetName`, so preset command buttons still resolve for the repo you opened while a
-parent-expanded child (which no pane owns) simply gets none. `presetName` rides all the way from the
+its `presetCwd`/`presetName`, so preset command buttons still resolve for the repo you opened. A
+parent-expanded child that no pane owns falls back to **adopting** a preset whose own `cwd` lives
+inside that root, so switching the action bar to it surfaces that preset's command buttons instead of
+none — a pane sitting in `~/projects` gets each child repo's commands as you cycle through them. The
+fallback runs only when the owner-based lookup fails, so a pane's captured `presetName` always wins
+and two presets sharing a directory keep their own buttons. `presetName` rides all the way from the
 shell tab and from each split `Pane` (both split-creation paths — `addSession`'s `splits` and
 `splitActive(preset)` — tag the pane with the preset that produced it), which is what gives
 `presetIndexFor` a name to match on for every pane a session owns. The action bar targets one repo at a time

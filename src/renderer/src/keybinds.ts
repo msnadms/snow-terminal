@@ -3,6 +3,8 @@ import { useEffect, useRef } from 'react'
 export type KeybindAction =
   | 'newTab'
   | 'closeTab'
+  | 'nextTab'
+  | 'prevTab'
   | 'newSplit'
   | 'diffSplit'
   | 'runCommand'
@@ -17,6 +19,8 @@ export type KeybindAction =
 export const defaultKeybinds: Record<KeybindAction, string> = {
   newTab: 'Mod+Shift+T',
   closeTab: 'Mod+Shift+W',
+  nextTab: 'Mod+Shift+}',
+  prevTab: 'Mod+Shift+{',
   newSplit: 'Mod+Shift+~',
   diffSplit: 'Mod+Shift+G',
   runCommand: 'Mod+Shift+Q',

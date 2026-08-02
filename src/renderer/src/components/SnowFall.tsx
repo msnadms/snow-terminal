@@ -1,7 +1,10 @@
-import { memo, useEffect, useMemo, useRef } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from '../themeStore'
 
-const FLAKE_COUNT = 540
+const FLAKE_DENSITY = 540 / (1600 * 900)
+const MIN_FLAKES = 120
+const MAX_FLAKES = 1400
+const FLAKE_STEP = 20
 const TRAVEL_VH = 115
 
 const COL_STEP = 4
@@ -10,8 +13,13 @@ const FILL_SECONDS = 180
 const DEPOSIT_AMOUNT = 1.5
 const PILE_SPACING = 220
 
-function makeFlakes(): React.CSSProperties[] {
-  return Array.from({ length: FLAKE_COUNT }, () => {
+function flakeCountFor(w: number, h: number): number {
+  const raw = Math.min(MAX_FLAKES, Math.max(MIN_FLAKES, w * h * FLAKE_DENSITY))
+  return Math.round(raw / FLAKE_STEP) * FLAKE_STEP
+}
+
+function makeFlakes(count: number): React.CSSProperties[] {
+  return Array.from({ length: count }, () => {
     const u = Math.random()
     const size = 2 + Math.random() * 5
     const duration = 5 + Math.random() * 10
@@ -55,7 +63,11 @@ function gaussian(): number {
 }
 
 function SnowFall({ active }: { active: boolean }): React.JSX.Element {
-  const flakes = useMemo(() => makeFlakes(), [])
+  const flakes = useMemo(() => makeFlakes(MAX_FLAKES), [])
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const [flakeCount, setFlakeCount] = useState(() =>
+    flakeCountFor(window.innerWidth, window.innerHeight)
+  )
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const theme = useTheme()
   const colorRef = useRef('#cdd6f4')
@@ -73,6 +85,19 @@ function SnowFall({ active }: { active: boolean }): React.JSX.Element {
     activeRef.current = active
     if (active) kickRef.current()
   }, [active])
+
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const observer = new ResizeObserver(() => {
+      const w = root.clientWidth
+      const h = root.clientHeight
+      if (w === 0 || h === 0) return
+      setFlakeCount(flakeCountFor(w, h))
+    })
+    observer.observe(root)
+    return () => observer.disconnect()
+  }, [])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -204,9 +229,9 @@ function SnowFall({ active }: { active: boolean }): React.JSX.Element {
   }, [])
 
   return (
-    <div className="home-snow" aria-hidden="true">
+    <div className="home-snow" aria-hidden="true" ref={rootRef}>
       <canvas ref={canvasRef} className="home-snow-pile" />
-      {flakes.map((style, i) => (
+      {flakes.slice(0, flakeCount).map((style, i) => (
         <span key={i} className="home-snow-flake" style={style} />
       ))}
     </div>
