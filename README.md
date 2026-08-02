@@ -35,6 +35,8 @@ next to the code they touch.
 - **Session presets** - save named working directories, startup commands,
   split layouts, and per-preset command buttons; launch them from the home page.
 - **First-run tour** - a short guided intro the first time you open a repo.
+- **`snow` on your PATH** - `snow ~/code/api` opens a session in that folder and
+  remembers it as a preset; in an already-running snow it lands as a new tab.
 
 ## Installation
 
@@ -55,6 +57,36 @@ Grab an installer for your OS from the
 - **Windows** - `snow-<version>-setup.exe` (installer) or `snow-<version>-win-x64.zip` (portable).
 - **macOS** - `snow-<version>.dmg`.
 - **Linux** - `snow-<version>.AppImage`, or the `.deb` / snap.
+
+## The `snow` command
+
+```sh
+snow                # open snow
+snow ~/code/api     # open a session there, saving it as a preset
+snow .              # same, for the current directory
+snow --help         # usage
+snow --version
+```
+
+The folder is registered in `.snowconfig` the first time you point `snow` at
+it, so it also shows up on the home page and answers to the preset keybinds
+from then on. Pass a folder an existing preset already points at and that
+preset opens instead - nothing is duplicated. When snow is already running the
+folder opens as a new tab in that window rather than a second app.
+
+You do not have to install the command. Scoop, the `.deb`, and the snap put
+`snow` on your `PATH` themselves; every other build (the macOS `.dmg`, the
+AppImage, the Windows `.zip`) writes a small launcher on first run:
+
+- macOS / Linux - `~/.local/bin/snow`
+- Windows - `%LOCALAPPDATA%\Microsoft\WindowsApps\snow.cmd`, or
+  `%LOCALAPPDATA%\snow\bin\snow.cmd` if that directory is not on your `PATH`
+
+snow never writes it when some other `snow` is already on your `PATH`, and it
+rewrites it after you move or update the app, so the command keeps pointing at
+the copy you actually run. If the directory it wrote to is not on your `PATH`
+(`~/.local/bin` is picked up at your next login on most distros), `snow.log`
+says so - snow will not edit your environment for you.
 
 ## Configuration
 

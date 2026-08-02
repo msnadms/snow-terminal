@@ -14,6 +14,9 @@ import { registerSnowconfigHandlers, disposeSnowconfigWatcher } from './snowconf
 import { registerUsageHandlers, disposeUsageWatcher } from './usage'
 import { initLogging, closeLogging, log, logPath, watchRenderer } from './log'
 import { configDir } from './config'
+import { startCli, registerCliHandlers } from './cli'
+
+if (!startCli()) app.exit(0)
 
 initLogging()
 
@@ -120,6 +123,10 @@ app.whenReady().then(() => {
 
   // Watch ~/.claude/projects for Claude Code session logs to tally daily/weekly cost.
   registerUsageHandlers()
+
+  // Resolve a folder passed on the command line into a preset; after the snowconfig
+  // handlers, which seed the file this writes to.
+  registerCliHandlers()
 
   log('info', 'app', 'ready', { log: logPath(), config: configDir() })
 

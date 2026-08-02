@@ -4,7 +4,7 @@ import { promisify } from 'util'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { configDir, expandHome } from './config'
+import { collapseHome, configDir, expandHome, samePath } from './config'
 import { log } from './log'
 
 const execFileAsync = promisify(execFile)
@@ -17,6 +17,7 @@ export interface Preset {
   startupCommand?: string
   splits?: string[]
   paneRatios?: number[]
+  hidden?: boolean
 }
 
 export interface Layout {
@@ -96,6 +97,7 @@ function validate(raw: unknown): Preset[] {
     if (splits.length) preset.splits = splits
     const paneRatios = validateRatios(o.paneRatios)
     if (paneRatios) preset.paneRatios = paneRatios
+    if (o.hidden === true) preset.hidden = true
     result.push(preset)
   }
   return result
@@ -258,6 +260,23 @@ function mutateConfig(mutate: (cfg: Omit<RawConfig, 'error'>) => boolean): Snowc
   return writeConfig(cfg)
 }
 
+export function presetForDir(dir: string, startupCommand?: string): Preset | null {
+  const { presets, error } = rawConfig()
+  if (error) return null
+  const existing = presets.find((p) => samePath(expandHome(p.cwd), dir))
+  if (existing) return { ...existing, cwd: expandHome(existing.cwd) }
+  const base = path.basename(dir) || dir
+  let name = base
+  for (let n = 2; presets.some((p) => p.name === name); n++) name = `${base}-${n}`
+  const preset: Preset = { name, cwd: collapseHome(dir) }
+  if (startupCommand) preset.startupCommand = startupCommand
+  const result = mutateConfig((cfg) => {
+    cfg.presets.push(preset)
+    return true
+  })
+  return result.error ? null : { ...preset, cwd: dir }
+}
+
 async function runName(file: string, args: string[], cwd?: string): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync(file, args, { windowsHide: true, cwd })
@@ -339,13 +358,20 @@ export function registerSnowconfigHandlers(): void {
   ipcMain.handle('snowconfig:get', (): SnowconfigResult => readSnowconfig())
   ipcMain.handle(
     'snowconfig:addPreset',
-    (_e, preset: { name: string; cwd: string; startupCommand?: string }): SnowconfigResult => {
+    (
+      _e,
+      preset: { name: string; cwd: string; startupCommand?: string; hidden?: boolean }
+    ): SnowconfigResult => {
       const name = String(preset?.name ?? '').trim()
       const cwd = String(preset?.cwd ?? '').trim()
       const startupCommand = String(preset?.startupCommand ?? '').trim()
+      const hidden = preset?.hidden === true
       if (!name || !cwd) return readSnowconfig()
       return mutateConfig((cfg) => {
-        cfg.presets.push(startupCommand ? { name, cwd, startupCommand } : { name, cwd })
+        const entry: Preset = { name, cwd }
+        if (startupCommand) entry.startupCommand = startupCommand
+        if (hidden) entry.hidden = true
+        cfg.presets.push(entry)
         return true
       })
     }

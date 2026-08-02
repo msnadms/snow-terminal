@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Preset } from '../useSnowconfig'
+import { visiblePresetEntries, type Preset } from '../useSnowconfig'
 import ContextMenu from './ContextMenu'
 import SnowFall from './SnowFall'
 import ThemeSelect from './ThemeSelect'
@@ -36,25 +36,29 @@ function HomePage({
   const [name, setName] = useState('')
   const [cwd, setCwd] = useState('')
   const [startupCommand, setStartupCommand] = useState('')
+  const [hidden, setHidden] = useState(false)
   const [menu, setMenu] = useState<{ index: number; x: number; y: number } | null>(null)
   const [edit, setEdit] = useState<{ index: number; value: string } | null>(null)
   const formRef = useRef<HTMLFormElement>(null)
   const nameRef = useRef<HTMLInputElement>(null)
   const editRef = useRef<HTMLInputElement>(null)
 
+  const formDirty = !!(name || cwd || startupCommand || hidden)
+
   useEffect(() => {
-    if (!name && !cwd && !startupCommand) return
+    if (!formDirty) return
 
     const onPointerDown = (e: PointerEvent): void => {
       if (formRef.current?.contains(e.target as Node)) return
       setName('')
       setCwd('')
       setStartupCommand('')
+      setHidden(false)
     }
 
     window.addEventListener('pointerdown', onPointerDown)
     return () => window.removeEventListener('pointerdown', onPointerDown)
-  }, [name, cwd, startupCommand])
+  }, [formDirty])
 
   const chooseFolder = async (): Promise<void> => {
     const dir = await window.api.snowconfig.chooseDir()
@@ -74,11 +78,13 @@ function HomePage({
     window.api.snowconfig.addPreset({
       name: trimmedName,
       cwd: trimmedCwd,
-      ...(trimmedStartup ? { startupCommand: trimmedStartup } : {})
+      ...(trimmedStartup ? { startupCommand: trimmedStartup } : {}),
+      ...(hidden ? { hidden: true } : {})
     })
     setName('')
     setCwd('')
     setStartupCommand('')
+    setHidden(false)
   }
 
   const toggleDefault = (index: number, isDefault: boolean): void => {
@@ -114,6 +120,7 @@ function HomePage({
   }
 
   const nameExists = presets.some((p) => p.name === name.trim())
+  const visibleEntries = visiblePresetEntries(presets)
 
   return (
     <div className="home-page" style={{ display: active ? 'flex' : 'none' }}>
@@ -140,7 +147,7 @@ function HomePage({
           </div>
         )}
         <div className="home-presets">
-          {presets.map((preset, i) => (
+          {visibleEntries.map(({ preset, index: i }) => (
             <div
               key={i}
               className="home-preset"
@@ -217,6 +224,20 @@ function HomePage({
             <span className={`nerd-folder${cwd ? ' has-dir' : ''}`}>{''}</span>
           </button>
           <button
+            type="button"
+            className={`home-add-choose home-add-hide${hidden ? ' home-add-hide-on' : ' home-add-choose-empty'}`}
+            onClick={() => setHidden(!hidden)}
+            aria-pressed={hidden}
+            aria-label="Hidden preset"
+            title={
+              hidden
+                ? 'Hidden: offered only when adding a split to another preset'
+                : 'Visible on the home page and the split menu'
+            }
+          >
+            <span className="nerd-eye">{hidden ? '' : ''}</span>
+          </button>
+          <button
             className="home-add-button"
             type="submit"
             disabled={!!error || !name.trim() || !cwd.trim() || nameExists}
@@ -233,13 +254,23 @@ function HomePage({
           </button>
           <div className="context-menu-label">Add split</div>
           {presets.map((preset, i) => (
-            <button
-              key={i}
-              className="context-menu-item context-menu-subitem"
-              onClick={() => addSplit(menu.index, preset.name)}
-            >
-              {preset.name}
-            </button>
+            <div key={i} className="context-menu-row">
+              <button
+                className="context-menu-item context-menu-subitem"
+                onClick={() => addSplit(menu.index, preset.name)}
+              >
+                {preset.name}
+              </button>
+              {preset.hidden && (
+                <button
+                  className="context-menu-item context-menu-remove"
+                  onClick={() => removePreset(i)}
+                  title={`Remove “${preset.name}”`}
+                >
+                  
+                </button>
+              )}
+            </div>
           ))}
           {(presets[menu.index].splits?.length ?? 0) > 0 && (
             <button className="context-menu-item" onClick={() => removeSplit(menu.index)}>

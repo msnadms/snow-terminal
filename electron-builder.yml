@@ -36,6 +36,7 @@ mac:
 dmg:
   artifactName: ${name}-${version}.${ext}
 linux:
+  executableName: snow
   icon: build/icon-512.png
   target:
     - AppImage

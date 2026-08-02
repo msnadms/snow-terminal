@@ -4,6 +4,10 @@ type SnowconfigResult = Awaited<ReturnType<typeof window.api.snowconfig.get>>
 export type Preset = SnowconfigResult['config']['presets'][number]
 export type Layout = NonNullable<SnowconfigResult['config']['layout']>
 
+export function visiblePresetEntries(presets: Preset[]): { preset: Preset; index: number }[] {
+  return presets.flatMap((preset, index) => (preset.hidden ? [] : [{ preset, index }]))
+}
+
 export function useSnowconfig(): {
   presets: Preset[]
   name: string | null

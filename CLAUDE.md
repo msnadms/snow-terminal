@@ -195,7 +195,7 @@ is already staged is left alone — snow only filters what it adds.
 Session presets for the home tab, as JSON. `src/main/snowconfig.ts` mirrors `theme.ts`'s lifecycle
 (default written with `flag: 'wx'` on first launch, directory `fs.watch` broadcasting
 `snowconfig:changed`). Shape is
-`{ presets: { name, cwd, default?, commands?, startupCommand?, splits?, paneRatios? }[], name?, startupCommand?, gradients?, theme?, tourSeen?, keybinds?, layout? }` (`splits` are other presets' names); entries
+`{ presets: { name, cwd, default?, commands?, startupCommand?, splits?, paneRatios?, hidden? }[], name?, startupCommand?, gradients?, theme?, tourSeen?, keybinds?, layout? }` (`splits` are other presets' names); entries
 missing a string `name`/`cwd` are dropped, and a leading `~` in `cwd` is expanded to the home dir **only on
 read**, so the renderer gets absolute paths while the file keeps the raw `~`. The top-level `name`
 drives the home tab's `Hello {name}` greeting (falling back to `snow`); `seedName()` on registration
@@ -266,6 +266,28 @@ and its right-click `ContextMenu` lists the **other** presets under an "Add spli
 **Remove last split** item, backed by the `snowconfig:addSplit(presetIndex, name)` (appends the name)
 and `snowconfig:removeSplit(presetIndex)` (pops the last) handlers; the file is otherwise
 hand-editable like every other field.
+
+`hidden` marks a preset that exists **only to be split into another one**: it is dropped from the home
+page's preset list and from the tab bar's split menu, and survives in exactly one place — the "Add
+split" list in the home page's right-click menu, which is deliberately the unfiltered `presets`. The
+home-page add form sets it with an eye toggle beside the folder button.
+
+That one list is therefore also the only place a hidden preset can be **deleted**. Every row in it is
+a `.context-menu-row` wrapping the name button; a hidden preset's row also gets a close-glyph button
+calling the same `removePreset(i)` the visible presets' menu uses. Nesting that button inside the name
+button is not an option, hence the wrapper div rather than a modifier class. Only hidden rows get it:
+a visible preset already has its own right-click menu.
+
+Two different index spaces fall out of that, and they must not be confused. `HomePage` renders
+`visibleEntries` as `{ preset, index }` **pairs** filtered on `hidden`, so every `snowconfig:*` write
+still carries the **config** index — the position in the rendered list would address the wrong entry.
+The positional `openPreset`/`splitPreset` digit keybinds are the opposite case: they index `App`'s
+`visiblePresets` (a plain filtered array, which `App` also hands to `TabBar` so the split menu needs
+no filter of its own), so the digits keep matching what the home page and the
+split menu show rather than silently skipping a number over a hidden preset. Nothing else consults `hidden`: a hidden preset opened as
+a split behaves exactly like any other, and its name still resolves through `presetIndexFor`, so it
+keeps its own command buttons and `paneRatios`. There is no unhide handler — clearing the flag on an
+existing preset is a config edit.
 
 `paneRatios` remembers how wide those split panes were dragged, as one fraction per top pane summing
 to 1. It is written on **drag end** by `Session`'s horizontal `ResizeHandle`s (the same `onEnd` the
@@ -365,7 +387,9 @@ handlers — `snowconfig:addPreset`, `snowconfig:setDefault(index)` (index `-1` 
 `snowconfig:setTheme(name)` (empty clears it back
 to the default `theme`), `snowconfig:setTourSeen()` (marks the tour dismissed), and
 `snowconfig:setLayout(patch)` (merges the given keys into `layout`) — that mutate the parsed config and rewrite the file;
-the fs.watch broadcast then keeps every window in sync. `useSnowconfig` (`src/renderer/src/useSnowconfig.ts`) is the single subscription;
+the fs.watch broadcast then keeps every window in sync. `presetForDir` (see _The `snow` command_)
+is the one write path that is not an IPC handler: main calls it directly for a folder passed on the
+command line. `useSnowconfig` (`src/renderer/src/useSnowconfig.ts`) is the single subscription;
 `App` reads it so the tab strip's `+` button opens the `default` preset's cwd (home dir if none), and
 `HomePage` renders each preset with a default checkbox (radio-like via `setDefault`) plus an add
 form. Both `HomePage` and `TabBar` delete entries through the shared `ContextMenu` component
@@ -392,6 +416,57 @@ main→renderer so it is never seen by the wrapper. PTY _lifecycle_ is still log
 Renderer output reaches the file through `watchRenderer(webContents)` in `createWindow`, which
 forwards `console-message`, `render-process-gone`, `did-fail-load`, and `preload-error` — so the
 renderer needs no logging API and gets no new privilege. `closeLogging()` on `will-quit` flushes.
+
+## The `snow` command
+
+`src/main/cli.ts` owns both halves of it: what the app does with `process.argv`, and the shim that
+puts `snow` on `PATH` in the first place.
+
+`startCli()` is the **first** statement in `index.ts` — above `initLogging()`, since a process that
+is about to exit should not open (and possibly roll) the shared log file. It returns `false` when
+this process must not become an app, which `index.ts` turns into `app.exit(0)`: `--help`/`--version`
+print and leave, and a packaged second instance hands its argv to the running one. The flags are
+checked **before** the instance lock, so `snow --help` still answers while a window is open.
+
+The single-instance lock is taken **only when packaged**. In dev it would mean `npm run dev`
+silently handing off to an installed snow instead of opening a dev window — the two share a
+userData path, which is what the lock is keyed on.
+
+Argument parsing never slices argv by position: Electron hands `second-instance` a different shape
+than the launching process (Chromium's own flags, `--original-process-start-time`, and in dev the
+app path). So `folderArg` takes the first argument that is neither a flag nor `app.getAppPath()`,
+and resolves it against the _reporting_ process's directory — `process.cwd()` at launch,
+`workingDirectory` for a second instance, so `snow .` means the shell's directory either way.
+
+A folder becomes a preset in `presetForDir` (`snowconfig.ts`, since it owns `mutateConfig`): an
+existing preset whose `cwd` is `samePath` wins, otherwise a new one named after the basename
+(`-2`, `-3` … on a name collision) is appended. It returns the whole `Preset`, not its name, and
+that object is what both `cli:pending` (consumed once, so a renderer reload does not reopen it) and
+the `cli:open` broadcast carry. **Load-bearing**: the config watcher's `snowconfig:changed` lands
+~100 ms after `cli:open`, so a renderer looking a name up in its `presets` would miss a
+just-created preset entirely. `App` still prefers its own copy when it has one
+(`presets.find(…) ?? preset`), which is what keeps a `splits` preset opening its splits; the startup
+pull is gated on `presets.length > 0` for the same reason (a corrupt config yields no preset to
+lose, since `presetForDir` bails on a read error).
+
+`installCommand()` is the PATH shim, and it runs itself — on every start, from `registerCliHandlers`,
+with **no UI at all**. `commandState` decides: `install` and `update` (the shim points at a
+different copy of the app, i.e. it moved or updated) write the file; `path` (written and current,
+but its directory is not on `PATH`) only logs, since the fix is not snow's to make; `ready` returns
+silently. `ready` is also what installs that already provide the command produce — scoop, the
+`.deb`'s `/usr/bin/snow` symlink from electron-builder's after-install script, the snap — because
+`alreadyOnPath()` finds a `snow` there and snow must never shadow it. (`linux.executableName: snow`
+in `electron-builder.yml` is what makes that symlink's name match.) The whole thing is gated on
+`app.isPackaged`, or a dev run would repoint the user's `snow` at a working tree.
+
+The shim is `~/.local/bin/snow` (`nohup … &`, so a terminal launch returns the prompt and survives
+the terminal closing) or, on Windows, `%LOCALAPPDATA%\Microsoft\WindowsApps\snow.cmd` (`start ""`) —
+that directory is on the user `PATH` by default on Win10/11, which is what makes a zero-click
+install actually reachable; `%LOCALAPPDATA%\snow\bin` is the fallback when it is not. The target is
+`process.env.APPIMAGE ?? process.execPath` — an AppImage's `execPath` points inside a temporary
+mount that is gone by the next boot — plus `app.getAppPath()` when unpackaged. snow never edits
+`PATH` itself: mutating a user's environment behind their back is worse than a log line naming the
+directory to add.
 
 ## Workflows
 
@@ -435,10 +510,11 @@ write and let the debounced watch event notify every window, so one registration
 `initRegistry()` runs _before_ `registerGitHandlers()` in `index.ts`, since the
 git handlers read it. Shape is `{ workflows: { repo, branch }[] }` — flat, because branch names
 collide across repos. `repo` is the worktree root with `~` collapsed on write and expanded on read,
-like `.snowconfig` does for `cwd`. Paths are compared with `samePath`, which resolves and
-slash-normalizes before comparing, case-insensitively on win32 — necessary because
-`git rev-parse --show-toplevel` emits forward slashes while `os.homedir()` and `path.resolve` use
-backslashes. `addRecord`/`removeRecord` re-read first and **bail if the read errored**, so a
+like `.snowconfig` does for `cwd`. Both directions go through `config.ts`'s `samePath` /
+`collapseHome` (shared with `snowconfig.ts`'s CLI preset lookup, which is why they live beside
+`expandHome` rather than in `registry.ts`): `samePath` resolves and slash-normalizes before
+comparing, case-insensitively on win32 — necessary because `git rev-parse --show-toplevel` emits
+forward slashes while `os.homedir()` and `path.resolve` use backslashes. `addRecord`/`removeRecord` re-read first and **bail if the read errored**, so a
 hand-corrupted file is never silently replaced with a one-entry registry.
 
 A read error is never treated as "nothing is registered" — that would silently disable both parking
@@ -525,6 +601,32 @@ rather than the array identity is load-bearing: `repoEntries` gets a fresh ident
 report, so depending on it directly would re-discover on every shell prompt. `discover` returns
 canonical worktree-root paths and expands a non-repo parent directory into its child repos, so a pane
 sitting in a `~/projects` folder surfaces every repo under it.
+
+#### Rediscovery (`git:watchRepos`)
+
+Discovery is a snapshot, so a `git init`/`clone`/`rm -rf .git` under a pane's cwd would otherwise need
+an app reload to show up. Alongside each `git:discover` the same effect registers a
+`git:watchRepos(cwd)` and reloads on `git:reposChanged`. This is a **different watcher from
+`git:watch`**: that one needs a `.git` to exist (it bails when `gitDir` is null) and reports content
+changes _within_ a repo; this one watches the directory for the repo itself appearing or disappearing.
+
+It watches `cwd` non-recursively, plus each immediate child directory (capped at
+`maxDiscoveryChildren`) when `cwd` is **not** itself in a repo — the child watchers are what catch a
+`git init` inside a `~/projects`-style parent, and they are dropped the moment `cwd` becomes a repo,
+since discovery stops looking at children then. Only `rename` events are accepted: creating or
+deleting `.git` is always a `rename`, while `change` on `.git` fires for every write _inside_ it (git
+touches the directory constantly), so accepting `change` would mean re-running discovery throughout
+any git operation. On a repo cwd the filter narrows further to `.git` itself; on a non-repo cwd any
+`rename` is accepted, because a new child directory (a fresh clone) has an arbitrary name and needs a
+watcher of its own — the rebuild is what attaches it.
+
+Events are debounced, and the handler broadcasts only when the discovered root list actually
+**changes**, so the noisy non-repo case costs a `discoveryState` call and nothing downstream.
+`discoverRepos` is a thin wrapper over `discoveryState`, which returns `{ root, repos }` — the watcher
+needs `root` to decide whether to watch children, and re-deriving it would mean a second
+`git rev-parse` per check. Registrations are refcounted per `(webContents, cwd)` like `git:watch`, torn
+down with it in `closeWatchersFor`/`disposeGitWatchers`, and the async setup re-checks that its record
+is still the live one before attaching, so a fast unwatch/rewatch can't leak an orphaned watcher.
 
 That one `repos` list is the single source of truth for the whole git view. It is passed straight to
 `GitPanel` — now a **pure renderer** that no longer discovers; it lists every repo as an accordion,

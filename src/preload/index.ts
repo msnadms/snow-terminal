@@ -19,7 +19,7 @@ import type { BrowserBounds, BrowserState } from '../main/browser'
 import type { WorkflowList, WorkflowResult } from '../main/workflow'
 import type { ThemeResult } from '../main/theme'
 import type { SnowignoreResult } from '../main/snowignore'
-import type { SnowconfigResult, Layout } from '../main/snowconfig'
+import type { SnowconfigResult, Layout, Preset } from '../main/snowconfig'
 import type { UsageResult } from '../main/usage'
 
 function idDispatcher<P extends { id: number }>(
@@ -152,6 +152,13 @@ const git = {
     const listener = (_e: IpcRendererEvent, cwd: string | null): void => callback(cwd)
     ipcRenderer.on('git:changed', listener)
     return () => ipcRenderer.removeListener('git:changed', listener)
+  },
+  watchRepos: (cwd?: string): Promise<void> => ipcRenderer.invoke('git:watchRepos', cwd),
+  unwatchRepos: (cwd?: string): Promise<void> => ipcRenderer.invoke('git:unwatchRepos', cwd),
+  onReposChanged: (callback: (cwd: string | null) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, cwd: string | null): void => callback(cwd)
+    ipcRenderer.on('git:reposChanged', listener)
+    return () => ipcRenderer.removeListener('git:reposChanged', listener)
   }
 }
 
@@ -197,6 +204,7 @@ const snowconfig = {
     name: string
     cwd: string
     startupCommand?: string
+    hidden?: boolean
   }): Promise<SnowconfigResult> => ipcRenderer.invoke('snowconfig:addPreset', preset),
   setDefault: (index: number): Promise<SnowconfigResult> =>
     ipcRenderer.invoke('snowconfig:setDefault', index),
@@ -237,7 +245,16 @@ const usage = {
   }
 }
 
-const api = { terminal, browser, git, workflow, theme, snowignore, snowconfig, usage }
+const cli = {
+  pending: (): Promise<Preset | null> => ipcRenderer.invoke('cli:pending'),
+  onOpen: (callback: (preset: Preset) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, preset: Preset): void => callback(preset)
+    ipcRenderer.on('cli:open', listener)
+    return () => ipcRenderer.removeListener('cli:open', listener)
+  }
+}
+
+const api = { terminal, browser, git, workflow, theme, snowignore, snowconfig, usage, cli }
 
 export type Api = typeof api
 

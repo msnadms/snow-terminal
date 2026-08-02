@@ -1,7 +1,14 @@
 import fs from 'fs'
-import os from 'os'
 import path from 'path'
-import { broadcast, configDir, expandHome, watchConfigFile, writeDefaultConfig } from './config'
+import {
+  broadcast,
+  collapseHome,
+  configDir,
+  expandHome,
+  samePath,
+  watchConfigFile,
+  writeDefaultConfig
+} from './config'
 import { log } from './log'
 
 export interface WorkflowRecord {
@@ -13,25 +20,6 @@ const defaultRegistry = { workflows: [] as WorkflowRecord[] }
 
 export function workflowsPath(): string {
   return path.join(configDir(), '.snowworkflows')
-}
-
-function sameText(a: string, b: string): boolean {
-  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
-}
-
-export function samePath(a: string, b: string): boolean {
-  const normalize = (p: string): string => path.resolve(p).split(path.sep).join('/')
-  return sameText(normalize(a), normalize(b))
-}
-
-function collapseHome(p: string): string {
-  const home = path.resolve(os.homedir())
-  const resolved = path.resolve(p)
-  const slashed = resolved.split(path.sep).join('/')
-  if (samePath(resolved, home)) return '~'
-  const prefix = home.endsWith(path.sep) ? home : home + path.sep
-  if (!sameText(resolved.slice(0, prefix.length), prefix)) return slashed
-  return `~/${resolved.slice(prefix.length).split(path.sep).join('/')}`
 }
 
 function validate(raw: unknown): WorkflowRecord[] {

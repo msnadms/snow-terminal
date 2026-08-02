@@ -1043,6 +1043,23 @@ body {
   color: var(--ui-accent, #89b4fa);
 }
 
+.context-menu-row {
+  display: flex;
+  align-items: center;
+}
+
+.context-menu-row > .context-menu-subitem {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.context-menu-remove {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  line-height: 1;
+  color: var(--ui-placeholder, #6c7086);
+}
+
 .home-snow {
   position: absolute;
   inset: 0;
@@ -1304,12 +1321,25 @@ body {
   margin-top: -5px;
 }
 
-.nerd-folder.has-dir {
+.nerd-folder.has-dir,
+.home-add-hide-on {
   color: var(--ui-accent, #a6dcf0);
 }
 
 .home-add-choose-empty {
   color: var(--ui-placeholder, #5d6f8f);
+}
+
+.home-add-hide {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nerd-eye {
+  display: block;
+  font-size: 16px;
+  line-height: 1;
 }
 
 .home-add-button {

@@ -14,7 +14,7 @@ import { basename, shortHash, uniqueBy } from './format'
 import { nextTerminalId } from './terminalId'
 import { useKeybinds, usePresetDigitKeybind } from './keybinds'
 import { useCollapsiblePane } from './useCollapsiblePane'
-import { useSnowconfig, type Preset } from './useSnowconfig'
+import { useSnowconfig, visiblePresetEntries, type Preset } from './useSnowconfig'
 
 type ActiveId = number | 'home'
 
@@ -76,6 +76,7 @@ function App(): React.JSX.Element {
     layout,
     error: presetsError
   } = useSnowconfig()
+  const visiblePresets = visiblePresetEntries(presets).map((e) => e.preset)
 
   const gitPane = useCollapsiblePane({
     min: GIT_MIN,
@@ -116,16 +117,23 @@ function App(): React.JSX.Element {
   const [repos, setRepos] = useState<GitRepo[] | null>(null)
   useEffect(() => {
     let cancelled = false
-    const cwds = discoverKey ? discoverKey.split('\n') : [undefined]
-    Promise.all(cwds.map((cwd) => window.api.git.discover(cwd).catch(() => [])))
-      .then((results) => {
-        if (!cancelled) setRepos(uniqueBy(results.flat(), (repo) => repo.path))
-      })
-      .catch(() => {
-        if (!cancelled) setRepos([])
-      })
+    const cwds: (string | undefined)[] = discoverKey ? discoverKey.split('\n') : [undefined]
+    const load = (): void => {
+      Promise.all(cwds.map((cwd) => window.api.git.discover(cwd).catch(() => [])))
+        .then((results) => {
+          if (!cancelled) setRepos(uniqueBy(results.flat(), (repo) => repo.path))
+        })
+        .catch(() => {
+          if (!cancelled) setRepos([])
+        })
+    }
+    load()
+    for (const cwd of cwds) window.api.git.watchRepos(cwd)
+    const offRepos = window.api.git.onReposChanged(() => load())
     return () => {
       cancelled = true
+      offRepos()
+      for (const cwd of cwds) window.api.git.unwatchRepos(cwd)
     }
   }, [discoverKey])
 
@@ -207,6 +215,22 @@ function App(): React.JSX.Element {
     setPanes((prev) => ({ ...prev, [id]: [{ id: nextTerminalId() }, ...splitPanes] }))
     setActiveId(id)
   }
+
+  const addSessionRef = useRef(addSession)
+  useEffect(() => {
+    addSessionRef.current = addSession
+  })
+
+  useEffect(() => {
+    const open = (preset: Preset): void => {
+      addSessionRef.current(presets.find((p) => p.name === preset.name) ?? preset)
+    }
+    if (presets.length > 0)
+      window.api.cli.pending().then((preset) => {
+        if (preset) open(preset)
+      })
+    return window.api.cli.onOpen(open)
+  }, [presets])
 
   const openCommit = useCallback((cwd: string, hash: string): void => {
     const existing = tabsRef.current.find(
@@ -408,7 +432,7 @@ function App(): React.JSX.Element {
     'splitPreset',
     activeId === 'home' || activeTab?.kind === 'shell'
       ? (index) => {
-          const preset = presets[index]
+          const preset = visiblePresets[index]
           if (!preset) return
           if (activeId === 'home') addSession(preset)
           else splitActive(preset)
@@ -417,7 +441,7 @@ function App(): React.JSX.Element {
   )
 
   usePresetDigitKeybind(keybinds, 'openPreset', (index) => {
-    const preset = presets[index]
+    const preset = visiblePresets[index]
     if (preset) addSession(preset)
   })
 
@@ -445,7 +469,7 @@ function App(): React.JSX.Element {
             onAdd={() => addSession(presets.find((p) => p.default))}
             onOpenBrowser={() => openBrowser()}
             onSplit={() => splitActive()}
-            presets={presets}
+            presets={visiblePresets}
             onSplitWithPreset={(preset) => splitActive(preset)}
             onToggleCommand={toggleCommand}
             onAddCommand={(command) => {

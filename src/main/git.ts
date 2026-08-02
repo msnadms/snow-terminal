@@ -700,17 +700,26 @@ async function isRepoDir(dir: string): Promise<boolean> {
   }
 }
 
+interface DiscoveryState {
+  root: string | null
+  repos: GitRepo[]
+}
+
 async function discoverRepos(cwd?: string): Promise<GitRepo[]> {
+  return (await discoveryState(cwd)).repos
+}
+
+async function discoveryState(cwd?: string): Promise<DiscoveryState> {
   const dir = cwd || os.homedir()
 
   const root = await worktreeRoot(dir)
-  if (root) return [{ path: root, name: path.basename(root) }]
+  if (root) return { root, repos: [{ path: root, name: path.basename(root) }] }
 
   let entries: fs.Dirent[]
   try {
     entries = await fs.promises.readdir(dir, { withFileTypes: true })
   } catch {
-    return []
+    return { root: null, repos: [] }
   }
 
   const found = (
@@ -724,56 +733,99 @@ async function discoverRepos(cwd?: string): Promise<GitRepo[]> {
       })
     )
   ).filter((repo): repo is GitRepo => repo !== null)
-  return found.sort((a, b) => a.name.localeCompare(b.name))
+  return { root: null, repos: found.sort((a, b) => a.name.localeCompare(b.name)) }
 }
 
 const ignoredWorktreeEntry = /(^|[\\/])(\.git|node_modules)([\\/]|$)/
 const transientGitEntry = /\.lock$/
+const gitEntry = /^\.git([\\/]|$)/
 const notifyQuietMs = 150
 const notifyMaxWaitMs = 1000
+const discoveryQuietMs = 300
+const maxDiscoveryChildren = 64
 
-interface GitWatcher {
+function isGitEntry(filename: string | null): boolean {
+  return !!filename && gitEntry.test(filename)
+}
+
+function repoSignature(state: DiscoveryState): string {
+  return state.repos.map((repo) => repo.path).join('\n')
+}
+
+interface WatcherHandle {
   wcId: number
+  count: number
   close: () => void
 }
 
-const watchers = new Map<string, GitWatcher>()
-const generations = new Map<string, number>()
-const watchRefs = new Map<string, { wcId: number; count: number }>()
+// Shared ref-counted registration for both `git:watch` (content changes within a repo) and
+// `git:watchRepos` (repos appearing/disappearing). `begin` reserves a slot synchronously so a
+// caller's async setup (fs.watch calls, directory reads) can run after registration; `isCurrent`
+// lets that setup detect a concurrent unwatch/rewatch raced it out before it commits its `close`.
+class WatcherRegistry {
+  private entries = new Map<string, WatcherHandle>()
+
+  begin(key: string, wcId: number): WatcherHandle | null {
+    const existing = this.entries.get(key)
+    if (existing) {
+      existing.count++
+      return null
+    }
+    const handle: WatcherHandle = { wcId, count: 1, close: () => {} }
+    this.entries.set(key, handle)
+    return handle
+  }
+
+  isCurrent(key: string, handle: WatcherHandle): boolean {
+    return this.entries.get(key) === handle
+  }
+
+  bail(key: string, handle: WatcherHandle): void {
+    if (this.entries.get(key) === handle) this.entries.delete(key)
+    handle.close()
+  }
+
+  release(key: string): void {
+    const handle = this.entries.get(key)
+    if (!handle) return
+    if (handle.count > 1) {
+      handle.count--
+      return
+    }
+    this.entries.delete(key)
+    handle.close()
+  }
+
+  closeFor(wcId: number): void {
+    for (const [key, handle] of this.entries) {
+      if (handle.wcId !== wcId) continue
+      this.entries.delete(key)
+      handle.close()
+    }
+  }
+
+  disposeAll(): void {
+    for (const handle of this.entries.values()) handle.close()
+    this.entries.clear()
+  }
+}
+
+const watchers = new WatcherRegistry()
+const repoWatchers = new WatcherRegistry()
 const destroyHooked = new WeakSet<WebContents>()
 
 function watcherKey(wcId: number, cwd?: string): string {
   return `${wcId}\u0000${cwd ?? ''}`
 }
 
-function nextGeneration(key: string): number {
-  const next = (generations.get(key) ?? 0) + 1
-  generations.set(key, next)
-  return next
-}
-
-function closeWatcher(key: string): void {
-  watchers.get(key)?.close()
-  watchers.delete(key)
-}
-
 function closeWatchersFor(wcId: number): void {
-  for (const [key, ref] of watchRefs) {
-    if (ref.wcId === wcId) watchRefs.delete(key)
-  }
-  for (const [key, watcher] of watchers) {
-    if (watcher.wcId !== wcId) continue
-    nextGeneration(key)
-    watcher.close()
-    watchers.delete(key)
-  }
+  watchers.closeFor(wcId)
+  repoWatchers.closeFor(wcId)
 }
 
 export function disposeGitWatchers(): void {
-  for (const { close } of watchers.values()) close()
-  watchers.clear()
-  generations.clear()
-  watchRefs.clear()
+  watchers.disposeAll()
+  repoWatchers.disposeAll()
 }
 
 export function registerGitHandlers(): void {
@@ -1358,15 +1410,126 @@ export function registerGitHandlers(): void {
   )
 
   ipcMain.handle('git:unwatch', (event, cwd?: string): void => {
-    const key = watcherKey(event.sender.id, cwd)
-    const ref = watchRefs.get(key)
-    if (ref && ref.count > 1) {
-      ref.count--
+    watchers.release(watcherKey(event.sender.id, cwd))
+  })
+
+  ipcMain.handle('git:unwatchRepos', (event, cwd?: string): void => {
+    repoWatchers.release(watcherKey(event.sender.id, cwd))
+  })
+
+  ipcMain.handle('git:watchRepos', async (event, cwd?: string): Promise<void> => {
+    const sender = event.sender
+    const wcId = sender.id
+    const key = watcherKey(wcId, cwd)
+
+    const handle = repoWatchers.begin(key, wcId)
+    if (!handle) return
+
+    const dir = cwd || os.homedir()
+    const rootClosers: (() => void)[] = []
+    let childClosers: (() => void)[] = []
+    let timer: NodeJS.Timeout | null = null
+    let inRepo = false
+    let childKey = ''
+    let signature = ''
+
+    handle.close = () => {
+      if (timer) clearTimeout(timer)
+      timer = null
+      for (const close of rootClosers) close()
+      for (const close of childClosers) close()
+      rootClosers.length = 0
+      childClosers = []
+    }
+
+    const live = (): boolean => repoWatchers.isCurrent(key, handle) && !sender.isDestroyed()
+
+    const watchDir = (
+      target: string,
+      accept: (filename: string | null) => boolean,
+      into: (() => void)[]
+    ): void => {
+      try {
+        const watcher = fs.watch(target, { recursive: false }, (event, filename) => {
+          if (event === 'rename' && accept(filename)) notify()
+        })
+        watcher.on('error', () => watcher.close())
+        into.push(() => watcher.close())
+      } catch {
+        return
+      }
+    }
+
+    const syncChildren = async (root: string | null): Promise<void> => {
+      inRepo = root !== null
+      const drop = (): void => {
+        for (const close of childClosers) close()
+        childClosers = []
+      }
+      if (inRepo) {
+        childKey = ''
+        drop()
+        return
+      }
+
+      let entries: fs.Dirent[]
+      try {
+        entries = await fs.promises.readdir(dir, { withFileTypes: true })
+      } catch {
+        entries = []
+      }
+      const names = entries
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+        .map((entry) => entry.name)
+        .sort()
+        .slice(0, maxDiscoveryChildren)
+
+      const next = names.join('\n')
+      if (next === childKey) return
+      childKey = next
+      drop()
+      if (!live()) return
+      for (const name of names) watchDir(path.join(dir, name), isGitEntry, childClosers)
+    }
+
+    const recheck = async (): Promise<void> => {
+      if (!live()) return
+      const state = await discoveryState(cwd)
+      if (!live()) return
+      await syncChildren(state.root)
+      if (!live()) return
+      const next = repoSignature(state)
+      if (next === signature) return
+      signature = next
+      sender.send('git:reposChanged', cwd ?? null)
+    }
+
+    const notify = (): void => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        void recheck()
+      }, discoveryQuietMs)
+    }
+
+    const initial = await discoveryState(cwd)
+    if (!live()) {
+      repoWatchers.bail(key, handle)
       return
     }
-    watchRefs.delete(key)
-    nextGeneration(key)
-    closeWatcher(key)
+    signature = repoSignature(initial)
+
+    watchDir(dir, (filename) => !inRepo || isGitEntry(filename), rootClosers)
+    await syncChildren(initial.root)
+    if (!live()) {
+      repoWatchers.bail(key, handle)
+      return
+    }
+
+    if (!destroyHooked.has(sender)) {
+      destroyHooked.add(sender)
+      sender.once('destroyed', () => closeWatchersFor(wcId))
+    }
   })
 
   ipcMain.handle('git:watch', async (event, cwd?: string): Promise<void> => {
@@ -1374,23 +1537,12 @@ export function registerGitHandlers(): void {
     const wcId = sender.id
     const key = watcherKey(wcId, cwd)
 
-    const ref = watchRefs.get(key)
-    if (ref) {
-      ref.count++
-      return
-    }
-    watchRefs.set(key, { wcId, count: 1 })
-
-    const generation = nextGeneration(key)
-    closeWatcher(key)
-
-    const abandon = (): void => {
-      if (generations.get(key) === generation) watchRefs.delete(key)
-    }
+    const handle = watchers.begin(key, wcId)
+    if (!handle) return
 
     const dir = await gitDir(cwd)
     if (!dir) {
-      abandon()
+      watchers.bail(key, handle)
       return
     }
 
@@ -1409,6 +1561,11 @@ export function registerGitHandlers(): void {
     }
 
     const closers: (() => void)[] = []
+    handle.close = () => {
+      for (const c of closers) c()
+      if (timer) clearTimeout(timer)
+    }
+
     const watch = (
       target: string,
       recursive: boolean,
@@ -1446,18 +1603,10 @@ export function registerGitHandlers(): void {
       watch(worktree, true, (filename) => !!filename && !ignoredWorktreeEntry.test(filename))
     }
 
-    const close = (): void => {
-      for (const c of closers) c()
-      if (timer) clearTimeout(timer)
-    }
-
-    if (generations.get(key) !== generation || sender.isDestroyed()) {
-      abandon()
-      close()
+    if (!watchers.isCurrent(key, handle) || sender.isDestroyed()) {
+      watchers.bail(key, handle)
       return
     }
-
-    watchers.set(key, { wcId, close })
 
     if (!destroyHooked.has(sender)) {
       destroyHooked.add(sender)
