@@ -708,6 +708,15 @@ body {
   background: var(--ui-border, #313244);
 }
 
+.tab-command-divider {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 1px;
+  height: 14px;
+  margin: 0 4px;
+  background: var(--ui-border-hover, #45475a);
+}
+
 .tab-command-form {
   display: flex;
   align-items: center;
@@ -744,11 +753,6 @@ body {
   font-family: 'Hack Nerd Font Mono', monospace;
   font-size: 13px;
   cursor: pointer;
-}
-
-.tab-command:disabled {
-  opacity: 0.45;
-  cursor: default;
 }
 
 .tab {
@@ -823,7 +827,7 @@ body {
   color: var(--ui-text, #cdd6f4);
 }
 
-.tab-command:not(:disabled):hover {
+.tab-command:hover {
   color: var(--ui-success, #a6e3a1);
   border-color: var(--ui-success, #a6e3a1);
 }
@@ -833,7 +837,7 @@ body {
   border-color: var(--ui-danger, #f38ba8);
 }
 
-.tab-command-active:not(:disabled):hover {
+.tab-command-active:hover {
   color: #f25481;
   border-color: #f25481;
 }

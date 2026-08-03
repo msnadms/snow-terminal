@@ -1,0 +1,64 @@
+name: Update scoop bucket
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (e.g. v1.1.4)
+        required: true
+
+jobs:
+  scoop:
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve release
+        id: rel
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: msnadms/scoop-snow
+          token: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+
+      - name: Hash release asset
+        id: hash
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+          VERSION: ${{ steps.rel.outputs.version }}
+        run: |
+          URL="https://github.com/${{ github.repository }}/releases/download/$TAG/snow-$VERSION-win-x64.zip"
+          curl -fsSL --retry 3 -o snow.zip "$URL"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum snow.zip | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          rm snow.zip
+
+      - name: Update manifest
+        env:
+          VERSION: ${{ steps.rel.outputs.version }}
+          URL: ${{ steps.hash.outputs.url }}
+          SHA: ${{ steps.hash.outputs.sha256 }}
+        run: |
+          jq --indent 4 \
+            --arg version "$VERSION" --arg url "$URL" --arg hash "$SHA" \
+            '.version = $version
+             | .architecture."64bit".url = $url
+             | .architecture."64bit".hash = $hash' \
+            bucket/snow.json > bucket/snow.json.tmp
+          mv bucket/snow.json.tmp bucket/snow.json
+
+      - name: Commit
+        env:
+          VERSION: ${{ steps.rel.outputs.version }}
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add bucket/snow.json
+          git diff --staged --quiet && echo "already up to date" && exit 0
+          git commit -m "snow: update to $VERSION"
+          git push

@@ -232,24 +232,81 @@ one stable `onBottomLayout` down to every `Session`. `Session` and `Terminal` ar
 `React.memo` and `App` hands `Session` only stable (`useCallback`) callbacks keyed by session `id`, so a
 drag on one pane doesn't reconcile the whole terminal tree.
 
-`commands` is **per preset** — the shell-command buttons the tab bar shows to the right of its `+`
-when the active session belongs to that preset. `App` resolves it through `presetIndexFor`, the single
-preset-identity helper: it matches the `presetName` captured at open time when there is one, and only
-falls back to a `presets[].cwd` match for entries that never came from a preset (a commit or diff tab,
-whose `presetCwd` is just the repo). Matching on **name, not cwd**, is what lets two presets share a
-directory and still get their own command buttons — the same reason `startupCommand` and `paneRatios`
-are captured rather than re-derived. `activePresetIndex` is derived fresh each render rather
-than stored, so it never drifts when presets are reordered. Each button is a **toggle**: clicking
-spawns a hidden background PTY (no xterm attached) running the command in the preset's cwd, and
+`commands` is **per preset** — the shell-command buttons the tab bar shows to the right of its `+`.
+Which buttons appear is a **union of two sources**, resolved once as `commandPresets` in `App` — the
+ordered, deduped list of preset indices in scope, which everything else falls out of:
+
+- the **session** presets — every distinct preset across `activeEntries` (the base pane plus each
+  split pane, each already tagged with the `presetName` captured at open time), pushed first;
+- the **adopted** preset — the one matching whichever repo the action bar currently targets
+  (`activeRepo`), appended last.
+
+`commandItems` is that list flat-mapped through each preset's `commands`, and `managePresetIndex` is
+just `commandPresets[0]` — deriving both from one scan is what keeps the "session first, adopted last"
+ordering from being stated twice. It cannot be read back off `commandItems`, because a preset with no
+commands contributes no items but is still a valid `+` target.
+
+Both sources resolve through `presetIndexFor`, the single preset-identity helper: it matches the `presetName`
+captured at open time when there is one, and only falls back to a `presets[].cwd` match for entries
+that never came from a preset (a commit or diff tab, whose `presetCwd` is just the repo). Matching on
+**name, not cwd**, is what lets two presets share a directory and still get their own command buttons
+— the same reason `startupCommand` and `paneRatios` are captured rather than re-derived.
+
+The union exists because the two sources answer different questions and neither subsumes the other.
+Deriving visibility from `activeRepo` **alone** silently drops a preset's commands whenever its own
+cwd is not inside a discovered repo — a pane sitting in a non-git `~/projects` parent gets expanded
+into its child repos, none of which contains the parent's cwd, so `presetIndexFor` returned `-1` and
+the button row went empty (and `canManageCommands` went false, so the `+` could not even add one).
+Keeping the adopted source is what still surfaces a child repo's **own** preset commands as you cycle
+`⇄`. Session commands come first so the `runCommand` keybind (`commandItems[0]`) stays pinned to the
+same command as the switcher moves; a preset appearing in both sources is deduped by `uniqueBy` and
+keeps its session position. Only the **selected** repo's preset is adopted, not every discovered one,
+or a `~/projects` with a dozen child repos would grow an unbounded row.
+
+`TabBar` renders a `.tab-command-divider` wherever `presetIndex` changes between adjacent items —
+buttons are 24×24 glyph-only with the command in the `title`, so without it two presets' buttons are
+indistinguishable; the tooltip and the right-click Remove label are both prefixed with the owning
+preset's name for the same reason. Keying the divider off the grouping already in the data (rather
+than a render-only "is this the adopted one" flag) is what also separates two **session** presets, which
+a session with splits from different presets puts side by side. Each item carries its own
+`presetIndex` and its `index` **within that preset**, because
+`snowconfig:removeCommand` is positional and a position in the union array would address the wrong
+entry — the same two-index-spaces trap as `HomePage`'s `visibleEntries`. Both index spaces stay inside
+`App`: `TabBar` hands the whole `CommandItem` back through `onToggleCommand`/`onRemoveCommand` and
+never touches the config layout itself. Every rendered item therefore
+has a resolved preset and is always toggleable; only the `+` is gated, and it is gated by
+**`onAddCommand` being `undefined`** rather than a separate `canManageCommands` boolean — one prop
+that both disables the button and hides the form, so the two can't disagree. `App` passes the
+callback only when `managePresetIndex >= 0` — the first **session** preset, falling back to the
+adopted one — so adding a command in a parent-folder pane lands on the preset you actually opened.
+
+`TabBar` is wrapped in `React.memo`, so it re-renders only when something it shows actually changes.
+That means `App` must hand it stable props: `visiblePresets` and `commandItems` are `useMemo`d and
+every callback is `useCallback`d. Three of them are wrappers (`addDefaultSession`,
+`openBlankBrowser`, `splitActiveBlank`) that exist because their targets take an optional first
+argument and the buttons wire `onClick` straight through — passing `splitActive` as `onSplit` would
+hand the `MouseEvent` to the `preset` parameter. `closeSession` reads `tabsRef`/`activeIdRef` instead
+of closing over `tabs`/`activeId`, which is what lets it be `useCallback([])`; `splitActive` does the
+same for the active tab. `toggleCommand` deliberately keeps `running` in its deps rather than moving
+the spawn/kill into a `setRunning` updater — updaters are double-invoked in StrictMode, and that
+would spawn two PTYs per click. Its identity therefore changes exactly when the `running` prop does,
+so the memo is not weakened.
+
+Each button is a **toggle**: clicking
+spawns a hidden background PTY (no xterm attached) running the command in **its own item's** cwd, and
 clicking again kills it — so a long-running command like `npm run dev` starts and stops from the one
-button. The command is spawned as `<command>; exit` so the shell (and the PTY) dies when the command
+button. Because the item carries the cwd, a command always runs in its own preset's directory no
+matter which repo the action bar is pointed at. The command is spawned as `<command>; exit` so the
+shell (and the PTY) dies when the command
 finishes — both PowerShell (`-NoExit`) and the interactive POSIX shell otherwise outlive their
 command, which would leave the button stuck green when the process ends on its own or is killed
-externally. `App` holds the `running` map keyed by `` `${presetName}\n${command}` `` → terminal id (so
+externally. `App` holds the `running` map keyed by the item's `runKey`, `` `${presetName}\n${command}` `` → terminal id (so
 the same command under different presets tracks independently — keyed by cwd it would collide for two
-presets sharing a directory, the same trap `presetIndexFor` avoids) and passes the active preset's running
-subset to `TabBar` as `runningCommands`; a self-terminating process clears its own button via the
-shared `pty:exit` listener. Background PTY ids come from the shared `nextTerminalId()`
+presets sharing a directory, the same trap `presetIndexFor` avoids) and passes that map straight to
+`TabBar`, which reads `running[item.runKey] != null` per button — a derived array of in-scope keys
+would be a fresh identity every render and an O(n·m) scan to read. A self-terminating process clears
+its own button via the shared `pty:exit` listener. A command whose preset leaves scope keeps running and stays in `running`,
+so its button comes back green when the preset returns. Background PTY ids come from the shared `nextTerminalId()`
 (`src/renderer/src/terminalId.ts`), the same allocator `Terminal` uses, so they never collide with
 pane ids.
 
@@ -313,6 +370,16 @@ instead of renderer `localStorage`**: a synchronous `localStorage.getItem` on th
 observed blocking the renderer's main thread for ~5s while Chromium's DOM-Storage backend opened,
 freezing first paint and interactivity. Reading it from the already-loaded snowconfig (async IPC) keeps
 that off the main thread entirely — no renderer code touches `localStorage`.
+
+Whether the tour is **showing** is derived in `App`, not stored: `showTour` is
+`!tourSeen && !tourDismissed && activeTab.kind === 'shell' && repos.length > 0`, where `tourDismissed`
+is the local state `closeTour` sets alongside the `snowconfig:setTourSeen` write (the config round-trip
+lands a beat later). Gating on the discovered `repos` list — the same one the git view renders — rather
+than on a `git:isRepo` probe of the active tab's cwd is what makes the tour appear for a pane sitting in
+a **parent folder** of some repos, since discovery expands that into its children and the parent itself
+is not a repo. It also means the tour appears on a `git init` under the pane, because
+`git:reposChanged` refreshes `repos`. Most of the tour's spotlight targets are git-view elements, so
+there is nothing to latch: with no repos in view (or on the home page) it has nothing to point at.
 
 `keybinds` is an optional top-level `{ action: combo }` map that rebinds the app's keyboard shortcuts.
 It is **hand-edited only** — a pure passthrough field like `gradients`, with no `snowconfig:*` write
@@ -625,8 +692,11 @@ The active tab can touch more than one repo — its base cwd plus each split pan
 builds `repoEntries` (`{ cwd, presetCwd, presetName }`, deduped by cwd via `uniqueBy`) from the active tab, joins
 their cwds into a stable `discoverKey`, and runs **one** `git:discover` per cwd, merging the results
 (deduped by `repo.path`) into a single `repos` list. Keying the effect on the serialized `discoverKey`
-rather than the array identity is load-bearing: `repoEntries` gets a fresh identity on every OSC 7
-report, so depending on it directly would re-discover on every shell prompt. `discover` returns
+rather than the array identity is load-bearing: `repoEntries` gets a fresh identity whenever `cwds`
+changes, so depending on it directly would re-discover on every shell prompt. `handleSessionCwd`
+narrows that at the source — it returns the previous `cwds` unchanged when the reported directory
+already matches, the same guard `handleSessionStatus` uses — so an OSC 7 report that says nothing new
+(the common case, since the shell re-reports on every prompt) costs no render at all. `discover` returns
 canonical worktree-root paths and expands a non-repo parent directory into its child repos, so a pane
 sitting in a `~/projects` folder surfaces every repo under it.
 
@@ -663,8 +733,9 @@ the action bar's repo set. `actionRepos` re-associates each discovered root with
 the `repoEntries` entry whose cwd lives inside that root (slash-normalized prefix match) and carrying
 its `presetCwd`/`presetName`, so preset command buttons still resolve for the repo you opened. A
 parent-expanded child that no pane owns falls back to **adopting** a preset whose own `cwd` lives
-inside that root, so switching the action bar to it surfaces that preset's command buttons instead of
-none — a pane sitting in `~/projects` gets each child repo's commands as you cycle through them. The
+inside that root, so switching the action bar to it surfaces that preset's command buttons — a pane
+sitting in `~/projects` gets each child repo's commands as you cycle through them, appended after
+its own preset's (see `commands` under `.snowconfig`). The
 fallback runs only when the owner-based lookup fails, so a pane's captured `presetName` always wins
 and two presets sharing a directory keep their own buttons. `presetName` rides all the way from the
 shell tab and from each split `Pane` (both split-creation paths — `addSession`'s `splits` and

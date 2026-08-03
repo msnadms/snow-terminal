@@ -35,6 +35,15 @@ type Tab =
 
 type RepoEntry = { cwd: string; presetCwd?: string; presetName?: string }
 
+export type CommandItem = {
+  presetIndex: number
+  presetName: string
+  cwd: string
+  command: string
+  index: number
+  runKey: string
+}
+
 function presetIndexFor(presets: Preset[], entry?: Partial<RepoEntry>): number {
   if (entry?.presetName != null) return presets.findIndex((p) => p.name === entry.presetName)
   if (entry?.presetCwd != null) return presets.findIndex((p) => p.cwd === entry.presetCwd)
@@ -59,12 +68,14 @@ function App(): React.JSX.Element {
   const [browserTitles, setBrowserTitles] = useState<Record<number, string>>({})
   const [statuses, setStatuses] = useState<Record<number, SessionStatus>>({})
   const [frozen, setFrozen] = useState<{ entries: RepoEntry[] } | null>(null)
-  const [tour, setTour] = useState(false)
+  const [tourDismissed, setTourDismissed] = useState(false)
   const nextIdRef = useRef(1)
   const tabsRef = useRef(tabs)
+  const activeIdRef = useRef(activeId)
   useEffect(() => {
     tabsRef.current = tabs
-  }, [tabs])
+    activeIdRef.current = activeId
+  }, [tabs, activeId])
   const {
     presets,
     name: configName,
@@ -76,7 +87,10 @@ function App(): React.JSX.Element {
     layout,
     error: presetsError
   } = useSnowconfig()
-  const visiblePresets = visiblePresetEntries(presets).map((e) => e.preset)
+  const visiblePresets = useMemo(
+    () => visiblePresetEntries(presets).map((e) => e.preset),
+    [presets]
+  )
 
   const gitPane = useCollapsiblePane({
     min: GIT_MIN,
@@ -166,13 +180,34 @@ function App(): React.JSX.Element {
     setPickedRepo(actionRepos[(repoIndex + 1) % actionRepos.length].cwd)
   }
 
-  const activePresetIndex = presetIndexFor(presets, activeRepo)
-  const activePreset = activePresetIndex >= 0 ? presets[activePresetIndex] : undefined
-  const presetCommands = activePreset?.commands ?? []
-  const runKey = (presetName: string, command: string): string => `${presetName}\n${command}`
-  const runningCommands = activePreset
-    ? presetCommands.filter((c) => running[runKey(activePreset.name, c)] != null)
-    : []
+  const repoPresetName = activeRepo?.presetName
+  const repoPresetCwd = activeRepo?.presetCwd
+  const commandPresets = useMemo(() => {
+    const indices = activeEntries.map((entry) => presetIndexFor(presets, entry))
+    indices.push(presetIndexFor(presets, { presetName: repoPresetName, presetCwd: repoPresetCwd }))
+    return uniqueBy(
+      indices.filter((index) => presets[index] != null),
+      String
+    )
+  }, [presets, activeEntries, repoPresetName, repoPresetCwd])
+
+  const commandItems = useMemo<CommandItem[]>(
+    () =>
+      commandPresets.flatMap((presetIndex) => {
+        const preset = presets[presetIndex]
+        return (preset.commands ?? []).map((command, index) => ({
+          presetIndex,
+          presetName: preset.name,
+          cwd: preset.cwd,
+          command,
+          index,
+          runKey: `${preset.name}\n${command}`
+        }))
+      }),
+    [presets, commandPresets]
+  )
+
+  const managePresetIndex = commandPresets[0] ?? -1
 
   const labels = useMemo(() => {
     const result: Record<number, string> = {}
@@ -195,26 +230,33 @@ function App(): React.JSX.Element {
     return result
   }, [tabs, cwds, browserTitles])
 
-  const addSession = (preset?: Preset): void => {
-    const id = nextIdRef.current++
-    const cwd = preset?.cwd
-    setTabs((prev) => [
-      ...prev,
-      { kind: 'shell', id, cwd, startupCommand: preset?.startupCommand, presetName: preset?.name }
-    ])
-    if (cwd) setCwds((prev) => ({ ...prev, [id]: cwd }))
-    const splitPanes: Pane[] = (preset?.splits ?? [])
-      .map((name) => presets.find((p) => p.name === name))
-      .filter((p): p is Preset => p != null)
-      .map((p) => ({
-        id: nextTerminalId(),
-        cwd: p.cwd,
-        startupCommand: p.startupCommand ?? startupCommand ?? 'claude',
-        presetName: p.name
-      }))
-    setPanes((prev) => ({ ...prev, [id]: [{ id: nextTerminalId() }, ...splitPanes] }))
-    setActiveId(id)
-  }
+  const addSession = useCallback(
+    (preset?: Preset): void => {
+      const id = nextIdRef.current++
+      const cwd = preset?.cwd
+      setTabs((prev) => [
+        ...prev,
+        { kind: 'shell', id, cwd, startupCommand: preset?.startupCommand, presetName: preset?.name }
+      ])
+      if (cwd) setCwds((prev) => ({ ...prev, [id]: cwd }))
+      const splitPanes: Pane[] = (preset?.splits ?? [])
+        .map((name) => presets.find((p) => p.name === name))
+        .filter((p): p is Preset => p != null)
+        .map((p) => ({
+          id: nextTerminalId(),
+          cwd: p.cwd,
+          startupCommand: p.startupCommand ?? startupCommand ?? 'claude',
+          presetName: p.name
+        }))
+      setPanes((prev) => ({ ...prev, [id]: [{ id: nextTerminalId() }, ...splitPanes] }))
+      setActiveId(id)
+    },
+    [presets, startupCommand]
+  )
+
+  const addDefaultSession = useCallback(() => {
+    addSession(presets.find((p) => p.default))
+  }, [addSession, presets])
 
   const addSessionRef = useRef(addSession)
   useEffect(() => {
@@ -263,25 +305,37 @@ function App(): React.JSX.Element {
     setActiveId(id)
   }
 
-  const openBrowser = (url = 'https://www.google.com'): void => {
+  const openBrowser = useCallback((url = 'https://www.google.com'): void => {
     const id = nextIdRef.current++
     setTabs((prev) => [...prev, { kind: 'browser', id, url }])
     setActiveId(id)
-  }
+  }, [])
 
-  const splitActive = (preset?: Preset): void => {
-    if (!activeTab || activeTab.kind !== 'shell') return
-    const paneId = nextTerminalId()
-    const pane: Pane = preset
-      ? {
-          id: paneId,
-          cwd: preset.cwd,
-          startupCommand: preset.startupCommand ?? startupCommand ?? 'claude',
-          presetName: preset.name
-        }
-      : { id: paneId }
-    setPanes((prev) => ({ ...prev, [activeTab.id]: [...(prev[activeTab.id] ?? []), pane] }))
-  }
+  const openBlankBrowser = useCallback(() => {
+    openBrowser()
+  }, [openBrowser])
+
+  const splitActive = useCallback(
+    (preset?: Preset): void => {
+      const tab = tabsRef.current.find((t) => t.id === activeIdRef.current)
+      if (tab?.kind !== 'shell') return
+      const paneId = nextTerminalId()
+      const pane: Pane = preset
+        ? {
+            id: paneId,
+            cwd: preset.cwd,
+            startupCommand: preset.startupCommand ?? startupCommand ?? 'claude',
+            presetName: preset.name
+          }
+        : { id: paneId }
+      setPanes((prev) => ({ ...prev, [tab.id]: [...(prev[tab.id] ?? []), pane] }))
+    },
+    [startupCommand]
+  )
+
+  const splitActiveBlank = useCallback(() => {
+    splitActive()
+  }, [splitActive])
 
   const openSplit = (split: Split): void => {
     if (!activeTab || activeTab.kind !== 'shell') return
@@ -314,7 +368,7 @@ function App(): React.JSX.Element {
   }, [])
 
   const handleSessionCwd = useCallback((sessionId: number, next: string): void => {
-    setCwds((prev) => ({ ...prev, [sessionId]: next }))
+    setCwds((prev) => (prev[sessionId] === next ? prev : { ...prev, [sessionId]: next }))
   }, [])
 
   const handleSessionStatus = useCallback((sessionId: number, status: SessionStatus): void => {
@@ -337,23 +391,35 @@ function App(): React.JSX.Element {
     [presets]
   )
 
-  const toggleCommand = (command: string): void => {
-    if (!activePreset) return
-    const key = runKey(activePreset.name, command)
-    const existing = running[key]
-    if (existing != null) {
-      window.api.terminal.kill(existing)
-      setRunning((prev) => {
-        const next = { ...prev }
-        delete next[key]
-        return next
-      })
-      return
-    }
-    const id = nextTerminalId()
-    window.api.terminal.spawn(id, 80, 24, activePreset.cwd, `${command}; exit`)
-    setRunning((prev) => ({ ...prev, [key]: id }))
-  }
+  const toggleCommand = useCallback(
+    (item: CommandItem): void => {
+      const existing = running[item.runKey]
+      if (existing != null) {
+        window.api.terminal.kill(existing)
+        setRunning((prev) => {
+          const next = { ...prev }
+          delete next[item.runKey]
+          return next
+        })
+        return
+      }
+      const id = nextTerminalId()
+      window.api.terminal.spawn(id, 80, 24, item.cwd, `${item.command}; exit`)
+      setRunning((prev) => ({ ...prev, [item.runKey]: id }))
+    },
+    [running]
+  )
+
+  const addCommand = useCallback(
+    (command: string): void => {
+      window.api.snowconfig.addCommand(managePresetIndex, command)
+    },
+    [managePresetIndex]
+  )
+
+  const removeCommand = useCallback((item: CommandItem): void => {
+    window.api.snowconfig.removeCommand(item.presetIndex, item.index)
+  }, [])
 
   useEffect(() => {
     return window.api.terminal.onExit(null, (id) => {
@@ -367,28 +433,20 @@ function App(): React.JSX.Element {
     })
   }, [])
 
-  useEffect(() => {
-    if (tourSeen) return
-    if (activeTab?.kind !== 'shell' || !cwd) return
-    let cancelled = false
-    window.api.git.isRepo(cwd).then((repo) => {
-      if (!cancelled && repo) setTour(true)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [tourSeen, activeTab?.kind, cwd])
+  const showTour =
+    !tourSeen && !tourDismissed && activeTab?.kind === 'shell' && repos != null && repos.length > 0
 
   const closeTour = (): void => {
     window.api.snowconfig.setTourSeen()
-    setTour(false)
+    setTourDismissed(true)
   }
 
-  const closeSession = (id: number): void => {
-    const index = tabs.findIndex((t) => t.id === id)
+  const closeSession = useCallback((id: number): void => {
+    const current = tabsRef.current
+    const index = current.findIndex((t) => t.id === id)
     if (index === -1) return
-    const remaining = tabs.filter((t) => t.id !== id)
-    if (activeId === id) {
+    const remaining = current.filter((t) => t.id !== id)
+    if (activeIdRef.current === id) {
       const neighbor = remaining[index - 1] ?? remaining[index]
       setActiveId(neighbor ? neighbor.id : 'home')
     }
@@ -403,7 +461,7 @@ function App(): React.JSX.Element {
     setSplits(dropKey)
     setBrowserTitles(dropKey)
     setStatuses(dropKey)
-  }
+  }, [])
 
   const cycleTab = (delta: number): void => {
     const order: ActiveId[] = ['home', ...tabs.map((t) => t.id)]
@@ -413,14 +471,14 @@ function App(): React.JSX.Element {
   }
 
   useKeybinds(keybinds, {
-    newTab: () => addSession(presets.find((p) => p.default)),
+    newTab: addDefaultSession,
     closeTab: activeId !== 'home' ? () => closeSession(activeId) : undefined,
     nextTab: tabs.length > 0 ? () => cycleTab(1) : undefined,
     prevTab: tabs.length > 0 ? () => cycleTab(-1) : undefined,
     newSplit: activeTab?.kind === 'shell' ? () => splitActive() : undefined,
     diffSplit:
       activeTab?.kind === 'shell' && actionCwd ? () => openDiffSplit(actionCwd) : undefined,
-    runCommand: presetCommands[0] ? () => toggleCommand(presetCommands[0]) : undefined,
+    runCommand: commandItems[0] ? () => toggleCommand(commandItems[0]) : undefined,
     switchRepo: actionRepos.length > 1 ? switchRepo : undefined,
     focusCommit: actionCwd
       ? () => document.querySelector<HTMLInputElement>('.actionbar-input')?.focus()
@@ -466,23 +524,16 @@ function App(): React.JSX.Element {
             statuses={statuses}
             onSelect={setActiveId}
             onClose={closeSession}
-            onAdd={() => addSession(presets.find((p) => p.default))}
-            onOpenBrowser={() => openBrowser()}
-            onSplit={() => splitActive()}
+            onAdd={addDefaultSession}
+            onOpenBrowser={openBlankBrowser}
+            onSplit={splitActiveBlank}
             presets={visiblePresets}
-            onSplitWithPreset={(preset) => splitActive(preset)}
+            onSplitWithPreset={splitActive}
             onToggleCommand={toggleCommand}
-            onAddCommand={(command) => {
-              if (activePresetIndex >= 0)
-                window.api.snowconfig.addCommand(activePresetIndex, command)
-            }}
-            onRemoveCommand={(index) => {
-              if (activePresetIndex >= 0)
-                window.api.snowconfig.removeCommand(activePresetIndex, index)
-            }}
-            commands={presetCommands}
-            runningCommands={runningCommands}
-            canManageCommands={activePresetIndex >= 0}
+            onAddCommand={managePresetIndex >= 0 ? addCommand : undefined}
+            onRemoveCommand={removeCommand}
+            commands={commandItems}
+            running={running}
             canSplit={activeTab?.kind === 'shell'}
           />
           <div className="terminal-stack">
@@ -578,7 +629,7 @@ function App(): React.JSX.Element {
           />
         )}
       </div>
-      {tour && <Tour onClose={closeTour} />}
+      {showTour && <Tour onClose={closeTour} />}
     </div>
   )
 }

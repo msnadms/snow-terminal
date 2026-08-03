@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { Fragment, memo, useState } from 'react'
 import ContextMenu from './ContextMenu'
-import type { SessionStatus } from '../App'
+import type { CommandItem, SessionStatus } from '../App'
 import type { Preset } from '../useSnowconfig'
 
 interface TabBarProps {
@@ -8,8 +8,8 @@ interface TabBarProps {
   activeId: number | 'home'
   labels: Record<number, string>
   statuses: Record<number, SessionStatus>
-  commands: string[]
-  runningCommands: string[]
+  commands: CommandItem[]
+  running: Record<string, number>
   presets: Preset[]
   onSelect: (id: number | 'home') => void
   onClose: (id: number) => void
@@ -17,10 +17,9 @@ interface TabBarProps {
   onOpenBrowser: () => void
   onSplit: () => void
   onSplitWithPreset: (preset: Preset) => void
-  onToggleCommand: (command: string) => void
-  onAddCommand: (command: string) => void
-  onRemoveCommand: (index: number) => void
-  canManageCommands: boolean
+  onToggleCommand: (item: CommandItem) => void
+  onAddCommand?: (command: string) => void
+  onRemoveCommand: (item: CommandItem) => void
   canSplit: boolean
 }
 
@@ -30,7 +29,7 @@ function TabBar({
   labels,
   statuses,
   commands,
-  runningCommands,
+  running,
   presets,
   onSelect,
   onClose,
@@ -41,17 +40,16 @@ function TabBar({
   onToggleCommand,
   onAddCommand,
   onRemoveCommand,
-  canManageCommands,
   canSplit
 }: TabBarProps): React.JSX.Element {
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState('')
-  const [menu, setMenu] = useState<{ index: number; x: number; y: number } | null>(null)
+  const [menu, setMenu] = useState<{ item: CommandItem; x: number; y: number } | null>(null)
   const [splitMenu, setSplitMenu] = useState<{ x: number; y: number } | null>(null)
 
   const submit = (): void => {
     const command = draft.trim()
-    if (command) onAddCommand(command)
+    if (command) onAddCommand?.(command)
     setDraft('')
     setAdding(false)
   }
@@ -61,11 +59,10 @@ function TabBar({
     setAdding(false)
   }
 
-  const removeCommand = (index: number): void => {
+  const removeCommand = (item: CommandItem): void => {
     setMenu(null)
-    const command = commands[index]
-    if (command && runningCommands.includes(command)) onToggleCommand(command)
-    onRemoveCommand(index)
+    if (running[item.runKey] != null) onToggleCommand(item)
+    onRemoveCommand(item)
   }
 
   return (
@@ -111,12 +108,12 @@ function TabBar({
           if (adding) e.preventDefault()
         }}
         onClick={() => (adding ? submit() : setAdding(true))}
-        disabled={!canManageCommands}
+        disabled={!onAddCommand}
         title="Add command"
       >
         +
       </button>
-      {adding && canManageCommands && (
+      {adding && onAddCommand && (
         <form
           className="tab-command-form"
           onSubmit={(e) => {
@@ -137,22 +134,26 @@ function TabBar({
           />
         </form>
       )}
-      {commands.map((command, i) => {
-        const active = runningCommands.includes(command)
+      {commands.map((item, i) => {
+        const active = running[item.runKey] != null
+        const label = `${item.presetName}: ${item.command}`
         return (
-          <button
-            key={i}
-            className={`tab-command${active ? ' tab-command-active' : ''}`}
-            onClick={() => onToggleCommand(command)}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              setMenu({ index: i, x: e.clientX, y: e.clientY })
-            }}
-            disabled={!active && !canManageCommands}
-            title={active ? `Stop: ${command}` : command}
-          >
-            {!active ? '' : ''}
-          </button>
+          <Fragment key={`${item.presetIndex}:${item.index}`}>
+            {i > 0 && commands[i - 1].presetIndex !== item.presetIndex && (
+              <span className="tab-command-divider" />
+            )}
+            <button
+              className={`tab-command${active ? ' tab-command-active' : ''}`}
+              onClick={() => onToggleCommand(item)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                setMenu({ item, x: e.clientX, y: e.clientY })
+              }}
+              title={active ? `Stop: ${label}` : label}
+            >
+              {!active ? '' : ''}
+            </button>
+          </Fragment>
         )
       })}
       <span className="tabbar-divider" />
@@ -170,10 +171,10 @@ function TabBar({
       >
         
       </button>
-      {menu && commands[menu.index] && (
+      {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
-          <button className="context-menu-item" onClick={() => removeCommand(menu.index)}>
-            Remove “{commands[menu.index]}”
+          <button className="context-menu-item" onClick={() => removeCommand(menu.item)}>
+            Remove “{menu.item.command}” from {menu.item.presetName}
           </button>
         </ContextMenu>
       )}
@@ -197,4 +198,4 @@ function TabBar({
   )
 }
 
-export default TabBar
+export default memo(TabBar)
