@@ -468,6 +468,34 @@ mount that is gone by the next boot — plus `app.getAppPath()` when unpackaged.
 `PATH` itself: mutating a user's environment behind their back is worse than a log line naming the
 directory to add.
 
+## Windows taskbar identity
+
+snow deliberately **does not** call `electronApp.setAppUserModelId`. The electron-vite scaffold ships
+that line (with `'com.electron'`) and it is tempting to restore with the real `appId` — don't, it is
+what breaks the taskbar icon on scoop and `.zip` installs.
+
+Setting an AUMID makes Windows resolve the taskbar button through that id instead of through the
+process, and when **no shortcut** on the machine declares the same id there is nothing to resolve to,
+so the button loses its icon. Only the NSIS installer stamps the id onto the shortcuts it writes;
+scoop builds its shortcut with `WScript.Shell`, which cannot set the property at all, and a bare
+`.zip` has no shortcut. The window icon and the icon embedded in the exe are both set in every case —
+neither is what the taskbar reads.
+
+With no AUMID set, Windows falls back to the implicit path-derived identity: the button resolves to
+the exe and takes its embedded icon, which every distribution shape has (electron-builder generates
+the `.ico` from `build/icon.png`, 256×256 being its threshold). Installed builds do not regress,
+because the shell propagates a shortcut's `System.AppUserModel.ID` into the process it launches — an
+NSIS install gets its identity from the shortcut electron-builder already stamps with `appId`, which
+is what made those builds work all along. The runtime call was never load-bearing. Note that
+`@electron-toolkit/utils` reaches the same conclusion in dev, where it passes `process.execPath`
+instead of the id.
+
+Nothing in snow consumes an AUMID — no `Notification`, no `setJumpList`, no `addRecentDocument`, no
+`setUserTasks`. Windows toast notifications are the thing that would need one, plus a shortcut
+declaring it; adding them means revisiting this, and on NSIS installs the propagated id would already
+serve. The other cost is that a Start-Menu launch and a `snow` CLI-shim launch no longer share one
+taskbar group, which is moot while packaged snow holds a single-instance lock.
+
 ## Workflows
 
 A **workflow** is a branch you have explicitly registered, plus the uncommitted work parked on it.
