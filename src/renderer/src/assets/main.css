@@ -762,6 +762,34 @@ body {
   max-width: 180px;
 }
 
+.tab-dragging {
+  opacity: 0.4;
+}
+
+.tab-drop-before,
+.tab-drop-after {
+  position: relative;
+}
+
+.tab-drop-before::before,
+.tab-drop-after::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--ui-accent, #a6dcf0);
+}
+
+.tab-drop-before::before {
+  left: -3px;
+}
+
+.tab-drop-after::after {
+  right: -3px;
+}
+
 .tab-label {
   overflow: hidden;
   text-overflow: ellipsis;

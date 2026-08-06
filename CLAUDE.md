@@ -771,6 +771,21 @@ drive a **set** of repos that `ActionBar` and `GitPanel` share (see _Multi-repo 
 an `active` prop and re-fits via `requestAnimationFrame` on activation; its fit/resize is guarded on a
 non-zero container size so a hidden (0×0) pane is never shrunk to `FitAddon`'s minimum columns.
 
+Tabs are **reorderable by dragging** one onto another. `TabBar` owns the drag (HTML5 `draggable` on
+each tab), tracking `{ from, over }` where `over` is an insertion **slot** in `[0, n]` picked from
+which half of the hovered tab the pointer is in; `insertAt` collapses the two no-op slots
+(`from` and `from + 1`) to `null`, so both the drop indicator and the drop itself are gated on one
+value and a drag that changes nothing never writes state. `App.reorderTab(from, to)` splices `tabs`,
+converting the slot to an index (`to > from ? to - 1 : to`).
+
+The pane stack is deliberately rendered from **`mountedTabs`** — `tabs` sorted by `id`, an order
+reordering can never disturb — not from `tabs`. Keyed reconciliation moves a reordered child with
+`insertBefore`, which detaches and reattaches the node, and that resets `.xterm-viewport`'s
+`scrollTop`: every open terminal would jump to the top of its scrollback on a drag. Since only the
+active pane is visible, the stack's DOM order carries no meaning, so pinning it costs nothing.
+Browser tabs are unaffected either way — their content is a main-process `WebContentsView` positioned
+by bounds, not a DOM node.
+
 ### Multi-repo git view
 
 The active tab can touch more than one repo — its base cwd plus each split pane's live cwd. `App`

@@ -463,6 +463,17 @@ function App(): React.JSX.Element {
     setStatuses(dropKey)
   }, [])
 
+  const reorderTab = useCallback((from: number, to: number): void => {
+    setTabs((prev) => {
+      const target = to > from ? to - 1 : to
+      if (from < 0 || from >= prev.length || target < 0 || target >= prev.length) return prev
+      if (target === from) return prev
+      const next = [...prev]
+      next.splice(target, 0, next.splice(from, 1)[0])
+      return next
+    })
+  }, [])
+
   const cycleTab = (delta: number): void => {
     const order: ActiveId[] = ['home', ...tabs.map((t) => t.id)]
     const index = order.indexOf(activeId)
@@ -503,6 +514,8 @@ function App(): React.JSX.Element {
     if (preset) addSession(preset)
   })
 
+  const mountedTabs = useMemo(() => [...tabs].sort((a, b) => a.id - b.id), [tabs])
+
   return (
     <div className="app">
       <ActionBar
@@ -524,6 +537,7 @@ function App(): React.JSX.Element {
             statuses={statuses}
             onSelect={setActiveId}
             onClose={closeSession}
+            onReorder={reorderTab}
             onAdd={addDefaultSession}
             onOpenBrowser={openBlankBrowser}
             onSplit={splitActiveBlank}
@@ -545,7 +559,7 @@ function App(): React.JSX.Element {
               error={presetsError}
               onOpenPreset={addSession}
             />
-            {tabs.map((tab) => {
+            {mountedTabs.map((tab) => {
               if (tab.kind === 'commit')
                 return (
                   <CommitView

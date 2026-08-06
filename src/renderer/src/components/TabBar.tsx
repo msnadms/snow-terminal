@@ -13,6 +13,7 @@ interface TabBarProps {
   presets: Preset[]
   onSelect: (id: number | 'home') => void
   onClose: (id: number) => void
+  onReorder: (from: number, to: number) => void
   onAdd: () => void
   onOpenBrowser: () => void
   onSplit: () => void
@@ -33,6 +34,7 @@ function TabBar({
   presets,
   onSelect,
   onClose,
+  onReorder,
   onAdd,
   onOpenBrowser,
   onSplit,
@@ -46,6 +48,9 @@ function TabBar({
   const [draft, setDraft] = useState('')
   const [menu, setMenu] = useState<{ item: CommandItem; x: number; y: number } | null>(null)
   const [splitMenu, setSplitMenu] = useState<{ x: number; y: number } | null>(null)
+  const [drag, setDrag] = useState<{ from: number; over: number } | null>(null)
+
+  const insertAt = drag && drag.over !== drag.from && drag.over !== drag.from + 1 ? drag.over : null
 
   const submit = (): void => {
     const command = draft.trim()
@@ -74,28 +79,56 @@ function TabBar({
       >
         󱎱
       </button>
-      {sessions.map(({ id }) => (
-        <div
-          key={id}
-          className={`tab${activeId === id ? ' tab-active' : ''}`}
-          onClick={() => onSelect(id)}
-        >
-          {statuses[id] && statuses[id] !== 'idle' && activeId !== id && (
-            <span className={`tab-status tab-status-${statuses[id]}`} />
-          )}
-          <span className="tab-label">{labels[id] ?? `Session ${id}`}</span>
-          <button
-            className="tab-close"
-            onClick={(e) => {
-              e.stopPropagation()
-              onClose(id)
+      {sessions.map(({ id }, i) => {
+        const drop =
+          insertAt === i
+            ? ' tab-drop-before'
+            : insertAt === sessions.length && i === sessions.length - 1
+              ? ' tab-drop-after'
+              : ''
+        return (
+          <div
+            key={id}
+            className={`tab${activeId === id ? ' tab-active' : ''}${drag?.from === i ? ' tab-dragging' : ''}${drop}`}
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.effectAllowed = 'move'
+              e.dataTransfer.setData('text/plain', String(id))
+              setDrag({ from: i, over: i })
             }}
-            title="Close session"
+            onDragOver={(e) => {
+              if (!drag) return
+              e.preventDefault()
+              e.dataTransfer.dropEffect = 'move'
+              const rect = e.currentTarget.getBoundingClientRect()
+              const over = e.clientX < rect.left + rect.width / 2 ? i : i + 1
+              setDrag((d) => (d && d.over !== over ? { ...d, over } : d))
+            }}
+            onDrop={(e) => {
+              e.preventDefault()
+              if (drag && insertAt !== null) onReorder(drag.from, insertAt)
+              setDrag(null)
+            }}
+            onDragEnd={() => setDrag(null)}
+            onClick={() => onSelect(id)}
           >
-            
-          </button>
-        </div>
-      ))}
+            {statuses[id] && statuses[id] !== 'idle' && activeId !== id && (
+              <span className={`tab-status tab-status-${statuses[id]}`} />
+            )}
+            <span className="tab-label">{labels[id] ?? `Session ${id}`}</span>
+            <button
+              className="tab-close"
+              onClick={(e) => {
+                e.stopPropagation()
+                onClose(id)
+              }}
+              title="Close session"
+            >
+              
+            </button>
+          </div>
+        )
+      })}
       <button className="tab-add" onClick={onAdd} title="New session">
         +
       </button>
