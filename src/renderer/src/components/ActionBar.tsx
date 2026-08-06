@@ -24,12 +24,12 @@ type GitUndo = Awaited<ReturnType<typeof window.api.git.undoCommit>>
 type GitPullRequest = Awaited<ReturnType<typeof window.api.git.openPullRequest>>
 
 const glyphs = {
-  add: '',
+  add: '',
   commit: '',
-  syncDefault: ' ',
-  update: ' ',
+  syncDefault: '󱓎',
+  update: '',
   undo: '',
-  fetch: '',
+  fetch: '',
   pullRequest: '',
   freeze: ''
 }
