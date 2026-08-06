@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { shortHash } from '../format'
+import DiscardDialog from './DiscardDialog'
+import FailureDialog from './FailureDialog'
+import { shortHash, type Failure } from '../format'
+import { useGitAction } from '../useGitAction'
 import { useGitColors } from '../useGitColors'
 import { useLatestRun } from '../useLatestRun'
 
@@ -81,6 +84,16 @@ const codeLabels: Record<string, string> = {
 }
 
 const categoryClasses = ['git-file-conflict', 'git-file-staged', '', 'git-file-untracked']
+
+const fileGlyphs = {
+  stage: '',
+  unstage: '󱟃',
+  revert: '󰕍'
+}
+
+function isStaged(file: GitStatusFile): boolean {
+  return file.index !== ' ' && file.index !== '?' && file.index !== '!'
+}
 
 function fileCategory(file: GitStatusFile): number {
   if (conflictCodes.has(`${file.index}${file.working_dir}`)) return 0
@@ -191,6 +204,9 @@ function RepoSection({
   const [tip, setTip] = useState<Tip | null>(null)
   const [expanded, setExpanded] = useState(true)
   const [showFiles, setShowFiles] = useState(false)
+  const [failure, setFailure] = useState<Failure | null>(null)
+  const [discarding, setDiscarding] = useState<GitStatusFile | null>(null)
+  const fileAction = useGitAction({ onFailure: setFailure })
   const latestRun = useLatestRun()
   const cwd = repo.path
   const open = !multi || expanded
@@ -258,6 +274,20 @@ function RepoSection({
   const openFile = (file: GitStatusFile): void => {
     setTip(null)
     onOpenDiff?.(cwd, branch ?? 'HEAD', file.path)
+  }
+
+  const setStaged = (file: GitStatusFile): void => {
+    setTip(null)
+    fileAction.run(() =>
+      isStaged(file)
+        ? window.api.git.unstageFile(cwd, file.path, file.from)
+        : window.api.git.stageFile(cwd, file.path, file.from)
+    )
+  }
+
+  const discard = (file: GitStatusFile): void => {
+    setDiscarding(null)
+    fileAction.run(() => window.api.git.revertFile(cwd, file.path, file.from))
   }
 
   const commits = log?.commits ?? []
@@ -345,21 +375,52 @@ function RepoSection({
                 const name = baseName(file.path)
                 const label = labels.get(file.path) ?? name
                 const dir = label.slice(0, label.length - name.length)
+                const staged = isStaged(file)
                 return (
-                  <button
-                    key={file.path}
-                    type="button"
-                    className={fileClass(file)}
-                    title={fileTitle(file)}
-                    onClick={() => openFile(file)}
-                  >
-                    <span className="git-file-code">{fileCode(file)}</span>
-                    <span className="git-file-path">
-                      {file.from && <span className="git-file-from">{baseName(file.from)} → </span>}
-                      {dir && <span className="git-file-dir">{dir}</span>}
-                      {name}
+                  <div key={file.path} className="git-file-row">
+                    <button
+                      type="button"
+                      className={fileClass(file)}
+                      title={fileTitle(file)}
+                      onClick={() => openFile(file)}
+                    >
+                      <span className="git-file-code">{fileCode(file)}</span>
+                      <span className="git-file-path">
+                        {file.from && (
+                          <span className="git-file-from">{baseName(file.from)} → </span>
+                        )}
+                        {dir && <span className="git-file-dir">{dir}</span>}
+                        {name}
+                      </span>
+                    </button>
+                    <span className="git-file-actions">
+                      <button
+                        type="button"
+                        className={`git-file-icon${staged ? ' git-file-icon-on' : ''}`}
+                        disabled={fileAction.pending}
+                        title={
+                          staged
+                            ? 'Unstage this file - leave its changes in the worktree'
+                            : 'Stage this file'
+                        }
+                        onClick={() => setStaged(file)}
+                      >
+                        {staged ? fileGlyphs.unstage : fileGlyphs.stage}
+                      </button>
+                      <button
+                        type="button"
+                        className="git-file-icon git-file-icon-danger"
+                        disabled={fileAction.pending}
+                        title="Discard this file's changes"
+                        onClick={() => {
+                          setTip(null)
+                          setDiscarding(file)
+                        }}
+                      >
+                        {fileGlyphs.revert}
+                      </button>
                     </span>
-                  </button>
+                  </div>
                 )
               })}
             </div>
@@ -445,6 +506,15 @@ function RepoSection({
           </div>
         </div>
       )}
+
+      {discarding && (
+        <DiscardDialog
+          path={discarding.path}
+          onCancel={() => setDiscarding(null)}
+          onConfirm={() => discard(discarding)}
+        />
+      )}
+      {failure && <FailureDialog failure={failure} onDismiss={() => setFailure(null)} />}
     </div>
   )
 }

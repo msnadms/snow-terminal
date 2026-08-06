@@ -74,6 +74,80 @@ Each visible file tokenizes twice: once from hunk text alone (fast, highlighting
 and again once `git:blame` returns `source`. Files that are not visible pass empty hunks, so work stays
 proportional to what is on screen.
 
+#### Staging from the diff (working tree only)
+
+Each file header in `DiffBody` carries **Stage/Unstage** and **Revert** buttons, driven by an optional
+`staging` prop. `CommitView` never passes it, so a historical commit's headers stay plain — the
+buttons exist only where there is a worktree to act on, which is `WorkingDiffView`.
+
+`WorkingDiffView` owns **both** the actions and the confirm dialog, because it is the action owner —
+the same shape `BranchSelect` and `WorkflowSelect` use for their dialogs. It runs the actions through
+the shared `useGitAction` (so a failure surfaces in a `FailureDialog` like every other git action) and
+passes that hook's `pending` straight through as `staging.busy`, which disables every file's buttons
+while one is in flight; there is deliberately no second `pending` state, since `useGitAction.run`
+already no-ops a re-entrant call. `onRevert` therefore only ever means "ask" — it opens the confirm
+dialog, and the Discard button is what calls `git:revertFile`. Routing the dialog through `DiffBody`
+instead would give the one prop two meanings and put modal state in the component whose job is
+rendering a parsed patch (and which `CommitView` shares). Nothing refreshes the view by hand: staging
+writes `.git/index`, which the `git:watch` watcher already reports, so the reload is the same
+`git:changed` path an outside `git add` takes.
+
+The three handlers (`git:stageFile`, `git:unstageFile`, `git:revertFile`) each take the file's `path`
+**and `oldPath`**, because a rename is one diff entry over two worktree paths and staging or
+reverting only half of it leaves the tree in a state the diff can't express. `fileTargets` resolves
+both against the worktree root, refuses anything that escapes it, and returns `{ rel, full }` pairs —
+`rel` to compare against git's own root-relative output, `full` because the pane's cwd may be a
+subdirectory. They share one `fileHandler` registrar holding the whole common shell (`withRepoLock`,
+the targets resolution, `.catch(fail)`), so each handler is just its git command; none carries an
+inner `try/catch`, since `fail` produces exactly the same result the outer `.catch` already does.
+Unstage is a bare `git reset -q --` with no `HEAD` argument, which is the unborn-HEAD-safe form and so
+needs no `rev-parse` probe first. Revert resolves **all** its paths against HEAD in one
+`ls-tree -r -z --full-name --name-only`, then batches: `checkout HEAD --` for the paths HEAD has,
+`rm --cached` plus deleting the file for the ones it doesn't (`checkout` has nothing to restore for a
+path the last commit never had). Probing per path with `cat-file -e` instead would be two sequential
+git processes per side of a rename.
+
+The header is `position: sticky`, and `DiffScroll`'s tools row (close, find bar, `↑ Top`) is pinned to
+the same top-right corner, so a header at the top of the pane puts its buttons underneath them. The
+fix is unconditional, not scroll-dependent: `.commit-file-actions` takes `margin-right: auto`, which
+parks the buttons immediately right of the filename instead of at the far edge, and
+`.commit-file-title-staging` (a class `DiffBody` adds only when `staging` is passed, so `CommitView`'s
+headers are untouched) reserves `--diff-tools-inset` of right padding for the long-filename case where
+the name shrinks and pushes the buttons back out.
+
+Making that reserve **conditional on being stuck was tried and does not work**. A
+`container-type: scroll-state` header with `@container scroll-state(stuck: top)` reads as _not_ stuck
+at exactly the scroll offset where a sticky element sits at its natural position — which is precisely
+where clicking a row in the file list lands it, since `scrollIntoView({ block: 'start' })` aligns the
+section top to the pane top. So the one case that most needs the reserve is the one case the query
+misses. An `IntersectionObserver` sentinel has the same boundary problem plus a re-render per header
+crossing the top edge, during scroll, for every file on screen.
+
+`--diff-tools-inset` is measured by `DiffScroll` with a `ResizeObserver` on the tools row rather than
+hardcoded, because that row's width changes as the find bar opens and as `↑ Top` appears past the
+scroll threshold — a fixed padding would be wrong in both directions.
+
+The same three actions hang off `GitPanel`'s changed-file list (the one the `n changed` badge
+toggles open), as hover-revealed icon buttons per row. `RepoSection` owns them directly rather than
+taking callbacks from `App`: it already holds the repo's `cwd` and its `git:status`, and it already
+reloads on `git:changed`, so a stage from there refreshes by the same watcher path everything else
+uses. Staged-ness is `file.index` (anything but ` `, `?`, `!`) — deliberately not the
+`fileCategory`/`git-file-staged` grouping, which reads a partially staged file as unstaged because it
+keys off `working_dir`. The row was a bare `<button>`, so the actions forced a wrapping
+`.git-file-row` div; buttons cannot nest, the same constraint the home page's hidden-preset rows hit.
+
+Both surfaces share `DiscardDialog`, which is a **specific** component rather than a generic
+`ConfirmDialog` — a generic one would have exactly one caller, and the copy (what revert does to a
+path HEAD doesn't have) is the part worth writing once. It focuses Keep and closes on Escape; it
+deliberately does not confirm on Enter, since the action is unrecoverable.
+
+Staged state comes back on the diff itself: `git:diff` marks each file `staged` from
+`git diff --cached --name-only` against the same `base` it already resolved, rather than the renderer
+running a second status call. That is deliberately not `git status`, which would walk the whole
+worktree and enumerate untracked files to yield one bit per path; the query is index-vs-base only and
+starts before the scratch-index build so it overlaps it. A partially staged file reads as staged, so
+its button offers Unstage and unstages the whole file.
+
 #### Find (Ctrl+F)
 
 `useFind` (`src/renderer/src/useFind.ts`) gives every `DiffScroll` pane a find bar, so both
@@ -189,6 +263,17 @@ with the `ignore` package. Its `filterPaths()` expects repo-root-relative forwar
 `changed`. `ActionBar` gates its button on `stageable` and re-checks on `snowignore:changed`;
 `GitPanel` still uses `changed`, so the dirty indicator reflects real repo state. A matched file that
 is already staged is left alone — snow only filters what it adds.
+
+That add happens **only when nothing is staged yet**. Once anything is in the index — from the diff
+view's Stage buttons or from `git add` in a shell — `git:commit` skips staging entirely and commits
+the index as it stands, so a deliberate partial stage is never widened into "everything". The
+button's gate widens to match (`stagedCount > 0 || stageable > 0`, both from `git:status`), since a
+repo whose only staged file is `.snowignore`d still has something to commit.
+
+The button's face says which of those two it will do. `glyphs.add` and `glyphs.commit` are separate
+entries rather than one two-glyph string, so `commitGlyph` can drop the add glyph when `stagedCount`
+is non-zero and leave just the commit one — the icon then matches the tooltip, which likewise switches
+from `Add, Commit` to `Commit N staged files`.
 
 #### `.snowconfig`
 

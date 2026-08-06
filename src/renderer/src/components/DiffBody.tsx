@@ -20,6 +20,12 @@ function tokenizeWorker(): Worker {
 
 const noHunks: FileData['hunks'] = []
 
+export interface DiffStaging {
+  busy: boolean
+  onSetStaged: (file: DiffFileEntry, staged: boolean) => void
+  onRevert: (file: DiffFileEntry) => void
+}
+
 interface DiffFileProps {
   cwd: string
   base: string | null
@@ -28,6 +34,7 @@ interface DiffFileProps {
   view: ViewType
   sectionRef: (node: HTMLDivElement | null) => void
   onOpenCommit?: (cwd: string, hash: string) => void
+  staging?: DiffStaging
 }
 
 function DiffFile({
@@ -37,7 +44,8 @@ function DiffFile({
   diff,
   view,
   sectionRef,
-  onOpenCommit
+  onOpenCommit,
+  staging
 }: DiffFileProps): React.JSX.Element {
   const [cached, setCached] = useState<{ key: string; result: GitBlameResult } | null>(null)
   const [visible, setVisible] = useState(false)
@@ -117,9 +125,35 @@ function DiffFile({
         sectionRef(node)
       }}
     >
-      <div className="commit-file-title">
-        {file.oldPath && <span className="commit-file-old">{file.oldPath} → </span>}
-        {file.path}
+      <div className={`commit-file-title${staging ? ' commit-file-title-staging' : ''}`}>
+        <span className="commit-file-name">
+          {file.oldPath && <span className="commit-file-old">{file.oldPath} → </span>}
+          {file.path}
+        </span>
+        {staging && (
+          <span className="commit-file-actions">
+            <button
+              className={`commit-toggle-button commit-file-action${file.staged ? ' commit-file-action-on' : ''}`}
+              disabled={staging.busy}
+              onClick={() => staging.onSetStaged(file, !file.staged)}
+              title={
+                file.staged
+                  ? 'Unstage this file - leave its changes in the worktree'
+                  : 'Stage this file'
+              }
+            >
+              <div className="commit-action-icon">{file.staged ? '󱟃' : ''}</div>
+            </button>
+            <button
+              className="commit-toggle-button commit-file-action commit-file-action-danger"
+              disabled={staging.busy}
+              onClick={() => staging.onRevert(file)}
+              title="Discard this file's changes"
+            >
+              <div className="commit-action-icon">󰕍</div>
+            </button>
+          </span>
+        )}
       </div>
       <div className="commit-file-body">
         {diff && diff.hunks.length > 0 ? (
@@ -153,6 +187,7 @@ interface DiffBodyProps {
   focus?: string
   focusKey?: number
   onOpenCommit?: (cwd: string, hash: string) => void
+  staging?: DiffStaging
 }
 
 function DiffBody({
@@ -164,7 +199,8 @@ function DiffBody({
   truncatedNote,
   focus,
   focusKey,
-  onOpenCommit
+  onOpenCommit,
+  staging
 }: DiffBodyProps): React.JSX.Element {
   const [view, setView] = useState<ViewType>('unified')
   const sectionRefs = useRef<(HTMLDivElement | null)[]>([])
@@ -241,6 +277,7 @@ function DiffBody({
           diff={parsed[i]}
           view={view}
           onOpenCommit={onOpenCommit}
+          staging={staging}
           sectionRef={(node) => {
             sectionRefs.current[i] = node
           }}

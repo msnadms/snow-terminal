@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useFind } from '@renderer/useFind'
 import type { Find } from '@renderer/useFind'
 
@@ -56,8 +56,24 @@ function FindBar({
 
 function DiffScroll({ active, onClose, children }: DiffScrollProps): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null)
+  const toolsRef = useRef<HTMLDivElement | null>(null)
   const [scrolled, setScrolled] = useState(false)
   const find = useFind(hostRef, active)
+
+  useEffect(() => {
+    const host = hostRef.current
+    const tools = toolsRef.current
+    if (!host || !tools) return
+
+    const padding = parseFloat(getComputedStyle(host).paddingRight)
+    const observer = new ResizeObserver(() => {
+      const edge = host.getBoundingClientRect().right - padding
+      const inset = Math.max(0, Math.ceil(edge - tools.getBoundingClientRect().left))
+      host.style.setProperty('--diff-tools-inset', `${inset}px`)
+    })
+    observer.observe(tools)
+    return () => observer.disconnect()
+  }, [])
 
   return (
     <div
@@ -67,7 +83,7 @@ function DiffScroll({ active, onClose, children }: DiffScrollProps): React.JSX.E
       onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 160)}
     >
       <div className="commit-tools">
-        <div className="commit-tools-row">
+        <div ref={toolsRef} className="commit-tools-row">
           {onClose && (
             <button
               className="terminal-close commit-close-button"

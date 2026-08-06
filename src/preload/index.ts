@@ -5,6 +5,7 @@ import type {
   GitCheckoutResult,
   GitCommitDetail,
   GitCommitResult,
+  GitFileResult,
   GitLog,
   GitPullRequestResult,
   GitRepo,
@@ -138,6 +139,21 @@ const git = {
   ): Promise<GitCheckoutResult> => ipcRenderer.invoke('git:createBranch', cwd, branch, carry),
   commit: (cwd: string | undefined, message: string): Promise<GitCommitResult> =>
     ipcRenderer.invoke('git:commit', cwd, message),
+  stageFile: (
+    cwd: string | undefined,
+    filePath: string,
+    oldPath?: string | null
+  ): Promise<GitFileResult> => ipcRenderer.invoke('git:stageFile', cwd, filePath, oldPath),
+  unstageFile: (
+    cwd: string | undefined,
+    filePath: string,
+    oldPath?: string | null
+  ): Promise<GitFileResult> => ipcRenderer.invoke('git:unstageFile', cwd, filePath, oldPath),
+  revertFile: (
+    cwd: string | undefined,
+    filePath: string,
+    oldPath?: string | null
+  ): Promise<GitFileResult> => ipcRenderer.invoke('git:revertFile', cwd, filePath, oldPath),
   syncDefault: (cwd?: string): Promise<GitSyncDefaultResult> =>
     ipcRenderer.invoke('git:syncDefault', cwd),
   updateFromDefault: (cwd?: string): Promise<GitUpdateDefaultResult> =>

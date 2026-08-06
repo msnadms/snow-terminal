@@ -34,6 +34,7 @@ export interface GitCommitFile {
   additions: number
   deletions: number
   binary: boolean
+  staged?: boolean
 }
 
 export interface GitBlameLine {
@@ -76,6 +77,8 @@ export interface GitCommitResult {
   error?: string
   detail?: string
 }
+
+export type GitFileResult = GitCommitResult
 
 export interface GitBranches {
   current: string | null
@@ -155,6 +158,7 @@ export interface GitStatus {
   files: GitStatusFile[]
   changed: number
   stageable: number
+  stagedCount: number
   ignoreError: string | null
 }
 
@@ -207,6 +211,10 @@ function parseNumstat(raw: string): GitCommitFile[] {
     })
   }
   return files
+}
+
+function isStaged(index: string): boolean {
+  return index !== ' ' && index !== '?' && index !== '!'
 }
 
 const blameHeader = /^([0-9a-f]{40}) \d+ (\d+)/
@@ -344,6 +352,32 @@ export async function worktreeRoot(cwd?: string): Promise<string | null> {
   } catch {
     return null
   }
+}
+
+interface FileTarget {
+  rel: string
+  full: string
+}
+
+async function fileTargets(
+  cwd: string | undefined,
+  filePath: string,
+  oldPath?: string | null
+): Promise<FileTarget[] | null> {
+  const found = await worktreeRoot(cwd)
+  if (!found) return null
+  const root = path.resolve(found)
+  const targets: FileTarget[] = []
+
+  for (const rel of [filePath, oldPath]) {
+    if (!rel) continue
+    const full = path.resolve(root, rel)
+    if (full === root || !full.startsWith(root + path.sep)) return null
+    if (targets.some((t) => t.full === full)) continue
+    targets.push({ rel, full })
+  }
+
+  return targets.length > 0 ? targets : null
 }
 
 async function remoteName(cwd?: string): Promise<string | null> {
@@ -902,22 +936,29 @@ export function registerGitHandlers(): void {
     const base = head || emptyTree
     const indexFile = path.join(os.tmpdir(), `snow-diff-${process.pid}-${++scratchIndexCount}`)
     const scratch = simpleGit(root).env('GIT_OPTIONAL_LOCKS', '0').env('GIT_INDEX_FILE', indexFile)
+    const stagedPaths = git
+      .raw(['diff', '--cached', '--name-only', '-z', base])
+      .then((out) => new Set(out.split('\0').filter(Boolean)))
+      .catch(() => new Set<string>())
 
     try {
       await scratch.raw(['read-tree', base])
       await scratch.raw(['add', '-A', '-N'])
 
       const range = ['diff', base, '-M']
-      const [numstat, raw] = await Promise.all([
+      const [numstat, raw, staged] = await Promise.all([
         scratch.raw([...range, '--numstat', '-z']),
-        scratch.raw([...range, '--patch', '--no-color'])
+        scratch.raw([...range, '--patch', '--no-color']),
+        stagedPaths
       ])
       const { patch, truncated } = capPatch(raw)
+      const files = parseNumstat(numstat)
+      for (const file of files) file.staged = staged.has(file.path)
 
       return {
         branch: branch && branch !== 'HEAD' ? branch : null,
         base,
-        files: parseNumstat(numstat),
+        files,
         patch,
         truncated
       }
@@ -971,6 +1012,7 @@ export function registerGitHandlers(): void {
       })),
       changed: status.files.length,
       stageable: stageable.length,
+      stagedCount: status.files.filter((f) => isStaged(f.index)).length,
       ignoreError
     }
   })
@@ -1395,10 +1437,12 @@ export function registerGitHandlers(): void {
               ].join('\n')
             }
           }
-          const paths = filterPaths(pending.files.map((f) => f.path))
-          if (paths.length === 0) return { ok: false, error: 'Nothing to commit' }
-          const root = await worktreeRoot(cwd)
-          await git.add(root ? paths.map((p) => path.join(root, p)) : paths)
+          if (!pending.files.some((f) => isStaged(f.index))) {
+            const paths = filterPaths(pending.files.map((f) => f.path))
+            if (paths.length === 0) return { ok: false, error: 'Nothing to commit' }
+            const root = await worktreeRoot(cwd)
+            await git.add(root ? paths.map((p) => path.join(root, p)) : paths)
+          }
           await git.commit(subject)
         } catch (error) {
           return { ok: false, error: errorText(error), detail: errorDetail(error) }
@@ -1408,6 +1452,68 @@ export function registerGitHandlers(): void {
       }).catch(fail)
     }
   )
+
+  const fileHandler = (
+    channel: string,
+    op: (git: SimpleGit, targets: FileTarget[]) => Promise<unknown>
+  ): void => {
+    ipcMain.handle(
+      channel,
+      (
+        _event,
+        cwd: string | undefined,
+        filePath: string,
+        oldPath?: string | null
+      ): Promise<GitFileResult> =>
+        withRepoLock(cwd, async () => {
+          const targets = await fileTargets(cwd, filePath, oldPath)
+          if (!targets) return { ok: false, error: 'File is outside the repository' }
+          await op(gitFor(cwd), targets)
+          return { ok: true }
+        }).catch(fail)
+    )
+  }
+
+  fileHandler('git:stageFile', (git, targets) =>
+    git.raw(['add', '-A', '--', ...targets.map((t) => t.full)])
+  )
+
+  fileHandler('git:unstageFile', (git, targets) =>
+    git.raw(['reset', '-q', '--', ...targets.map((t) => t.full)])
+  )
+
+  fileHandler('git:revertFile', async (git, targets) => {
+    const tracked = new Set(
+      await git
+        .raw([
+          'ls-tree',
+          '-r',
+          '-z',
+          '--full-name',
+          '--name-only',
+          'HEAD',
+          '--',
+          ...targets.map((t) => t.full)
+        ])
+        .then((out) => out.split('\0').filter(Boolean))
+        .catch(() => [])
+    )
+    const restore = targets.filter((t) => tracked.has(t.rel))
+    const remove = targets.filter((t) => !tracked.has(t.rel))
+
+    if (restore.length > 0) await git.raw(['checkout', 'HEAD', '--', ...restore.map((t) => t.full)])
+    if (remove.length === 0) return
+    await git.raw([
+      'rm',
+      '-q',
+      '--cached',
+      '-f',
+      '--ignore-unmatch',
+      '--',
+      ...remove.map((t) => t.full)
+    ])
+    await Promise.all(remove.map((t) => fs.promises.rm(t.full, { force: true })))
+  })
 
   ipcMain.handle('git:unwatch', (event, cwd?: string): void => {
     watchers.release(watcherKey(event.sender.id, cwd))

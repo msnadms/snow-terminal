@@ -1767,11 +1767,66 @@ body.resizing-y * {
   flex-direction: column;
 }
 
+.git-file-row {
+  display: flex;
+  align-items: center;
+}
+
+.git-file-row:hover {
+  background: var(--git-border, #28334c);
+}
+
+.git-file-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 8px;
+  opacity: 0;
+}
+
+.git-file-row:hover .git-file-actions,
+.git-file-actions:focus-within {
+  opacity: 1;
+}
+
+.git-file-icon {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 4px;
+  font: inherit;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--git-muted, #5d6f8f);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  transition: color 160ms ease;
+}
+
+.git-file-icon:hover:not(:disabled) {
+  color: var(--git-accent, #a6dcf0);
+}
+
+.git-file-icon:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.git-file-icon-on {
+  color: var(--git-diff-add-text, #7fdcc0);
+}
+
+.git-file-icon-danger:hover:not(:disabled) {
+  color: var(--git-diff-del-text, #e89aac);
+}
+
 .git-file {
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
   min-width: 0;
   height: 22px;
   padding: 0 12px;
@@ -1782,10 +1837,6 @@ body.resizing-y * {
   text-align: left;
   cursor: pointer;
   appearance: none;
-}
-
-.git-file:hover {
-  background: var(--git-border, #28334c);
 }
 
 .git-file-missing {
@@ -2187,7 +2238,7 @@ body.resizing-y * {
     border-color 160ms ease;
 }
 
-.commit-toggle-button:hover {
+.commit-toggle-button:hover:not(:disabled) {
   border-color: var(--git-button-border-hover, #3e5273);
   color: var(--git-accent, #a6dcf0);
 }
@@ -2271,12 +2322,55 @@ body.resizing-y * {
   position: sticky;
   top: 0;
   z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 5px 10px;
   color: var(--git-strong-text, #e4eefb);
   background: var(--git-panel-bg, #121724);
   border-bottom: 1px solid var(--git-border, #28334c);
   border-radius: 4px 4px 0 0;
   word-break: break-all;
+}
+
+.commit-file-title-staging {
+  padding-right: calc(10px + var(--diff-tools-inset, 0px));
+}
+
+.commit-file-name {
+  min-width: 0;
+}
+
+.commit-file-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  margin-right: auto;
+}
+
+.commit-file-action {
+  height: 20px;
+  padding: 0 8px;
+  font-size: 20px;
+  color: var(--git-text, #b3c2da);
+}
+
+.commit-action-icon {
+  margin-top: -7px;
+}
+
+.commit-file-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.commit-file-action-on {
+  color: var(--git-diff-add-text, #7fdcc0);
+  border-color: var(--git-button-border-hover, #3e5273);
+}
+
+.commit-file-action-danger:hover:not(:disabled) {
+  color: var(--git-diff-del-text, #e89aac);
 }
 
 .commit-file-empty {

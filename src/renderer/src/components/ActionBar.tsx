@@ -24,7 +24,8 @@ type GitUndo = Awaited<ReturnType<typeof window.api.git.undoCommit>>
 type GitPullRequest = Awaited<ReturnType<typeof window.api.git.openPullRequest>>
 
 const glyphs = {
-  commit: ' ',
+  add: '',
+  commit: '',
   syncDefault: ' ',
   update: ' ',
   undo: '',
@@ -145,7 +146,8 @@ function ActionBar({
   const tracking = status?.tracking ?? null
   const ahead = status?.ahead ?? 0
   const behind = status?.behind ?? 0
-  const ready = (status?.stageable ?? 0) > 0
+  const stagedCount = status?.stagedCount ?? 0
+  const ready = stagedCount > 0 || (status?.stageable ?? 0) > 0
   const ignoreError = status?.ignoreError ?? null
   const onDefault = defaultName !== null && current === defaultName
 
@@ -187,6 +189,11 @@ function ActionBar({
   })
 
   const face = syncFaceOf(tracking, ahead, behind)
+  const commitTitle =
+    stagedCount > 0
+      ? `Commit ${stagedCount} staged file${stagedCount === 1 ? '' : 's'}`
+      : 'Add, Commit'
+  const commitGlyph = stagedCount > 0 ? glyphs.commit : `${glyphs.add} ${glyphs.commit}`
 
   const onBarClick = (e: React.MouseEvent): void => {
     const button = (e.target as HTMLElement).closest('.actionbar-button')
@@ -213,9 +220,9 @@ function ActionBar({
         className={`actionbar-button${commit.className}`}
         disabled={!canSubmit}
         onClick={submit}
-        title={commit.error || ignoreError || 'Add, Commit'}
+        title={commit.error || ignoreError || commitTitle}
       >
-        <div className="nerd-glyph">{glyphs.commit}</div>
+        <div className="nerd-glyph">{commitGlyph}</div>
       </button>
       {showUndo && (
         <button

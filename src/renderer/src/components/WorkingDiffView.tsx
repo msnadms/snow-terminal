@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import DiffBody from './DiffBody'
+import DiffBody, { type DiffFileEntry } from './DiffBody'
 import DiffScroll from './DiffScroll'
+import DiscardDialog from './DiscardDialog'
+import FailureDialog from './FailureDialog'
+import { type Failure } from '@renderer/format'
+import { useGitAction } from '@renderer/useGitAction'
 import { useLatestRun } from '@renderer/useLatestRun'
 
 type GitWorkingDiff = Awaited<ReturnType<typeof window.api.git.diff>>
@@ -24,8 +28,28 @@ function WorkingDiffView({
 }: WorkingDiffViewProps): React.JSX.Element {
   const [diff, setDiff] = useState<GitWorkingDiff | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [failure, setFailure] = useState<Failure | null>(null)
+  const [discarding, setDiscarding] = useState<DiffFileEntry | null>(null)
+  const fileAction = useGitAction({ onFailure: setFailure })
   const latestRun = useLatestRun()
   const loaded = useRef(false)
+
+  const staging = {
+    busy: fileAction.pending,
+    onSetStaged: (file: DiffFileEntry, staged: boolean): void => {
+      fileAction.run(() =>
+        staged
+          ? window.api.git.stageFile(cwd, file.path, file.oldPath)
+          : window.api.git.unstageFile(cwd, file.path, file.oldPath)
+      )
+    },
+    onRevert: setDiscarding
+  }
+
+  const discard = (file: DiffFileEntry): void => {
+    setDiscarding(null)
+    fileAction.run(() => window.api.git.revertFile(cwd, file.path, file.oldPath))
+  }
 
   useEffect(() => {
     window.api.git.watch(cwd)
@@ -96,6 +120,7 @@ function WorkingDiffView({
             focus={focus}
             focusKey={focusKey}
             onOpenCommit={onOpenCommit}
+            staging={staging}
           />
         )}
       </>
@@ -105,6 +130,14 @@ function WorkingDiffView({
   return (
     <DiffScroll active={active} onClose={onClose}>
       {body()}
+      {discarding && (
+        <DiscardDialog
+          path={discarding.path}
+          onCancel={() => setDiscarding(null)}
+          onConfirm={() => discard(discarding)}
+        />
+      )}
+      {failure && <FailureDialog failure={failure} onDismiss={() => setFailure(null)} />}
     </DiffScroll>
   )
 }
