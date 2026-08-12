@@ -26,11 +26,11 @@ body {
   position: relative;
   z-index: 10;
   flex: 0 0 auto;
-  height: 34px;
+  height: 38px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 10px;
+  padding: 0 10px 0 6px;
   font-family: 'Hack Nerd Font Mono', monospace;
   font-size: 12px;
   color: var(--ui-muted-text, #a6adc8);
@@ -41,7 +41,6 @@ body {
 
 .nerd-glyph {
   font-size: 16px;
-  margin-top: -2px;
 }
 
 .actionbar-count {
@@ -53,7 +52,7 @@ body {
 .actionbar-input {
   flex: 0 1 320px;
   min-width: 0;
-  height: 22px;
+  height: 26px;
   padding: 0 8px;
   font: inherit;
   color: var(--ui-text, #cdd6f4);
@@ -79,7 +78,7 @@ body {
 
 .actionbar-button {
   flex: 0 0 auto;
-  height: 22px;
+  height: 26px;
   padding: 0 10px;
   font: inherit;
   color: var(--ui-text, #cdd6f4);
@@ -105,10 +104,18 @@ body {
   cursor: default;
 }
 
+.actionbar-generate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  padding: 0;
+}
+
 .actionbar-divider {
   flex: 0 0 auto;
   width: 1px;
-  height: 18px;
+  height: 22px;
   background: var(--ui-border, #313244);
 }
 
@@ -183,8 +190,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   font: inherit;
   font-size: 14px;
@@ -229,7 +236,7 @@ body {
   gap: 6px;
   min-width: 0;
   max-width: 220px;
-  height: 22px;
+  height: 26px;
   padding: 0 8px;
   font: inherit;
   color: var(--ui-text, #cdd6f4);
@@ -639,7 +646,7 @@ body {
   display: flex;
   align-items: stretch;
   gap: 4px;
-  height: 30px;
+  height: 38px;
   padding: 0 6px;
   background: var(--ui-chrome, #11111b);
   border-bottom: 1px solid var(--ui-border, #313244);
@@ -657,6 +664,7 @@ body {
   display: flex;
   align-items: center;
   align-self: center;
+  flex: 0 0 auto;
   color: var(--ui-muted-text, #a6adc8);
   background: var(--ui-surface, #1e1e2e);
   border: 1px solid var(--ui-border, #313244);
@@ -670,11 +678,28 @@ body {
 .tab-command-add,
 .tab-split {
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   font-size: 20px;
   font-family: 'Hack Nerd Font Mono', monospace;
+}
+
+.tab-list {
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  align-self: center;
+  gap: 4px;
+  height: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.tab-list::-webkit-scrollbar {
+  display: none;
 }
 
 .tab-browser {
@@ -703,7 +728,7 @@ body {
   flex: 0 0 auto;
   align-self: center;
   width: 1px;
-  height: 18px;
+  height: 22px;
   margin: 0 2px;
   background: var(--ui-border, #313244);
 }
@@ -718,6 +743,7 @@ body {
 }
 
 .tab-command-form {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
 }
@@ -726,7 +752,7 @@ body {
   -webkit-app-region: no-drag;
   align-self: center;
   width: 160px;
-  height: 22px;
+  height: 26px;
   padding: 0 8px;
   color: var(--ui-text, #cdd6f4);
   background: var(--ui-background, #181825);
@@ -742,9 +768,10 @@ body {
   display: flex;
   align-items: center;
   align-self: center;
+  flex: 0 0 auto;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   color: var(--ui-muted-text, #a6adc8);
   background: var(--ui-surface, #1e1e2e);
@@ -757,9 +784,10 @@ body {
 
 .tab {
   gap: 6px;
-  height: 24px;
-  padding: 0 6px 0 10px;
-  max-width: 180px;
+  height: 28px;
+  padding: 0 8px 0 12px;
+  min-width: 120px;
+  max-width: 260px;
 }
 
 .tab-dragging {
@@ -825,6 +853,7 @@ body {
 .tab-close {
   -webkit-app-region: no-drag;
   flex: 0 0 auto;
+  margin-left: auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1684,7 +1713,8 @@ body.resizing-y * {
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
+  height: 38px;
+  padding: 0 12px;
   background: var(--git-bg, #171c2b);
   border-bottom: 1px solid var(--git-border, #28334c);
 }

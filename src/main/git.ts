@@ -1,4 +1,5 @@
 import { ipcMain, WebContents } from 'electron'
+import { spawn } from 'child_process'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -79,6 +80,13 @@ export interface GitCommitResult {
 }
 
 export type GitFileResult = GitCommitResult
+
+export interface GitCommitMessageResult {
+  ok: boolean
+  message?: string
+  error?: string
+  detail?: string
+}
 
 export interface GitBranches {
   current: string | null
@@ -186,6 +194,93 @@ function capPatch(patch: string): { patch: string; truncated: boolean } {
   const head = patch.slice(0, maxPatchChars)
   const boundary = head.lastIndexOf('\ndiff --git ')
   return { patch: boundary > 0 ? head.slice(0, boundary + 1) : '', truncated: true }
+}
+
+const commitDiffMaxChars = 60_000
+const commitMessageTimeoutMs = 60_000
+
+const commitMessagePrompt = [
+  'Write a git commit message for the change below, given as a unified diff on stdin.',
+  '',
+  'Rules:',
+  '- First line: an imperative-mood subject under 72 characters, no trailing period.',
+  '- Add a blank line and a short body only if the subject cannot capture the change; keep it to a',
+  '  few plain sentences or bullet points focused on why, not a restatement of the diff.',
+  '- Single spaces only: one space between words and after sentence punctuation, never two.',
+  '- Output only the commit message itself: no preamble, no code fences, no quotes, no labels.'
+].join('\n')
+
+function truncateDiffForPrompt(diff: string): string {
+  if (diff.length <= commitDiffMaxChars) return diff
+  const head = diff.slice(0, commitDiffMaxChars)
+  const boundary = head.lastIndexOf('\ndiff --git ')
+  return `${boundary > 0 ? head.slice(0, boundary + 1) : head}\n[diff truncated]`
+}
+
+function cleanCommitMessage(raw: string): string {
+  const text = raw.trim()
+  const fenced = text.match(/^```[^\n]*\n([\s\S]*?)\n?```$/)
+  const body = (fenced ? fenced[1] : text).trim()
+  return body
+    .split('\n')
+    .map((line) => line.replace(/ {2,}/g, ' '))
+    .join('\n')
+}
+
+const commitMessageDisallowedTools = [
+  'Bash',
+  'Read',
+  'Write',
+  'Edit',
+  'Glob',
+  'Grep',
+  'WebFetch',
+  'WebSearch',
+  'NotebookEdit',
+  'Task'
+]
+
+function runClaude(input: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      'claude',
+      ['-p', commitMessagePrompt, '--disallowedTools', ...commitMessageDisallowedTools],
+      {
+        cwd: os.tmpdir(),
+        windowsHide: true
+      }
+    )
+
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      child.kill()
+      reject(new Error('Timed out waiting for claude to generate a commit message'))
+    }, commitMessageTimeoutMs)
+
+    child.stdout.on('data', (chunk: Buffer) => (stdout += chunk))
+    child.stderr.on('data', (chunk: Buffer) => (stderr += chunk))
+    child.on('error', (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      reject(error)
+    })
+    child.on('close', (code) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (code === 0) resolve(stdout)
+      else reject(new Error(stderr.trim() || `claude exited with code ${code}`))
+    })
+
+    child.stdin.write(input)
+    child.stdin.end()
+  })
 }
 
 function parseNumstat(raw: string): GitCommitFile[] {
@@ -1449,6 +1544,55 @@ export function registerGitHandlers(): void {
         }
 
         return { ok: true }
+      }).catch(fail)
+    }
+  )
+
+  ipcMain.handle(
+    'git:generateCommitMessage',
+    async (_event, cwd: string | undefined): Promise<GitCommitMessageResult> => {
+      return withRepoLock(cwd, async () => {
+        const git = gitFor(cwd)
+        let pending: StatusResult
+        try {
+          pending = await git.status()
+        } catch (error) {
+          return fail(error)
+        }
+        if (pending.conflicted.length > 0) {
+          return { ok: false, error: 'Resolve conflicts before generating a message' }
+        }
+
+        const root = await worktreeRoot(cwd)
+        const staged = pending.files.some((f) => isStaged(f.index))
+        let diff: string
+        try {
+          if (staged) {
+            diff = await git.raw(['diff', '--cached', '-M', '--no-color'])
+          } else {
+            const paths = filterPaths(pending.files.map((f) => f.path))
+            if (paths.length === 0) return { ok: false, error: 'Nothing to commit' }
+            const targets = root ? paths.map((p) => path.join(root, p)) : paths
+            diff = await git.raw(['diff', '-M', '--no-color', '--', ...targets])
+          }
+        } catch (error) {
+          return fail(error)
+        }
+
+        if (!diff.trim()) return { ok: false, error: 'Nothing to commit' }
+
+        try {
+          const raw = await runClaude(truncateDiffForPrompt(diff))
+          const message = cleanCommitMessage(raw)
+          if (!message) return { ok: false, error: 'Claude returned an empty commit message' }
+          return { ok: true, message }
+        } catch (error) {
+          return {
+            ok: false,
+            error: 'Could not generate a commit message',
+            detail: errorDetail(error)
+          }
+        }
       }).catch(fail)
     }
   )

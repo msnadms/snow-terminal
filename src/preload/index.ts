@@ -4,6 +4,7 @@ import type {
   GitBranches,
   GitCheckoutResult,
   GitCommitDetail,
+  GitCommitMessageResult,
   GitCommitResult,
   GitFileResult,
   GitLog,
@@ -139,6 +140,8 @@ const git = {
   ): Promise<GitCheckoutResult> => ipcRenderer.invoke('git:createBranch', cwd, branch, carry),
   commit: (cwd: string | undefined, message: string): Promise<GitCommitResult> =>
     ipcRenderer.invoke('git:commit', cwd, message),
+  generateCommitMessage: (cwd?: string): Promise<GitCommitMessageResult> =>
+    ipcRenderer.invoke('git:generateCommitMessage', cwd),
   stageFile: (
     cwd: string | undefined,
     filePath: string,

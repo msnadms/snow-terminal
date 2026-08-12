@@ -22,10 +22,12 @@ interface ActionBarProps {
 type GitStatus = Awaited<ReturnType<typeof window.api.git.status>>
 type GitUndo = Awaited<ReturnType<typeof window.api.git.undoCommit>>
 type GitPullRequest = Awaited<ReturnType<typeof window.api.git.openPullRequest>>
+type GitCommitMessage = Awaited<ReturnType<typeof window.api.git.generateCommitMessage>>
 
 const glyphs = {
   add: '',
   commit: '',
+  generate: '',
   syncDefault: '󱓎',
   update: '',
   undo: '',
@@ -91,12 +93,13 @@ function ActionBar({
   const bump = (): void => setRefreshKey((key) => key + 1)
   const refresh = { onFailure: setFailure, onSettled: bump }
   const commit = useGitAction({ onSettled: bump })
+  const generate = useGitAction<GitCommitMessage>({ onFailure: setFailure })
   const syncDefault = useGitAction(refresh)
   const update = useGitAction(refresh)
   const sync = useGitAction(refresh)
   const undo = useGitAction<GitUndo>(refresh)
   const pullRequest = useGitAction<GitPullRequest>({ onFailure: setFailure })
-  const actions = [commit, syncDefault, update, sync, undo, pullRequest]
+  const actions = [commit, generate, syncDefault, update, sync, undo, pullRequest]
 
   useEffect(() => {
     if (!frozen || !cwd) return
@@ -154,6 +157,7 @@ function ActionBar({
   const busy = actions.some((action) => action.pending)
 
   const canSubmit = ready && !busy && message.trim() !== ''
+  const canGenerate = ready && !busy
   const canSyncDefault = isRepo && !busy
   const canUpdate = isRepo && !busy && !onDefault
   const canSync = isRepo && !busy && current !== null
@@ -164,6 +168,21 @@ function ActionBar({
     if (!canSubmit) return
     const result = await commit.run(() => window.api.git.commit(cwd, message.trim()))
     if (result?.ok) setMessage('')
+  }
+
+  const runGenerate = async (): Promise<void> => {
+    const result = await generate.run(() => window.api.git.generateCommitMessage(cwd))
+    if (result?.ok && result.message) setMessage(result.message)
+  }
+
+  const runAiCommit = async (): Promise<void> => {
+    const generated = await generate.run(() => window.api.git.generateCommitMessage(cwd))
+    const text = generated?.ok ? generated.message : undefined
+    if (!text) return
+    setMessage(text)
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLInputElement>('.actionbar-input')?.focus()
+    })
   }
 
   const runUndo = async (): Promise<void> => {
@@ -185,6 +204,7 @@ function ActionBar({
   }
 
   useKeybinds(keybinds, {
+    aiCommit: canGenerate ? runAiCommit : undefined,
     pushRemote: canSync && (ahead > 0 || !tracking) ? runSync : undefined
   })
 
@@ -202,6 +222,14 @@ function ActionBar({
 
   return (
     <div className="actionbar" onClick={onBarClick}>
+      <button
+        className={`actionbar-button actionbar-generate${generate.className}`}
+        disabled={!canGenerate}
+        onClick={runGenerate}
+        title={generate.error || 'Generate a commit message from the staged diff with Claude'}
+      >
+        <div className="nerd-glyph">{glyphs.generate}</div>
+      </button>
       <input
         className="actionbar-input"
         placeholder="Commit message"
