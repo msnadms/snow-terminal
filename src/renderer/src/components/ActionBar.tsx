@@ -170,16 +170,15 @@ function ActionBar({
     if (result?.ok) setMessage('')
   }
 
-  const runGenerate = async (): Promise<void> => {
+  const runGenerate = async (): Promise<boolean> => {
     const result = await generate.run(() => window.api.git.generateCommitMessage(cwd))
-    if (result?.ok && result.message) setMessage(result.message)
+    if (!result?.ok || !result.message) return false
+    setMessage(result.message)
+    return true
   }
 
   const runAiCommit = async (): Promise<void> => {
-    const generated = await generate.run(() => window.api.git.generateCommitMessage(cwd))
-    const text = generated?.ok ? generated.message : undefined
-    if (!text) return
-    setMessage(text)
+    if (!(await runGenerate())) return
     requestAnimationFrame(() => {
       document.querySelector<HTMLInputElement>('.actionbar-input')?.focus()
     })

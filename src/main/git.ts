@@ -219,7 +219,7 @@ function truncateDiffForPrompt(diff: string): string {
 
 function cleanCommitMessage(raw: string): string {
   const text = raw.trim()
-  const fenced = text.match(/^```[^\n]*\n([\s\S]*?)\n?```$/)
+  const fenced = text.match(/^```[^\n]*\n([\s\S]*?)(?:\n?```[\s\S]*)?$/)
   const body = (fenced ? fenced[1] : text).trim()
   return body
     .split('\n')
@@ -242,14 +242,11 @@ const commitMessageDisallowedTools = [
 
 function runClaude(input: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      'claude',
-      ['-p', commitMessagePrompt, '--disallowedTools', ...commitMessageDisallowedTools],
-      {
-        cwd: os.tmpdir(),
-        windowsHide: true
-      }
-    )
+    const child = spawn('claude', ['-p', '--disallowedTools', ...commitMessageDisallowedTools], {
+      cwd: os.tmpdir(),
+      windowsHide: true,
+      shell: process.platform === 'win32'
+    })
 
     let stdout = ''
     let stderr = ''
@@ -447,6 +444,23 @@ export async function worktreeRoot(cwd?: string): Promise<string | null> {
   } catch {
     return null
   }
+}
+
+interface CommitTargets {
+  staged: boolean
+  targets: string[]
+}
+
+async function resolveCommitTargets(
+  cwd: string | undefined,
+  pending: StatusResult
+): Promise<CommitTargets | null> {
+  const staged = pending.files.some((f) => isStaged(f.index))
+  if (staged) return { staged, targets: [] }
+  const paths = filterPaths(pending.files.map((f) => f.path))
+  if (paths.length === 0) return null
+  const root = await worktreeRoot(cwd)
+  return { staged, targets: root ? paths.map((p) => path.join(root, p)) : paths }
 }
 
 interface FileTarget {
@@ -1532,12 +1546,9 @@ export function registerGitHandlers(): void {
               ].join('\n')
             }
           }
-          if (!pending.files.some((f) => isStaged(f.index))) {
-            const paths = filterPaths(pending.files.map((f) => f.path))
-            if (paths.length === 0) return { ok: false, error: 'Nothing to commit' }
-            const root = await worktreeRoot(cwd)
-            await git.add(root ? paths.map((p) => path.join(root, p)) : paths)
-          }
+          const resolved = await resolveCommitTargets(cwd, pending)
+          if (!resolved) return { ok: false, error: 'Nothing to commit' }
+          if (!resolved.staged) await git.add(resolved.targets)
           await git.commit(subject)
         } catch (error) {
           return { ok: false, error: errorText(error), detail: errorDetail(error) }
@@ -1551,49 +1562,60 @@ export function registerGitHandlers(): void {
   ipcMain.handle(
     'git:generateCommitMessage',
     async (_event, cwd: string | undefined): Promise<GitCommitMessageResult> => {
-      return withRepoLock(cwd, async () => {
-        const git = gitFor(cwd)
-        let pending: StatusResult
-        try {
-          pending = await git.status()
-        } catch (error) {
-          return fail(error)
-        }
-        if (pending.conflicted.length > 0) {
-          return { ok: false, error: 'Resolve conflicts before generating a message' }
-        }
-
-        const root = await worktreeRoot(cwd)
-        const staged = pending.files.some((f) => isStaged(f.index))
-        let diff: string
-        try {
-          if (staged) {
-            diff = await git.raw(['diff', '--cached', '-M', '--no-color'])
-          } else {
-            const paths = filterPaths(pending.files.map((f) => f.path))
-            if (paths.length === 0) return { ok: false, error: 'Nothing to commit' }
-            const targets = root ? paths.map((p) => path.join(root, p)) : paths
-            diff = await git.raw(['diff', '-M', '--no-color', '--', ...targets])
+      const outcome = await withRepoLock(
+        cwd,
+        async (): Promise<GitCommitMessageResult & { diff?: string }> => {
+          const git = gitFor(cwd)
+          let pending: StatusResult
+          try {
+            pending = await git.status()
+          } catch (error) {
+            return fail(error)
           }
-        } catch (error) {
-          return fail(error)
-        }
+          if (pending.conflicted.length > 0) {
+            return { ok: false, error: 'Resolve conflicts before generating a message' }
+          }
 
-        if (!diff.trim()) return { ok: false, error: 'Nothing to commit' }
-
-        try {
-          const raw = await runClaude(truncateDiffForPrompt(diff))
-          const message = cleanCommitMessage(raw)
-          if (!message) return { ok: false, error: 'Claude returned an empty commit message' }
-          return { ok: true, message }
-        } catch (error) {
-          return {
-            ok: false,
-            error: 'Could not generate a commit message',
-            detail: errorDetail(error)
+          const resolved = await resolveCommitTargets(cwd, pending)
+          if (!resolved) return { ok: false, error: 'Nothing to commit' }
+          try {
+            if (resolved.staged) {
+              return { ok: true, diff: await git.raw(['diff', '--cached', '-M', '--no-color']) }
+            }
+            // Untracked paths produce no `git diff` output on their own; marking them
+            // intent-to-add makes the diff show their full content, then reset undoes it.
+            await git.raw(['add', '-N', '--', ...resolved.targets])
+            try {
+              return {
+                ok: true,
+                diff: await git.raw(['diff', '-M', '--no-color', '--', ...resolved.targets])
+              }
+            } finally {
+              await git.raw(['reset', '--', ...resolved.targets]).catch(() => {})
+            }
+          } catch (error) {
+            return fail(error)
           }
         }
-      }).catch(fail)
+      ).catch((error): GitCommitMessageResult & { diff?: string } => fail(error))
+
+      if (outcome.diff === undefined) return outcome
+      if (!outcome.diff.trim()) return { ok: false, error: 'Nothing to commit' }
+
+      try {
+        const raw = await runClaude(
+          `${commitMessagePrompt}\n\n${truncateDiffForPrompt(outcome.diff)}`
+        )
+        const message = cleanCommitMessage(raw)
+        if (!message) return { ok: false, error: 'Claude returned an empty commit message' }
+        return { ok: true, message }
+      } catch (error) {
+        return {
+          ok: false,
+          error: 'Could not generate a commit message',
+          detail: errorDetail(error)
+        }
+      }
     }
   )
 
