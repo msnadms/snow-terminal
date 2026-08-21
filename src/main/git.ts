@@ -77,9 +77,12 @@ export interface GitCommitResult {
   ok: boolean
   error?: string
   detail?: string
+  blocked?: string[]
 }
 
 export type GitFileResult = GitCommitResult
+
+export type CommitIgnored = 'block' | 'unstage' | 'include'
 
 export interface GitCommitMessageResult {
   ok: boolean
@@ -446,21 +449,54 @@ export async function worktreeRoot(cwd?: string): Promise<string | null> {
   }
 }
 
+interface BlockedFile {
+  path: string
+  targets: string[]
+}
+
 interface CommitTargets {
   staged: boolean
   targets: string[]
+  blocked: BlockedFile[]
 }
 
 async function resolveCommitTargets(
   cwd: string | undefined,
   pending: StatusResult
 ): Promise<CommitTargets | null> {
-  const staged = pending.files.some((f) => isStaged(f.index))
-  if (staged) return { staged, targets: [] }
-  const paths = filterPaths(pending.files.map((f) => f.path))
-  if (paths.length === 0) return null
-  const root = await worktreeRoot(cwd)
-  return { staged, targets: root ? paths.map((p) => path.join(root, p)) : paths }
+  const stagedFiles = pending.files.filter((f) => isStaged(f.index))
+  const staged = stagedFiles.length > 0
+  const scope = (staged ? stagedFiles : pending.files).map((f) => ({
+    label: f.from ? `${f.from} -> ${f.path}` : f.path,
+    paths: [f.path, f.from].filter((p): p is string => !!p)
+  }))
+  const keep = new Set(filterPaths(scope.flatMap((f) => f.paths)))
+
+  const allowed: string[] = []
+  const refused: typeof scope = []
+  for (const file of scope) {
+    if (file.paths.every((p) => keep.has(p))) allowed.push(...file.paths)
+    else if (staged) refused.push(file)
+  }
+  if (allowed.length === 0 && !staged) return null
+
+  const root = !staged || refused.length > 0 ? await worktreeRoot(cwd) : null
+  const resolve = (p: string): string => (root ? path.join(root, p) : p)
+
+  return {
+    staged,
+    targets: staged && refused.length === 0 ? [] : allowed.map(resolve),
+    blocked: refused.map((f) => ({ path: f.label, targets: f.paths.map(resolve) }))
+  }
+}
+
+function blockedResult(blocked: BlockedFile[]): GitCommitResult {
+  const paths = blocked.map((f) => f.path)
+  return {
+    ok: false,
+    error: `${paths.length} staged file${paths.length === 1 ? ' is' : 's are'} skipped by .snowignore`,
+    blocked: paths
+  }
 }
 
 interface FileTarget {
@@ -1523,7 +1559,12 @@ export function registerGitHandlers(): void {
 
   ipcMain.handle(
     'git:commit',
-    async (_event, cwd: string | undefined, message: string): Promise<GitCommitResult> => {
+    async (
+      _event,
+      cwd: string | undefined,
+      message: string,
+      ignored: CommitIgnored = 'block'
+    ): Promise<GitCommitResult> => {
       const subject = (message ?? '').trim()
       if (!subject) return { ok: false, error: 'Commit message required' }
 
@@ -1546,8 +1587,18 @@ export function registerGitHandlers(): void {
               ].join('\n')
             }
           }
-          const resolved = await resolveCommitTargets(cwd, pending)
+          let resolved = await resolveCommitTargets(cwd, pending)
           if (!resolved) return { ok: false, error: 'Nothing to commit' }
+
+          if (ignored !== 'include') {
+            if (ignored === 'unstage' && resolved.blocked.length > 0) {
+              await git.raw(['reset', '-q', '--', ...resolved.blocked.flatMap((f) => f.targets)])
+              resolved = await resolveCommitTargets(cwd, await git.status())
+              if (!resolved) return { ok: false, error: 'Nothing to commit' }
+            }
+            if (resolved.blocked.length > 0) return blockedResult(resolved.blocked)
+          }
+
           if (!resolved.staged) await git.add(resolved.targets)
           await git.commit(subject)
         } catch (error) {
@@ -1580,7 +1631,12 @@ export function registerGitHandlers(): void {
           if (!resolved) return { ok: false, error: 'Nothing to commit' }
           try {
             if (resolved.staged) {
-              return { ok: true, diff: await git.raw(['diff', '--cached', '-M', '--no-color']) }
+              const scoped = resolved.blocked.length > 0
+              if (scoped && resolved.targets.length === 0)
+                return { ok: false, error: 'Nothing to commit' }
+              const range = ['diff', '--cached', '-M', '--no-color']
+              if (scoped) range.push('--', ...resolved.targets)
+              return { ok: true, diff: await git.raw(range) }
             }
             // Untracked paths produce no `git diff` output on their own; marking them
             // intent-to-add makes the diff show their full content, then reset undoes it.

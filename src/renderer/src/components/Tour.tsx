@@ -25,7 +25,7 @@ const steps: Step[] = [
   {
     title: 'Working tree diff',
     body: 'Click the branch name to review every uncommitted change together as one diff. Right-click it to open that diff in a split beside the current session instead of a new tab.',
-    selectors: ['.git-branch-link', '.git-branch']
+    selectors: ['.git-header-link', '.git-branch']
   },
   {
     title: 'Commit diff',

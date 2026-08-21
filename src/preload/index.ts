@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 import type {
+  CommitIgnored,
   GitBlameResult,
   GitBranches,
   GitCheckoutResult,
@@ -138,8 +139,11 @@ const git = {
     branch: string,
     carry: boolean
   ): Promise<GitCheckoutResult> => ipcRenderer.invoke('git:createBranch', cwd, branch, carry),
-  commit: (cwd: string | undefined, message: string): Promise<GitCommitResult> =>
-    ipcRenderer.invoke('git:commit', cwd, message),
+  commit: (
+    cwd: string | undefined,
+    message: string,
+    ignored?: CommitIgnored
+  ): Promise<GitCommitResult> => ipcRenderer.invoke('git:commit', cwd, message, ignored),
   generateCommitMessage: (cwd?: string): Promise<GitCommitMessageResult> =>
     ipcRenderer.invoke('git:generateCommitMessage', cwd),
   stageFile: (

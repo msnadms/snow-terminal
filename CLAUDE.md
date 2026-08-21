@@ -137,9 +137,19 @@ keys off `working_dir`. The row was a bare `<button>`, so the actions forced a w
 `.git-file-row` div; buttons cannot nest, the same constraint the home page's hidden-preset rows hit.
 
 Both surfaces share `DiscardDialog`, which is a **specific** component rather than a generic
-`ConfirmDialog` — a generic one would have exactly one caller, and the copy (what revert does to a
-path HEAD doesn't have) is the part worth writing once. It focuses Keep and closes on Escape; it
-deliberately does not confirm on Enter, since the action is unrecoverable.
+`ConfirmDialog` — the copy (what revert does to a path HEAD doesn't have) is the part worth writing
+once, and a dialog that only took `{ title, body, confirmLabel }` would push that wording back onto
+every caller. It focuses Keep and closes on Escape; it deliberately does not confirm on Enter, since
+the action is unrecoverable.
+
+What the three dialogs **do** share is their shell. `GitDialog` owns the backdrop (dismiss on
+pointer-down outside, `stopPropagation` inside), the Escape listener, and focusing the first button
+in the actions row; `DiscardDialog`, `FailureDialog`, and `BlockedCommitDialog` are thin wrappers
+supplying a title, a `detail` string, and their own buttons. Splitting it this way is the point of
+the paragraph above: the _mechanics_ were three byte-identical copies and belong in one place, while
+the _semantics_ — the wording, which button leads, whether Enter confirms — stay per-dialog.
+`dismissOnEnter` is the one behavioral knob, and only `FailureDialog` sets it, because dismissing an
+error is the only one of the three that is recoverable.
 
 Staged state comes back on the diff itself: `git:diff` marks each file `staged` from
 `git diff --cached --name-only` against the same `base` it already resolved, rather than the renderer
@@ -258,17 +268,75 @@ launch, directory `fs.watch` broadcasting `snowignore:changed`, `snowignore:get`
 with the `ignore` package. Its `filterPaths()` expects repo-root-relative forward-slash paths — what
 `git status --porcelain` emits, even when run from a subdirectory.
 
+The compiled matcher is cached, and the cache is validated against the file's own `mtimeMs:size`
+stamp on every call — **not** left to the watcher to invalidate. The watcher is the wrong sole
+authority for this one because it can die silently: `fs.watch` throws on some filesystems (the
+`catch` leaves `watcher` null) and its `'error'` handler closes the watcher without ever
+re-attaching. Either way the patterns read at startup would be pinned for the life of the process,
+and a `.snowignore` the user has since edited — or deleted — would go on filtering by its old
+contents, which is precisely the failure that lets an ignored file into a commit. The stamp also
+covers a truncate-then-write save landing between the watcher's event and its 120 ms debounce, where
+the read would otherwise cache an empty pattern list. `statSync` per call is far cheaper than the
+`readFileSync` it usually avoids, and the stamp is taken **before** the read: sampling it after
+would let a write that lands mid-read be cached under a stamp that already looks current. The
+watcher stays, because broadcasting `snowignore:changed` to the renderers is a job the stamp cannot
+do.
+
 `git.ts` consults it in two places: `git:commit` stages an explicit filtered file list instead of
 `git add -A`, and `git:status` reports `stageable` (the filtered count) alongside the unfiltered
 `changed`. `ActionBar` gates its button on `stageable` and re-checks on `snowignore:changed`;
-`GitPanel` still uses `changed`, so the dirty indicator reflects real repo state. A matched file that
-is already staged is left alone — snow only filters what it adds.
+`GitPanel` still uses `changed`, so the dirty indicator reflects real repo state.
 
 That add happens **only when nothing is staged yet**. Once anything is in the index — from the diff
 view's Stage buttons or from `git add` in a shell — `git:commit` skips staging entirely and commits
 the index as it stands, so a deliberate partial stage is never widened into "everything". The
 button's gate widens to match (`stagedCount > 0 || stageable > 0`, both from `git:status`), since a
 repo whose only staged file is `.snowignore`d still has something to commit.
+
+**The filter therefore has to run over the index too, not just over what snow adds.** Filtering only
+the add is what let ignored files reach a commit: anything that stages outside snow — a Claude
+session in a pane running `git add`, `git add -p` in the bottom shell, a merge — flips `git:commit`
+onto its index path, where `.snowignore` used to go unconsulted. It looked intermittent because it
+depended entirely on whether something happened to be staged when the button was clicked.
+`resolveCommitTargets` now filters whichever set it is about to commit (the staged files when there
+are any, the worktree otherwise) and returns the matches it found staged as `blocked`. `git:commit`
+refuses on a non-empty `blocked`, returning the paths on `GitCommitResult.blocked`; `ActionBar`
+renders those in `BlockedCommitDialog`.
+
+Main returns only the paths and a one-line `error`, and the **renderer owns the prose**. `ActionBar`
+builds its commit action with no `onFailure`, so a `detail` composed in `git.ts` would reach nothing
+but the button's tooltip — the dialog is the surface, so the explanation is written there once
+instead of on both sides of the IPC boundary.
+
+The dialog's two actions are the two ways out, and each is one re-invocation of `git:commit` with a
+different `ignored: CommitIgnored` — `'block'` (the default, what the button sends), `'unstage'`, or
+`'include'`. `'unstage'` reruns `git reset -q --` over just those paths and re-resolves from a fresh
+`git status`, so unstaging the last staged file falls through to the normal add path rather than
+committing nothing, and a partial stage of an allowed file keeps the index content it had.
+`'include'` skips the whole gate and commits the index as it stands — the escape hatch for a path
+that is `.snowignore`d but wanted in this one commit, which is otherwise only reachable by editing
+the file or committing from a shell. One three-state parameter rather than two booleans, since the
+states are exclusive and a `{ unstage: true, include: true }` call has no meaning.
+
+Refusing rather than silently unstaging (or silently committing) is the point: the index is the
+user's, and a dialog that names the paths is what makes the choice legible. It focuses Cancel and
+closes on Escape; like `DiscardDialog` it deliberately does not confirm on Enter, since neither
+other button is recoverable.
+
+A **rename is blocked when either side matches**, not just the new path. `git status` reports one
+staged rename as a single entry whose `path` is the destination, so matching that alone let
+`environment.ts -> env.ts` carry an ignored file's contents into a commit under a name the pattern
+does not cover. Both sides also go into the reset, since resetting half a rename leaves a state the
+index can't express — the same reason `fileTargets` resolves both. Only `git:commit` looks at both
+sides; `git:status`'s per-file `ignored` flag stays keyed on `path`, because an _unstaged_ rename is
+two separate entries (a delete and an untracked file) that each match on their own.
+
+`git:generateCommitMessage` shares the gate for the same reason. Its staged branch used to diff
+`--cached` with no pathspec, which piped an ignored file's contents to the `claude` CLI — the exact
+disclosure `.snowignore` exists to prevent. It now scopes that diff to `resolved.targets` whenever
+`blocked` is non-empty, and bails as "Nothing to commit" when nothing is left, rather than blocking
+outright: generating a message is not the destructive half, and the commit itself still raises the
+dialog.
 
 The button's face says which of those two it will do. `glyphs.add` and `glyphs.commit` are separate
 entries rather than one two-glyph string, so `commitGlyph` can drop the add glyph when `stagedCount`

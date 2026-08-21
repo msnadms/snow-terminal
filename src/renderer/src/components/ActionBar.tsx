@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import BlockedCommitDialog from './BlockedCommitDialog'
 import BranchSelect from './BranchSelect'
 import FailureDialog from './FailureDialog'
 import WorkflowSelect from './WorkflowSelect'
@@ -20,6 +21,8 @@ interface ActionBarProps {
 }
 
 type GitStatus = Awaited<ReturnType<typeof window.api.git.status>>
+type GitCommit = Awaited<ReturnType<typeof window.api.git.commit>>
+type CommitIgnored = NonNullable<Parameters<typeof window.api.git.commit>[2]>
 type GitUndo = Awaited<ReturnType<typeof window.api.git.undoCommit>>
 type GitPullRequest = Awaited<ReturnType<typeof window.api.git.openPullRequest>>
 type GitCommitMessage = Awaited<ReturnType<typeof window.api.git.generateCommitMessage>>
@@ -81,18 +84,20 @@ function ActionBar({
   const [defaultName, setDefaultName] = useState<string | null>(null)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [raised, setRaised] = useState<{ cwd?: string; failure: Failure } | null>(null)
+  const [blocked, setBlocked] = useState<{ cwd?: string; paths: string[] } | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const latestRun = useLatestRun()
 
   const message = drafts[cwd ?? ''] ?? ''
   const failure = raised && raised.cwd === cwd ? raised.failure : null
+  const blockedPaths = blocked && blocked.cwd === cwd ? blocked.paths : null
 
   const setMessage = (next: string): void => setDrafts((prev) => ({ ...prev, [cwd ?? '']: next }))
   const setFailure = (next: Failure | null): void => setRaised(next ? { cwd, failure: next } : null)
 
   const bump = (): void => setRefreshKey((key) => key + 1)
   const refresh = { onFailure: setFailure, onSettled: bump }
-  const commit = useGitAction({ onSettled: bump })
+  const commit = useGitAction<GitCommit>({ onSettled: bump })
   const generate = useGitAction<GitCommitMessage>({ onFailure: setFailure })
   const syncDefault = useGitAction(refresh)
   const update = useGitAction(refresh)
@@ -164,10 +169,12 @@ function ActionBar({
   const showUndo = isRepo && current !== null && (ahead > 0 || !tracking)
   const showPullRequest = isRepo && current !== null && tracking !== null && current !== defaultName
 
-  const submit = async (): Promise<void> => {
+  const submit = async (ignored: CommitIgnored = 'block'): Promise<void> => {
     if (!canSubmit) return
-    const result = await commit.run(() => window.api.git.commit(cwd, message.trim()))
+    setBlocked(null)
+    const result = await commit.run(() => window.api.git.commit(cwd, message.trim(), ignored))
     if (result?.ok) setMessage('')
+    else if (result?.blocked?.length) setBlocked({ cwd, paths: result.blocked })
   }
 
   const runGenerate = async (): Promise<boolean> => {
@@ -246,7 +253,7 @@ function ActionBar({
       <button
         className={`actionbar-button${commit.className}`}
         disabled={!canSubmit}
-        onClick={submit}
+        onClick={() => submit()}
         title={commit.error || ignoreError || commitTitle}
       >
         <div className="nerd-glyph">{commitGlyph}</div>
@@ -345,6 +352,14 @@ function ActionBar({
         </button>
       </div>
       {failure && <FailureDialog failure={failure} onDismiss={() => setFailure(null)} />}
+      {blockedPaths && (
+        <BlockedCommitDialog
+          paths={blockedPaths}
+          onCancel={() => setBlocked(null)}
+          onUnstage={() => submit('unstage')}
+          onInclude={() => submit('include')}
+        />
+      )}
     </div>
   )
 }

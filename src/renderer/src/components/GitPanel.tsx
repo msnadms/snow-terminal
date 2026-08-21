@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import DiscardDialog from './DiscardDialog'
 import FailureDialog from './FailureDialog'
 import { shortHash, type Failure } from '../format'
@@ -11,6 +11,8 @@ type GitStatus = Awaited<ReturnType<typeof window.api.git.status>>
 type GitCommit = GitLog['commits'][number]
 type GitStatusFile = GitStatus['files'][number]
 export type GitRepo = Awaited<ReturnType<typeof window.api.git.discover>>[number]
+
+const TIGHT = 'git-header-tight'
 
 const ROW = 30
 const LANE = 16
@@ -206,6 +208,8 @@ function RepoSection({
   const [showFiles, setShowFiles] = useState(false)
   const [failure, setFailure] = useState<Failure | null>(null)
   const [discarding, setDiscarding] = useState<GitStatusFile | null>(null)
+  const [headerEl, setHeaderEl] = useState<HTMLElement | null>(null)
+  const nameRef = useRef<HTMLSpanElement | null>(null)
   const fileAction = useGitAction({ onFailure: setFailure })
   const latestRun = useLatestRun()
   const cwd = repo.path
@@ -245,6 +249,22 @@ function RepoSection({
     }
   }, [cwd, latestRun])
 
+  const fitHeader = useCallback((): void => {
+    const name = nameRef.current
+    if (!headerEl || !name) return
+    headerEl.classList.remove(TIGHT)
+    if (name.scrollWidth > name.clientWidth) headerEl.classList.add(TIGHT)
+  }, [headerEl])
+
+  useLayoutEffect(fitHeader, [fitHeader, multi, repo.name, status])
+
+  useEffect(() => {
+    if (!headerEl) return
+    const observer = new ResizeObserver(fitHeader)
+    observer.observe(headerEl)
+    return () => observer.disconnect()
+  }, [headerEl, fitHeader])
+
   const edges = useMemo(() => (log ? buildEdges(log.commits, lanes) : []), [log, lanes])
   const labels = useMemo(() => fileLabels((status?.files ?? []).map((f) => f.path)), [status])
 
@@ -270,6 +290,26 @@ function RepoSection({
   }
 
   const toggleTitle = showFiles ? 'Click to show the branch tree' : 'Click to list changed files'
+
+  const linkText = multi ? repo.name : branch
+  const linkClass = multi ? 'git-repo-name' : 'git-branch'
+  const diffTitle = `${branch ?? 'HEAD'}\nClick to view uncommitted changes${
+    onOpenDiffSplit ? '\nRight-click to open in a split' : ''
+  }`
+
+  const openWorkingDiff = (event: React.MouseEvent): void => {
+    event.stopPropagation()
+    setTip(null)
+    onOpenDiff?.(cwd, branch ?? 'HEAD')
+  }
+
+  const openWorkingDiffSplit = (event: React.MouseEvent): void => {
+    if (!onOpenDiffSplit) return
+    event.preventDefault()
+    event.stopPropagation()
+    setTip(null)
+    onOpenDiffSplit(cwd)
+  }
 
   const openFile = (file: GitStatusFile): void => {
     setTip(null)
@@ -297,27 +337,15 @@ function RepoSection({
   const header = (
     <>
       {multi && <span className={open ? 'git-caret git-caret-open' : 'git-caret'}>▸</span>}
-      {multi && <span className="git-repo-name">{repo.name}</span>}
-      {branch ? (
+      {linkText ? (
         <span
-          className="git-branch git-branch-link"
-          title={`${branch}\nClick to view uncommitted changes${
-            onOpenDiffSplit ? '\nRight-click to open in a split' : ''
-          }`}
-          onClick={(event) => {
-            event.stopPropagation()
-            setTip(null)
-            onOpenDiff?.(cwd, branch)
-          }}
-          onContextMenu={(event) => {
-            if (!onOpenDiffSplit) return
-            event.preventDefault()
-            event.stopPropagation()
-            setTip(null)
-            onOpenDiffSplit(cwd)
-          }}
+          ref={nameRef}
+          className={`${linkClass} git-header-link`}
+          title={diffTitle}
+          onClick={openWorkingDiff}
+          onContextMenu={openWorkingDiffSplit}
         >
-          {branch}
+          {linkText}
         </span>
       ) : (
         <span className="git-branch">-</span>
@@ -331,19 +359,21 @@ function RepoSection({
       {changed > 0 && (
         <span
           className={showFiles ? 'git-dirty git-dirty-open' : 'git-dirty'}
-          title={toggleTitle}
+          title={`${changed} changed\n${toggleTitle}`}
           onClick={toggleFiles}
         >
-          {changed} changed
+          {changed}
+          <span className="git-count-label"> changed</span>
         </span>
       )}
       {snowignored > 0 && (
         <span
           className={showFiles ? 'git-snowignored git-dirty-open' : 'git-snowignored'}
-          title={toggleTitle}
+          title={`${snowignored} ignored\n${toggleTitle}`}
           onClick={toggleFiles}
         >
-          {snowignored} ignored
+          {snowignored}
+          <span className="git-count-label"> ignored</span>
         </span>
       )}
     </>
@@ -353,6 +383,7 @@ function RepoSection({
     <div className={open ? 'git-repo git-repo-open' : 'git-repo'}>
       {multi ? (
         <button
+          ref={setHeaderEl}
           type="button"
           className="git-header git-header-toggle"
           aria-expanded={expanded}
@@ -364,7 +395,9 @@ function RepoSection({
           {header}
         </button>
       ) : (
-        <div className="git-header">{header}</div>
+        <div ref={setHeaderEl} className="git-header">
+          {header}
+        </div>
       )}
 
       {open && showFiles && files.length > 0 && (

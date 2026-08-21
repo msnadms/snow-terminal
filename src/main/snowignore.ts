@@ -54,19 +54,32 @@ function writeDefaultSnowignore(): void {
   }
 }
 
-let matcher: Ignore | null = null
-let matcherEmpty = true
-let matcherError: string | null = null
+function fileStamp(file: string): string {
+  try {
+    const stat = fs.statSync(file)
+    return `${stat.mtimeMs}:${stat.size}`
+  } catch {
+    return ''
+  }
+}
+
+let cache: { stamp: string; error: string | null; matcher: Ignore | null } | null = null
 
 function currentMatcher(): Ignore | null {
-  if (!matcher) {
+  const file = snowignorePath()
+  const stamp = fileStamp(file)
+
+  if (!cache || cache.stamp !== stamp) {
     const { patterns, error } = readSnowignore()
-    matcherError = error
-    matcherEmpty = patterns.length === 0
-    if (!error) matcher = ignore().add(patterns)
+    cache = {
+      stamp,
+      error,
+      matcher: error || patterns.length === 0 ? null : ignore().add(patterns)
+    }
   }
-  if (matcherError) throw new Error(`Could not read ${snowignorePath()}\n${matcherError}`)
-  return matcherEmpty ? null : matcher
+
+  if (cache.error) throw new Error(`Could not read ${file}\n${cache.error}`)
+  return cache.matcher
 }
 
 export function filterPaths(paths: string[]): string[] {
@@ -91,7 +104,7 @@ function watchSnowignore(): void {
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
         timer = null
-        matcher = null
+        cache = null
         const result = readSnowignore()
         log(result.error ? 'error' : 'info', 'snowignore', 'reloaded', {
           path: result.path,
@@ -116,7 +129,7 @@ export function disposeSnowignoreWatcher(): void {
   watcher = null
   if (timer) clearTimeout(timer)
   timer = null
-  matcher = null
+  cache = null
 }
 
 export function registerSnowignoreHandlers(): void {

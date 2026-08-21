@@ -1715,6 +1715,7 @@ body.resizing-y * {
   gap: 8px;
   height: 38px;
   padding: 0 12px;
+  overflow: hidden;
   background: var(--git-bg, #171c2b);
   border-bottom: 1px solid var(--git-border, #28334c);
 }
@@ -1730,7 +1731,7 @@ body.resizing-y * {
   appearance: none;
 }
 
-.git-header-toggle:hover .git-repo-name {
+.git-header-toggle:hover .git-caret {
   color: var(--git-hash-hover, #a6dcf0);
 }
 
@@ -1746,7 +1747,7 @@ body.resizing-y * {
 }
 
 .git-repo-name {
-  min-width: 0;
+  min-width: 6ch;
   color: var(--git-repo, #7fd8e8);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1754,7 +1755,7 @@ body.resizing-y * {
 }
 
 .git-branch {
-  min-width: 0;
+  min-width: 6ch;
   color: var(--git-branch, #6fb2f0);
   font-weight: 600;
   overflow: hidden;
@@ -1762,11 +1763,11 @@ body.resizing-y * {
   white-space: nowrap;
 }
 
-.git-branch-link {
+.git-header-link {
   cursor: pointer;
 }
 
-.git-branch-link:hover {
+.git-header-link:hover {
   color: var(--git-hash-hover, #a6dcf0);
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -1789,6 +1790,10 @@ body.resizing-y * {
   color: var(--git-muted, #5d6f8f);
   margin-left: auto;
   cursor: pointer;
+}
+
+.git-header-tight .git-count-label {
+  display: none;
 }
 
 .git-dirty:hover,
