@@ -13,6 +13,11 @@ const steps: Step[] = [
     selectors: ['.tab-add', '.tab-browser']
   },
   {
+    title: 'Repo tab groups',
+    body: 'Tabs are grouped and colored by the repo they belong to, so a linked worktree sits next to the session it came from instead of scattered across the strip.',
+    selectors: ['.tab-group']
+  },
+  {
     title: 'Command buttons',
     body: 'Add a shell-command button for this folder. Click it to run something like `npm run dev`, click again to stop it.',
     selectors: ['.tab-command-add']
@@ -46,6 +51,11 @@ const steps: Step[] = [
     title: 'Workflows',
     body: 'Register a branch as a workflow and snow parks its uncommitted work when you switch away, then restores it when you return. Branching off a dirty workflow asks whether to carry your changes along or park them behind.',
     selectors: ['.picker-workflow']
+  },
+  {
+    title: 'Workflow manager',
+    body: 'Lists every registered workflow across every repo. Launch one into its own git worktree to run it alongside your current session, or launch them all at once.',
+    selectors: ['.tab-workflows']
   }
 ]
 

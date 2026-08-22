@@ -23,7 +23,13 @@ next to the code they touch.
 - **Workflows** - register a branch as a workflow and snow _parks_ its
   uncommitted work in a dedicated git stash when you leave it and restores it
   when you return, so switching branches never loses in-progress changes.
-  Parked work lives in git's own stash list and is never dropped.
+  Parked work lives in git's own stash list and is never dropped. A
+  **workflow manager** tab lists every registered workflow across every repo,
+  each launchable into its own git worktree so you can run several branches of
+  the same repo side by side - individually or all at once.
+- **Repo tab groups** - tabs are grouped and colored by the repo (or worktree)
+  they belong to, so a linked worktree's session sits next to the repo it came
+  from instead of scattered across the tab strip.
 - **Pull requests** - open the right "create PR" page for GitHub, GitLab,
   Bitbucket, and Azure remotes (with a per-repo config override for anything
   else), in an embedded browser tab.
@@ -149,6 +155,7 @@ default. Combos are `+`-joined: `Ctrl` / `Cmd` / `Meta` / `Alt` / `Shift`, plus
 | `diffSplit`                                          | `Mod+Shift+G`                   | Open the working-tree diff as a split                 |
 | `runCommand`                                         | `Mod+Shift+Q`                   | Toggle the preset's first command button              |
 | `switchRepo`                                         | `Mod+Shift+?`                   | Switch the action bar's repo (when more than one)     |
+| `openWorkflows`                                      | `Mod+Shift+O`                   | Open (or focus) the workflow manager tab              |
 | `focusCommit`                                        | `Mod+Shift+M`                   | Focus the commit-message input                        |
 | `pushRemote`                                         | `Mod+Shift+P`                   | Push commits (or publish the branch) to the remote    |
 | `focusLeft` / `focusDown` / `focusUp` / `focusRight` | `Mod+Shift+H` / `J` / `K` / `L` | Move pane focus (vim directions)                      |

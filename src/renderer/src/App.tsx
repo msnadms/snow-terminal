@@ -570,28 +570,31 @@ function App(): React.JSX.Element {
     setTourDismissed(true)
   }
 
-  const closeSession = useCallback((id: number): void => {
+  const closeSessions = useCallback((ids: number[]): void => {
+    const idSet = new Set(ids)
     const current = orderedTabsRef.current
-    const index = current.findIndex((t) => t.id === id)
-    if (index === -1) return
-    const remaining = current.filter((t) => t.id !== id)
-    if (activeIdRef.current === id) {
+    const remaining = current.filter((t) => !idSet.has(t.id))
+    const active = activeIdRef.current
+    if (typeof active === 'number' && idSet.has(active)) {
+      const index = current.findIndex((t) => t.id === active)
       const neighbor = remaining[index - 1] ?? remaining[index]
       setActiveId(neighbor ? neighbor.id : 'home')
     }
     setTabs(remaining)
-    const dropKey = <T,>(prev: Record<number, T>): Record<number, T> => {
+    const dropKeys = <T,>(prev: Record<number, T>): Record<number, T> => {
       const next = { ...prev }
-      delete next[id]
+      for (const id of ids) delete next[id]
       return next
     }
-    setCwds(dropKey)
-    setPanes(dropKey)
-    setSplits(dropKey)
-    setBrowserTitles(dropKey)
-    setStatuses(dropKey)
-    setTitles(dropKey)
+    setCwds(dropKeys)
+    setPanes(dropKeys)
+    setSplits(dropKeys)
+    setBrowserTitles(dropKeys)
+    setStatuses(dropKeys)
+    setTitles(dropKeys)
   }, [])
+
+  const closeSession = useCallback((id: number): void => closeSessions([id]), [closeSessions])
 
   const openWorktree = useCallback(
     (worktree: string, repo?: string): void => {
@@ -724,6 +727,7 @@ function App(): React.JSX.Element {
             statuses={statuses}
             onSelect={setActiveId}
             onClose={closeSession}
+            onCloseGroup={closeSessions}
             onReorder={reorderTab}
             onAdd={addDefaultSession}
             onOpenBrowser={openBlankBrowser}

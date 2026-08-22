@@ -16,6 +16,7 @@ interface TabBarProps {
   presets: Preset[]
   onSelect: (id: number | 'home' | 'workflows') => void
   onClose: (id: number) => void
+  onCloseGroup: (ids: number[]) => void
   onReorder: (from: number, to: number) => void
   onAdd: () => void
   onOpenBrowser: () => void
@@ -38,6 +39,7 @@ function TabBar({
   presets,
   onSelect,
   onClose,
+  onCloseGroup,
   onReorder,
   onAdd,
   onOpenBrowser,
@@ -54,6 +56,7 @@ function TabBar({
   const [menu, setMenu] = useState<{ item: CommandItem; x: number; y: number } | null>(null)
   const [splitMenu, setSplitMenu] = useState<{ x: number; y: number } | null>(null)
   const [addMenu, setAddMenu] = useState<{ x: number; y: number } | null>(null)
+  const [groupMenu, setGroupMenu] = useState<{ ids: number[]; x: number; y: number } | null>(null)
   const [drag, setDrag] = useState<{ from: number; over: number } | null>(null)
   const lanes = useGitColors()?.lanes
 
@@ -223,6 +226,11 @@ function TabBar({
           const color = repoColor(seg.group, lanes)
           const style = { '--tab-group': color } as React.CSSProperties
           const collapsed = collapsedGroups.has(seg.group)
+          const ids = seg.items.map((it) => it.session.id)
+          const onGroupContextMenu = (e: React.MouseEvent): void => {
+            e.preventDefault()
+            setGroupMenu({ ids, x: e.clientX, y: e.clientY })
+          }
 
           if (collapsed) {
             return (
@@ -232,6 +240,7 @@ function TabBar({
                   className="tab-group-collapsed"
                   style={style}
                   onClick={() => toggleGroup(seg.group)}
+                  onContextMenu={onGroupContextMenu}
                   title={`${seg.items.length} tabs (click to expand)`}
                 />
               </Fragment>
@@ -241,7 +250,7 @@ function TabBar({
           return (
             <Fragment key={seg.group}>
               {boundaryDivider && <span className="tab-group-divider" />}
-              <div className="tab-group" style={style}>
+              <div className="tab-group" style={style} onContextMenu={onGroupContextMenu}>
                 <button
                   className="tab-group-toggle"
                   onClick={() => toggleGroup(seg.group)}
@@ -343,6 +352,19 @@ function TabBar({
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           <button className="context-menu-item" onClick={() => removeCommand(menu.item)}>
             Remove “{menu.item.command}” from {menu.item.presetName}
+          </button>
+        </ContextMenu>
+      )}
+      {groupMenu && (
+        <ContextMenu x={groupMenu.x} y={groupMenu.y} onClose={() => setGroupMenu(null)}>
+          <button
+            className="context-menu-item context-menu-item--action"
+            onClick={() => {
+              onCloseGroup(groupMenu.ids)
+              setGroupMenu(null)
+            }}
+          >
+            Close all
           </button>
         </ContextMenu>
       )}
