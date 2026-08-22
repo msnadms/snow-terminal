@@ -17,6 +17,8 @@ interface ActionBarProps {
   frozen: boolean
   onFreeze: (frozen: boolean) => void
   onOpenPullRequest: (url: string) => void
+  onOpenWorktree?: (cwd: string) => void
+  onCloseWorktree?: (cwd: string) => void
   keybinds: Record<string, string>
 }
 
@@ -77,6 +79,8 @@ function ActionBar({
   frozen,
   onFreeze,
   onOpenPullRequest,
+  onOpenWorktree,
+  onCloseWorktree,
   keybinds
 }: ActionBarProps): React.JSX.Element {
   const [isRepo, setIsRepo] = useState(false)
@@ -336,7 +340,12 @@ function ActionBar({
             )}
           </div>
         )}
-        <WorkflowSelect key={`workflow-${cwd ?? 'none'}`} cwd={cwd} />
+        <WorkflowSelect
+          key={`workflow-${cwd ?? 'none'}`}
+          cwd={cwd}
+          onOpenWorktree={onOpenWorktree}
+          onCloseWorktree={onCloseWorktree}
+        />
         <BranchSelect key={cwd ?? 'none'} cwd={cwd} />
         <button
           className={`actionbar-button actionbar-freeze${frozen ? ' actionbar-freeze-on' : ''}`}

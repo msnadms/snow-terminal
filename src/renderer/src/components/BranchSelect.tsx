@@ -15,6 +15,7 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
   const [current, setCurrent] = useState<string | null>(null)
   const [branches, setBranches] = useState<string[]>([])
   const [remotes, setRemotes] = useState<string[]>([])
+  const [worktrees, setWorktrees] = useState<Record<string, string>>({})
   const [tab, setTab] = useState<BranchTab>('local')
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -35,6 +36,7 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
       setCurrent(result.current)
       setBranches(result.branches)
       setRemotes(result.remotes)
+      setWorktrees(result.worktrees)
     }
 
     load()
@@ -164,15 +166,24 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
           />
           <div className="picker-list">
             {visible.length === 0 && <div className="picker-none">No branches</div>}
-            {visible.map((branch) => (
-              <button
-                key={branch}
-                className={`picker-item${branch === current ? ' picker-item-current' : ''}`}
-                onClick={() => (tab === 'local' ? checkout(branch) : checkoutRemote(branch))}
-              >
-                {branch}
-              </button>
-            ))}
+            {visible.map((branch) =>
+              (() => {
+                const worktree = tab === 'local' ? worktrees[branch] : undefined
+                return (
+                  <button
+                    key={branch}
+                    className={`picker-item${branch === current ? ' picker-item-current' : ''}`}
+                    disabled={!!worktree}
+                    title={
+                      worktree ? `Open this branch's worktree session: ${worktree}` : undefined
+                    }
+                    onClick={() => (tab === 'local' ? checkout(branch) : checkoutRemote(branch))}
+                  >
+                    {branch}
+                  </button>
+                )
+              })()
+            )}
           </div>
           {tab === 'local' && (
             <form className="picker-create" onSubmit={createBranch}>

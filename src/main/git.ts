@@ -5,7 +5,8 @@ import os from 'os'
 import path from 'path'
 import { simpleGit, SimpleGit, StatusResult } from 'simple-git'
 import { filterPaths } from './snowignore'
-import { registeredFor, workflowsPath } from './registry'
+import { parkableBranches, workflowsPath } from './registry'
+import { collapseHome, samePath } from './config'
 import { isExternalUrl } from './external'
 
 export interface GitCommit {
@@ -27,6 +28,7 @@ export interface GitLog {
 export interface GitRepo {
   path: string
   name: string
+  common: string
 }
 
 export interface GitCommitFile {
@@ -95,6 +97,7 @@ export interface GitBranches {
   current: string | null
   branches: string[]
   remotes: string[]
+  worktrees: Record<string, string>
 }
 
 export interface GitCheckoutResult {
@@ -449,6 +452,52 @@ export async function worktreeRoot(cwd?: string): Promise<string | null> {
   }
 }
 
+/** The root of the primary worktree, shared by every linked worktree. */
+export async function mainWorktreeRoot(cwd?: string): Promise<string | null> {
+  try {
+    const common = (await gitFor(cwd).revparse(['--git-common-dir'])).trim()
+    if (!common) return null
+    const resolved = path.isAbsolute(common) ? common : path.resolve(cwd || os.homedir(), common)
+    // Git emits native-looking relative paths in the primary worktree, but absolute paths with
+    // forward slashes in linked worktrees on Windows. Normalize before using this as a registry
+    // or lock identity so every worktree of a repository shares the same key.
+    return path.resolve(path.dirname(resolved))
+  } catch {
+    return null
+  }
+}
+
+export async function worktreeMap(cwd?: string): Promise<Map<string, string>> {
+  try {
+    const raw = await gitFor(cwd).raw(['worktree', 'list', '--porcelain'])
+    const map = new Map<string, string>()
+    let directory: string | null = null
+    let branch: string | null = null
+    let prunable = false
+    const commit = (): void => {
+      if (directory && branch && !prunable) map.set(branch, directory)
+      directory = null
+      branch = null
+      prunable = false
+    }
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line) {
+        commit()
+      } else if (line.startsWith('worktree ')) {
+        directory = line.slice('worktree '.length)
+      } else if (line.startsWith('branch refs/heads/')) {
+        branch = line.slice('branch refs/heads/'.length)
+      } else if (line.startsWith('prunable')) {
+        prunable = true
+      }
+    }
+    commit()
+    return map
+  } catch {
+    return new Map()
+  }
+}
+
 interface BlockedFile {
   path: string
   targets: string[]
@@ -722,9 +771,9 @@ export async function parkedFiles(
 }
 
 async function registeredBranches(cwd?: string): Promise<string[]> {
-  const repo = await worktreeRoot(cwd)
+  const repo = await mainWorktreeRoot(cwd)
   if (!repo) return []
-  const { branches, error } = registeredFor(repo)
+  const { branches, error } = parkableBranches(repo)
   if (error) throw new Error(`Could not read ${workflowsPath()}\n${error}`)
   return branches
 }
@@ -748,6 +797,16 @@ async function parkOnLeave(cwd?: string): Promise<Departure> {
 
   await gitFor(cwd).raw(['stash', 'push', '-u', '-m', `${markerPrefix}${departure.current}`])
   return departure
+}
+
+const untrackedCollision = /^(.+) already exists, no checkout$/
+
+function collidingUntracked(error: unknown): string[] {
+  const raw = error instanceof Error ? error.message : String(error)
+  return raw
+    .split('\n')
+    .map((line) => line.trim().match(untrackedCollision)?.[1])
+    .filter((file): file is string => !!file)
 }
 
 async function restoreOnEnter(
@@ -780,6 +839,22 @@ async function restoreOnEnter(
           'Resolve these files, then run: git stash drop',
           '',
           ...conflicted,
+          '',
+          'Your parked changes are still stashed, so nothing is lost.'
+        ].join('\n')
+      }
+    }
+    const colliding = collidingUntracked(error)
+    if (colliding.length > 0) {
+      return {
+        ok: false,
+        error: 'Untracked files block restoring parked changes',
+        detail: [
+          `Switched to ${branch}, but these files already exist untracked, so their parked copies could not be restored:`,
+          '',
+          ...colliding,
+          '',
+          'Move or delete them, then run: git stash pop',
           '',
           'Your parked changes are still stashed, so nothing is lost.'
         ].join('\n')
@@ -827,7 +902,7 @@ async function parkPreview(cwd?: string): Promise<{ branch: string; files: numbe
 const repoLocks = new Map<string, Promise<unknown>>()
 
 export async function withRepoLock<T>(cwd: string | undefined, op: () => Promise<T>): Promise<T> {
-  const key = (await worktreeRoot(cwd)) ?? cwd ?? os.homedir()
+  const key = (await mainWorktreeRoot(cwd)) ?? (await worktreeRoot(cwd)) ?? cwd ?? os.homedir()
   const previous = repoLocks.get(key) ?? Promise.resolve()
   const run = previous.then(op, op)
   repoLocks.set(key, run)
@@ -843,6 +918,16 @@ export async function switchBranch(
   target: string,
   checkout: (git: SimpleGit) => Promise<unknown>
 ): Promise<GitCheckoutResult> {
+  const checkedOut = await worktreeMap(cwd)
+  const elsewhere = checkedOut.get(target)
+  const here = await worktreeRoot(cwd)
+  if (elsewhere && (!here || !samePath(elsewhere, here))) {
+    return {
+      ok: false,
+      error: `${target} is already open in another worktree`,
+      detail: `Open its session at ${collapseHome(elsewhere)} instead of checking it out here.`
+    }
+  }
   let departure: Departure
   try {
     departure = await parkOnLeave(cwd)
@@ -892,7 +977,10 @@ async function discoveryState(cwd?: string): Promise<DiscoveryState> {
   const dir = cwd || os.homedir()
 
   const root = await worktreeRoot(dir)
-  if (root) return { root, repos: [{ path: root, name: path.basename(root) }] }
+  if (root) {
+    const common = (await mainWorktreeRoot(dir)) ?? root
+    return { root, repos: [{ path: root, name: path.basename(root), common }] }
+  }
 
   let entries: fs.Dirent[]
   try {
@@ -908,7 +996,11 @@ async function discoveryState(cwd?: string): Promise<DiscoveryState> {
         const child = path.join(dir, entry.name)
         if (!(await isRepoDir(child))) return null
         const childRoot = (await worktreeRoot(child)) ?? child
-        return { path: childRoot, name: path.basename(childRoot) }
+        return {
+          path: childRoot,
+          name: path.basename(childRoot),
+          common: (await mainWorktreeRoot(child)) ?? childRoot
+        }
       })
     )
   ).filter((repo): repo is GitRepo => repo !== null)
@@ -1173,7 +1265,7 @@ export function registerGitHandlers(): void {
       current = summary.current || null
       branches = summary.all
     } catch {
-      return { current: null, branches: [], remotes: [] }
+      return { current: null, branches: [], remotes: [], worktrees: {} }
     }
 
     try {
@@ -1183,7 +1275,11 @@ export function registerGitHandlers(): void {
       remotes = []
     }
 
-    return { current, branches, remotes }
+    const currentRoot = await worktreeRoot(cwd)
+    const worktrees = Object.fromEntries(
+      [...(await worktreeMap(cwd))].filter(([, dir]) => !currentRoot || !samePath(dir, currentRoot))
+    )
+    return { current, branches, remotes, worktrees }
   })
 
   ipcMain.handle('git:defaultBranch', async (_event, cwd?: string): Promise<string | null> => {
@@ -1272,6 +1368,14 @@ export function registerGitHandlers(): void {
         if (status.current === branch) {
           await git.raw(['fetch', remote, branch])
           await git.raw(['merge', '--ff-only', `${remote}/${branch}`])
+          return { ok: true, branch }
+        }
+        const checkedOut = await worktreeMap(cwd)
+        const targetWorktree = checkedOut.get(branch)
+        if (targetWorktree) {
+          const targetGit = gitFor(targetWorktree)
+          await targetGit.raw(['fetch', remote, branch])
+          await targetGit.raw(['merge', '--ff-only', `${remote}/${branch}`])
           return { ok: true, branch }
         }
         await git.raw(['fetch', remote, `${branch}:${branch}`])
@@ -1868,7 +1972,7 @@ export function registerGitHandlers(): void {
     const handle = watchers.begin(key, wcId)
     if (!handle) return
 
-    const dir = await gitDir(cwd)
+    const [dir, common] = await Promise.all([gitDir(cwd), mainWorktreeRoot(cwd)])
     if (!dir) {
       watchers.bail(key, handle)
       return
@@ -1925,6 +2029,10 @@ export function registerGitHandlers(): void {
     watch(dir, false, notLockFile)
     watch(path.join(dir, 'refs'), true, notLockFile)
     watch(path.join(dir, 'logs'), true, notLockFile)
+    if (common && !samePath(common, path.dirname(dir))) {
+      watch(path.join(common, '.git', 'refs'), true, notLockFile)
+      watch(path.join(common, '.git', 'logs'), true, notLockFile)
+    }
 
     const worktree = await worktreeRoot(cwd)
     if (worktree) {

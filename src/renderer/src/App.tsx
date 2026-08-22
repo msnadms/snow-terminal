@@ -72,10 +72,12 @@ function App(): React.JSX.Element {
   const nextIdRef = useRef(1)
   const tabsRef = useRef(tabs)
   const activeIdRef = useRef(activeId)
+  const cwdsRef = useRef(cwds)
   useEffect(() => {
     tabsRef.current = tabs
     activeIdRef.current = activeId
-  }, [tabs, activeId])
+    cwdsRef.current = cwds
+  }, [tabs, activeId, cwds])
   const {
     presets,
     name: configName,
@@ -463,6 +465,62 @@ function App(): React.JSX.Element {
     setStatuses(dropKey)
   }, [])
 
+  const openWorktree = useCallback(
+    (worktree: string): void => {
+      const existing = tabsRef.current.find(
+        (tab) =>
+          tab.kind === 'shell' &&
+          (normalizePath(tab.cwd ?? cwdsRef.current[tab.id] ?? '') === normalizePath(worktree) ||
+            normalizePath(cwdsRef.current[tab.id] ?? '') === normalizePath(worktree))
+      )
+      if (existing) {
+        setActiveId(existing.id)
+        return
+      }
+
+      const current = tabsRef.current.find((tab) => tab.id === activeIdRef.current)
+      const parentCwd =
+        current?.kind === 'shell' ? (current.cwd ?? cwdsRef.current[current.id]) : undefined
+      const inherited =
+        (current?.kind === 'shell' && current.presetName
+          ? presets.find((preset) => preset.name === current.presetName)
+          : undefined) ??
+        presets
+          .filter(
+            (preset) => parentCwd && isInside(normalizePath(parentCwd), normalizePath(preset.cwd))
+          )
+          .sort((a, b) => normalizePath(b.cwd).length - normalizePath(a.cwd).length)[0]
+      const id = nextIdRef.current++
+      setTabs((prev) => [
+        ...prev,
+        {
+          kind: 'shell',
+          id,
+          cwd: worktree,
+          startupCommand: inherited?.startupCommand,
+          presetName: inherited?.name
+        }
+      ])
+      setCwds((prev) => ({ ...prev, [id]: worktree }))
+      setPanes((prev) => ({ ...prev, [id]: [{ id: nextTerminalId() }] }))
+      setActiveId(id)
+    },
+    [presets]
+  )
+
+  const closeWorktree = useCallback(
+    (worktree: string): void => {
+      const tab = tabsRef.current.find(
+        (candidate) =>
+          candidate.kind === 'shell' &&
+          normalizePath(candidate.cwd ?? cwdsRef.current[candidate.id] ?? '') ===
+            normalizePath(worktree)
+      )
+      if (tab) closeSession(tab.id)
+    },
+    [closeSession]
+  )
+
   const reorderTab = useCallback((from: number, to: number): void => {
     setTabs((prev) => {
       const target = to > from ? to - 1 : to
@@ -526,6 +584,8 @@ function App(): React.JSX.Element {
         frozen={frozen !== null}
         onFreeze={(on) => setFrozen(on ? { entries: repoEntries } : null)}
         onOpenPullRequest={(url) => openBrowser(url)}
+        onOpenWorktree={openWorktree}
+        onCloseWorktree={closeWorktree}
         keybinds={keybinds}
       />
       <div className="content">

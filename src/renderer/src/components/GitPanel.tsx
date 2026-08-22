@@ -591,21 +591,43 @@ function GitPanel({
     )
   }
 
+  const groups = Array.from(
+    repos.reduce((byCommon, repo) => {
+      const group = byCommon.get(repo.common) ?? []
+      group.push(repo)
+      byCommon.set(repo.common, group)
+      return byCommon
+    }, new Map<string, GitRepo[]>())
+  )
+  const grouped = groups.some(([, group]) => group.length > 1)
+
   return (
     <div className="git-panel" style={style}>
       <div className="git-scroll">
-        {repos.map((repo) => (
-          <RepoSection
-            key={repo.path}
-            repo={repo}
-            multi={repos.length > 1}
-            lanes={lanes}
-            gradients={gradients}
-            onOpenCommit={onOpenCommit}
-            onOpenCommitSplit={onOpenCommitSplit}
-            onOpenDiff={onOpenDiff}
-            onOpenDiffSplit={onOpenDiffSplit}
-          />
+        {groups.map(([common, group]) => (
+          <div key={common} className="git-worktree-group">
+            {grouped && (
+              <div className="git-worktree-group-title">
+                {common
+                  .replace(/[\\/]+$/, '')
+                  .split(/[\\/]/)
+                  .pop()}
+              </div>
+            )}
+            {group.map((repo) => (
+              <RepoSection
+                key={repo.path}
+                repo={repo}
+                multi={repos.length > 1}
+                lanes={lanes}
+                gradients={gradients}
+                onOpenCommit={onOpenCommit}
+                onOpenCommitSplit={onOpenCommitSplit}
+                onOpenDiff={onOpenDiff}
+                onOpenDiffSplit={onOpenDiffSplit}
+              />
+            ))}
+          </div>
         ))}
       </div>
     </div>

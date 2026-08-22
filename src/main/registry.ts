@@ -14,6 +14,8 @@ import { log } from './log'
 export interface WorkflowRecord {
   repo: string
   branch: string
+  /** An absolute linked-worktree path when this workflow runs in parallel. */
+  worktree?: string
 }
 
 const defaultRegistry = { workflows: [] as WorkflowRecord[] }
@@ -36,7 +38,8 @@ function validate(raw: unknown): WorkflowRecord[] {
     if (!repo || !branch) continue
     if (result.some((r) => r.branch === branch && samePath(expandHome(r.repo), expandHome(repo))))
       continue
-    result.push({ repo, branch })
+    const worktree = typeof o.worktree === 'string' ? o.worktree.trim() : ''
+    result.push(worktree ? { repo, branch, worktree } : { repo, branch })
   }
   return result
 }
@@ -63,19 +66,44 @@ function writeRecords(records: WorkflowRecord[]): string | null {
   }
 }
 
-export function registeredFor(repo: string): { branches: string[]; error: string | null } {
+export function recordsFor(repo: string): { records: WorkflowRecord[]; error: string | null } {
   const { records, error } = readRecords()
   return {
-    branches: records.filter((r) => samePath(expandHome(r.repo), repo)).map((r) => r.branch),
+    records: records.filter((r) => samePath(expandHome(r.repo), repo)),
     error
   }
+}
+
+export function parkableBranches(repo: string): { branches: string[]; error: string | null } {
+  const { records, error } = recordsFor(repo)
+  return { branches: records.filter((r) => !r.worktree).map((r) => r.branch), error }
 }
 
 export function addRecord(repo: string, branch: string): string | null {
   const { records, error } = readRecords()
   if (error) return error
-  if (records.some((r) => r.branch === branch && samePath(expandHome(r.repo), repo))) return null
+  const index = records.findIndex((r) => r.branch === branch && samePath(expandHome(r.repo), repo))
+  if (index !== -1) {
+    const existing = records[index]
+    if (!existing.worktree) return null
+    const next = [...records]
+    next[index] = { repo: existing.repo, branch: existing.branch }
+    return writeRecords(next)
+  }
   return writeRecords([...records, { repo: collapseHome(repo), branch }])
+}
+
+export function setWorktree(repo: string, branch: string, worktree: string | null): string | null {
+  const { records, error } = readRecords()
+  if (error) return error
+  const index = records.findIndex((r) => r.branch === branch && samePath(expandHome(r.repo), repo))
+  if (index === -1) return `Workflow ${branch} is not registered`
+  const next = [...records]
+  const record = next[index]
+  next[index] = worktree
+    ? { ...record, worktree: collapseHome(worktree) }
+    : { repo: record.repo, branch: record.branch }
+  return writeRecords(next)
 }
 
 export function removeRecord(repo: string, branch: string): string | null {

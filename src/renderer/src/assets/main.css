@@ -487,6 +487,20 @@ body {
   font-size: 11px;
 }
 
+.workflow-live {
+  flex: 0 0 auto;
+  color: var(--ui-success, #a6e3a1);
+  font-size: 11px;
+}
+
+.git-worktree-group-title {
+  padding: 7px 12px 3px;
+  color: var(--ui-muted, #a6adc8);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 .workflow-missing {
   color: var(--ui-placeholder, #5d6f8f);
   cursor: default;
