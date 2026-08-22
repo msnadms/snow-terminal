@@ -1,49 +1,32 @@
 import { useEffect, useRef, useState } from 'react'
 import FailureDialog from './FailureDialog'
+import RemoveWorkflowDialog from './RemoveWorkflowDialog'
+import StopWorkflowDialog from './StopWorkflowDialog'
 import { type Failure } from '@renderer/format'
 import { useGitAction } from '@renderer/useGitAction'
 import { useLatestRun } from '@renderer/useLatestRun'
-
-type WorkflowList = Awaited<ReturnType<typeof window.api.workflow.list>>
-type WorkflowEntry = WorkflowList['workflows'][number]
-type WorkflowResult = Awaited<ReturnType<typeof window.api.workflow.switch>>
+import {
+  isRegistered,
+  parkedTitle,
+  staleTitle,
+  usable,
+  type WorkflowEntry,
+  type WorkflowList,
+  type WorkflowResult
+} from '@renderer/workflowText'
 
 interface WorkflowSelectProps {
   cwd?: string
   onOpenWorktree?: (cwd: string) => void
   onCloseWorktree?: (cwd: string) => void
-}
-
-function parkedCount(files: number | null): string {
-  return files === null ? 'Parked changes' : `${files} parked file${files === 1 ? '' : 's'}`
-}
-
-function parkedStay(files: number | null): string {
-  if (files === null) return 'Its parked changes stay in the stash.'
-  return `Its ${files} parked file${files === 1 ? '' : 's'} ${files === 1 ? 'stays' : 'stay'} in the stash.`
-}
-
-function usable(entry: WorkflowEntry): boolean {
-  return !!entry.worktree && !!entry.worktreeExists && entry.worktreeLinked !== false
-}
-
-function staleTitle(entry: WorkflowEntry): string {
-  return entry.worktreeExists
-    ? `${entry.branch}'s worktree directory is left over - prune, then delete it by hand`
-    : `${entry.branch}'s worktree is missing - prune the stale git entry`
-}
-
-function parkedTitle(entry: WorkflowEntry): string {
-  if (!entry.parked) return `No parked changes on ${entry.branch}`
-  const files = parkedCount(entry.parked.files)
-  const when = entry.parked.date ? new Date(entry.parked.date).toLocaleString() : ''
-  return when ? `${files} - ${when}` : files
+  onManage?: () => void
 }
 
 function WorkflowSelect({
   cwd,
   onOpenWorktree,
-  onCloseWorktree
+  onCloseWorktree,
+  onManage
 }: WorkflowSelectProps): React.JSX.Element | null {
   const [list, setList] = useState<WorkflowList | null>(null)
   const [query, setQuery] = useState('')
@@ -106,7 +89,7 @@ function WorkflowSelect({
   if (!list || !list.current) return null
 
   const { current, defaultBranch, workflows, error: readError } = list
-  const registered = workflows.some((entry) => entry.current)
+  const registered = isRegistered(workflows)
 
   const toggle = (): void => {
     setQuery('')
@@ -254,7 +237,7 @@ function WorkflowSelect({
                     {entry.worktree ? '▸ ' : ''}
                     {entry.branch}
                   </span>
-                  {usable(entry) && <span className="workflow-live">⧖ live</span>}
+                  {usable(entry) && <span className="workflow-live"> live</span>}
                   {entry.parked && (
                     <span className="workflow-parked">● {entry.parked.files ?? '?'}</span>
                   )}
@@ -265,7 +248,7 @@ function WorkflowSelect({
                     title={`Run ${entry.branch} in parallel`}
                     onClick={() => promote(entry)}
                   >
-                    ⧖
+                    
                   </button>
                 )}
                 {usable(entry) && (
@@ -274,7 +257,7 @@ function WorkflowSelect({
                     title={`Stop ${entry.branch}'s parallel session`}
                     onClick={() => setDemoting(entry)}
                   >
-                    ∥
+                    󰏤
                   </button>
                 )}
                 {entry.worktree && !usable(entry) && (
@@ -311,52 +294,32 @@ function WorkflowSelect({
           <div className="workflow-base">
             {defaultBranch ? `Branches from origin/${defaultBranch}` : 'Branches from HEAD'}
           </div>
+          {onManage && (
+            <button
+              className="workflow-manage"
+              onClick={() => {
+                setOpen(false)
+                onManage()
+              }}
+            >
+              Manage workflows…
+            </button>
+          )}
         </div>
       )}
       {removing && (
-        <div className="git-dialog-backdrop" onPointerDown={() => setRemoving(null)}>
-          <div className="git-dialog" onPointerDown={(e) => e.stopPropagation()}>
-            <div className="git-dialog-title">Remove workflow {removing.branch}?</div>
-            <pre className="git-dialog-detail">
-              {[
-                `The branch ${removing.branch} is not deleted - snow just stops tracking it as a workflow.`,
-                removing.parked
-                  ? `\n${parkedStay(removing.parked.files)} Recover them with:\n  git stash list\n  git stash pop <entry>`
-                  : ''
-              ].join('')}
-            </pre>
-            <div className="git-dialog-actions">
-              <button className="git-dialog-button" onClick={() => setRemoving(null)}>
-                Cancel
-              </button>
-              <button className="git-dialog-button" onClick={unregister}>
-                Remove
-              </button>
-            </div>
-          </div>
-        </div>
+        <RemoveWorkflowDialog
+          entry={removing}
+          onCancel={() => setRemoving(null)}
+          onConfirm={unregister}
+        />
       )}
       {demoting && (
-        <div className="git-dialog-backdrop" onPointerDown={() => setDemoting(null)}>
-          <div className="git-dialog" onPointerDown={(e) => e.stopPropagation()}>
-            <div className="git-dialog-title">Stop {demoting.branch}&apos;s parallel session?</div>
-            <pre className="git-dialog-detail">
-              {[
-                `Changes will be parked on ${demoting.branch} before its worktree is removed.`,
-                '',
-                'Its terminal session will close. Ignored files (for example node_modules, .env, dist, and out) cannot be stashed and will be deleted from that worktree.'
-              ].join('\n')}
-            </pre>
-            <div className="git-dialog-actions">
-              <button className="git-dialog-button" onClick={() => setDemoting(null)}>
-                Cancel
-              </button>
-              <button className="git-dialog-button" onClick={demote}>
-                Stop session and delete ignored files
-              </button>
-            </div>
-          </div>
-        </div>
+        <StopWorkflowDialog
+          entry={demoting}
+          onCancel={() => setDemoting(null)}
+          onConfirm={demote}
+        />
       )}
       {failure && <FailureDialog failure={failure} onDismiss={() => setFailure(null)} />}
     </div>

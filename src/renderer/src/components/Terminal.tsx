@@ -38,6 +38,7 @@ interface TerminalProps {
   cwd?: string
   onCwd?: (cwd: string) => void
   onStatus?: (status: 'busy' | 'idle') => void
+  onTitle?: (title: string) => void
   startupCommand?: string
   active?: boolean
   focusOnActivate?: boolean
@@ -47,6 +48,7 @@ function Terminal({
   cwd,
   onCwd,
   onStatus,
+  onTitle,
   startupCommand,
   active = true,
   focusOnActivate
@@ -54,6 +56,7 @@ function Terminal({
   const containerRef = useRef<HTMLDivElement>(null)
   const onCwdRef = useRef(onCwd)
   const onStatusRef = useRef(onStatus)
+  const onTitleRef = useRef(onTitle)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const searchAddonRef = useRef<SearchAddon | null>(null)
   const termRef = useRef<XTerm | null>(null)
@@ -71,6 +74,10 @@ function Terminal({
   useEffect(() => {
     onStatusRef.current = onStatus
   }, [onStatus])
+
+  useEffect(() => {
+    onTitleRef.current = onTitle
+  }, [onTitle])
 
   useEffect(() => {
     const container = containerRef.current
@@ -123,6 +130,8 @@ function Terminal({
       if (next) onCwdRef.current?.(next)
       return true
     })
+
+    const titleDisposable = term.onTitleChange((title) => onTitleRef.current?.(title))
 
     const bumpQuiet = (): void => {
       quietUntilRef.current = Date.now() + QUIET_MS
@@ -186,6 +195,7 @@ function Terminal({
       offTheme()
       resizeObserver.disconnect()
       oscDisposable.dispose()
+      titleDisposable.dispose()
       searchResults.dispose()
       term.element?.removeEventListener('wheel', bumpQuiet)
       term.textarea?.removeEventListener('focus', bumpQuiet)

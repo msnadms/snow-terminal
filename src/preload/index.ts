@@ -19,7 +19,7 @@ import type {
   GitWorkingDiff
 } from '../main/git'
 import type { BrowserBounds, BrowserState } from '../main/browser'
-import type { WorkflowList, WorkflowResult } from '../main/workflow'
+import type { WorkflowList, WorkflowOverview, WorkflowResult } from '../main/workflow'
 import type { ThemeResult } from '../main/theme'
 import type { SnowignoreResult } from '../main/snowignore'
 import type { SnowconfigResult, Layout, Preset } from '../main/snowconfig'
@@ -119,6 +119,7 @@ const git = {
   blame: (cwd: string | undefined, rev: string, filePath: string): Promise<GitBlameResult> =>
     ipcRenderer.invoke('git:blame', cwd, rev, filePath),
   discover: (cwd?: string): Promise<GitRepo[]> => ipcRenderer.invoke('git:discover', cwd),
+  mainRoot: (cwd?: string): Promise<string | null> => ipcRenderer.invoke('git:mainRoot', cwd),
   log: (cwd?: string, maxCount?: number): Promise<GitLog> =>
     ipcRenderer.invoke('git:log', cwd, maxCount),
   show: (cwd: string | undefined, hash: string): Promise<GitCommitDetail> =>
@@ -187,6 +188,7 @@ const git = {
 
 const workflow = {
   list: (cwd?: string): Promise<WorkflowList> => ipcRenderer.invoke('workflow:list', cwd),
+  overview: (): Promise<WorkflowOverview> => ipcRenderer.invoke('workflow:overview'),
   register: (cwd: string | undefined, branch?: string): Promise<WorkflowResult> =>
     ipcRenderer.invoke('workflow:register', cwd, branch),
   unregister: (cwd: string | undefined, branch: string): Promise<WorkflowResult> =>

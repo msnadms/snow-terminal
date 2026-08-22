@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import DiscardDialog from './DiscardDialog'
 import FailureDialog from './FailureDialog'
 import { shortHash, type Failure } from '../format'
 import { useGitAction } from '../useGitAction'
-import { useGitColors } from '../useGitColors'
+import { fallbackLanes, useGitColors } from '../useGitColors'
 import { useLatestRun } from '../useLatestRun'
 
 type GitLog = Awaited<ReturnType<typeof window.api.git.log>>
@@ -19,8 +19,6 @@ const LANE = 16
 const PADX = 12
 const DOT = 4
 const LOG_COMMITS = 200
-
-const fallbackLanes = ['#6fb2f0', '#7fd8e8', '#9d9ce8', '#c09ae0']
 
 function laneColor(lanes: string[], col: number): string {
   return lanes[col % lanes.length]
@@ -604,31 +602,41 @@ function GitPanel({
   return (
     <div className="git-panel" style={style}>
       <div className="git-scroll">
-        {groups.map(([common, group]) => (
-          <div key={common} className="git-worktree-group">
-            {grouped && (
-              <div className="git-worktree-group-title">
-                {common
-                  .replace(/[\\/]+$/, '')
-                  .split(/[\\/]/)
-                  .pop()}
-              </div>
-            )}
-            {group.map((repo) => (
-              <RepoSection
-                key={repo.path}
-                repo={repo}
-                multi={repos.length > 1}
-                lanes={lanes}
-                gradients={gradients}
-                onOpenCommit={onOpenCommit}
-                onOpenCommitSplit={onOpenCommitSplit}
-                onOpenDiff={onOpenDiff}
-                onOpenDiffSplit={onOpenDiffSplit}
-              />
-            ))}
-          </div>
-        ))}
+        {groups.map(([common, group]) => {
+          const title = grouped && (
+            <div className="git-worktree-group-title">
+              {common
+                .replace(/[\\/]+$/, '')
+                .split(/[\\/]/)
+                .pop()}
+            </div>
+          )
+          const sections = group.map((repo) => (
+            <RepoSection
+              key={repo.path}
+              repo={repo}
+              multi={repos.length > 1}
+              lanes={lanes}
+              gradients={gradients}
+              onOpenCommit={onOpenCommit}
+              onOpenCommitSplit={onOpenCommitSplit}
+              onOpenDiff={onOpenDiff}
+              onOpenDiffSplit={onOpenDiffSplit}
+            />
+          ))
+
+          return group.length > 1 ? (
+            <div key={common} className="git-worktree-group">
+              {title}
+              {sections}
+            </div>
+          ) : (
+            <Fragment key={common}>
+              {title}
+              {sections}
+            </Fragment>
+          )
+        })}
       </div>
     </div>
   )

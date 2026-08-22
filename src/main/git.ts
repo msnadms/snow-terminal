@@ -1661,6 +1661,10 @@ export function registerGitHandlers(): void {
 
   ipcMain.handle('git:discover', (_event, cwd?: string): Promise<GitRepo[]> => discoverRepos(cwd))
 
+  ipcMain.handle('git:mainRoot', (_event, cwd?: string): Promise<string | null> =>
+    mainWorktreeRoot(cwd)
+  )
+
   ipcMain.handle(
     'git:commit',
     async (

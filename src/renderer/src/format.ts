@@ -2,6 +2,14 @@ export function shortHash(hash: string): string {
   return hash.slice(0, 7)
 }
 
+export function normalizePath(p: string): string {
+  return p.replace(/\\/g, '/').replace(/\/+$/, '')
+}
+
+export function isInside(child: string, parent: string): boolean {
+  return child === parent || child.startsWith(parent + '/')
+}
+
 export function basename(path: string): string {
   const parts = path.split(/[/\\]/).filter(Boolean)
   return parts[parts.length - 1] ?? path

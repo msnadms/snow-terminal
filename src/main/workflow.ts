@@ -19,6 +19,8 @@ import { collapseHome, expandHome, samePath } from './config'
 import { closePtysInDirectory } from './pty'
 import {
   addRecord,
+  filterByRepo,
+  readRecords,
   recordsFor,
   removeRecord,
   setWorktree,
@@ -48,6 +50,17 @@ export interface WorkflowList {
   error: string | null
 }
 
+export interface WorkflowRepo extends WorkflowList {
+  repo: string
+  name: string
+  unreachable: boolean
+}
+
+export interface WorkflowOverview {
+  repos: WorkflowRepo[]
+  error: string | null
+}
+
 export type WorkflowResult = GitCheckoutResult & { worktree?: string }
 
 function worktreeContainer(repo: string): string {
@@ -63,60 +76,106 @@ function recordFor(records: WorkflowRecord[], branch: string): WorkflowRecord | 
   return records.find((record) => record.branch === branch)
 }
 
-export function registerWorkflowHandlers(): void {
-  ipcMain.handle('workflow:list', async (_event, cwd?: string): Promise<WorkflowList> => {
-    const empty: WorkflowList = {
-      current: null,
-      defaultBranch: null,
-      workflows: [],
-      error: null
+function emptyList(error: string | null = null): WorkflowList {
+  return { current: null, defaultBranch: null, workflows: [], error }
+}
+
+function missingEntry({ branch, worktree }: WorkflowRecord): WorkflowEntry {
+  return {
+    branch,
+    current: false,
+    exists: false,
+    parked: null,
+    worktree: worktree ? expandHome(worktree) : undefined,
+    worktreeExists: worktree ? false : undefined,
+    worktreeLinked: worktree ? false : undefined
+  }
+}
+
+async function describeWorkflows(
+  cwd: string | undefined,
+  records: WorkflowRecord[],
+  error: string | null
+): Promise<WorkflowList> {
+  const [summary, entries, target, checkedOut] = await Promise.all([
+    gitFor(cwd)
+      .branchLocal()
+      .catch(() => null),
+    stashEntries(cwd),
+    defaultBranch(cwd, false),
+    worktreeMap(cwd)
+  ])
+  if (!summary) return emptyList(error)
+
+  const current = summary.current || null
+  const workflows = await Promise.all(
+    records.map(async ({ branch, worktree }): Promise<WorkflowEntry> => {
+      const entry = newestStash(entries, branch)
+      const absoluteWorktree = worktree ? expandHome(worktree) : undefined
+      const worktreeExists = absoluteWorktree
+        ? await fs.promises
+            .access(absoluteWorktree)
+            .then(() => true)
+            .catch(() => false)
+        : undefined
+      const linked = checkedOut.get(branch)
+      const worktreeLinked = absoluteWorktree
+        ? !!linked && samePath(linked, absoluteWorktree)
+        : undefined
+      return {
+        branch,
+        current: branch === current,
+        exists: summary.all.includes(branch),
+        parked: entry ? { files: await parkedFiles(cwd, entry.selector), date: entry.date } : null,
+        worktree: absoluteWorktree,
+        worktreeExists,
+        worktreeLinked
+      }
+    })
+  )
+
+  return { current, defaultBranch: target?.branch ?? null, workflows, error }
+}
+
+async function describeRepo(repo: string, records: WorkflowRecord[]): Promise<WorkflowRepo> {
+  const root = await mainWorktreeRoot(repo)
+  if (root)
+    return {
+      repo: root,
+      name: path.basename(root),
+      unreachable: false,
+      ...(await describeWorkflows(root, filterByRepo(records, root), null))
     }
 
+  return {
+    repo,
+    name: path.basename(repo),
+    unreachable: true,
+    ...emptyList(),
+    workflows: filterByRepo(records, repo).map(missingEntry)
+  }
+}
+
+export function registerWorkflowHandlers(): void {
+  ipcMain.handle('workflow:list', async (_event, cwd?: string): Promise<WorkflowList> => {
     const repo = await mainWorktreeRoot(cwd)
-    if (!repo) return empty
-
+    if (!repo) return emptyList()
     const { records, error } = recordsFor(repo)
+    return describeWorkflows(cwd, records, error)
+  })
 
-    const [summary, entries, target, checkedOut] = await Promise.all([
-      gitFor(cwd)
-        .branchLocal()
-        .catch(() => null),
-      stashEntries(cwd),
-      defaultBranch(cwd, false),
-      worktreeMap(cwd)
-    ])
-    if (!summary) return { ...empty, error }
+  ipcMain.handle('workflow:overview', async (): Promise<WorkflowOverview> => {
+    const { records, error } = readRecords()
+    if (error) return { repos: [], error }
 
-    const current = summary.current || null
-    const workflows = await Promise.all(
-      records.map(async ({ branch, worktree }): Promise<WorkflowEntry> => {
-        const entry = newestStash(entries, branch)
-        const absoluteWorktree = worktree ? expandHome(worktree) : undefined
-        const worktreeExists = absoluteWorktree
-          ? await fs.promises
-              .access(absoluteWorktree)
-              .then(() => true)
-              .catch(() => false)
-          : undefined
-        const linked = checkedOut.get(branch)
-        const worktreeLinked = absoluteWorktree
-          ? !!linked && samePath(linked, absoluteWorktree)
-          : undefined
-        return {
-          branch,
-          current: branch === current,
-          exists: summary.all.includes(branch),
-          parked: entry
-            ? { files: await parkedFiles(cwd, entry.selector), date: entry.date }
-            : null,
-          worktree: absoluteWorktree,
-          worktreeExists,
-          worktreeLinked
-        }
-      })
-    )
+    const roots: string[] = []
+    for (const record of records) {
+      const absolute = expandHome(record.repo)
+      if (!roots.some((known) => samePath(known, absolute))) roots.push(absolute)
+    }
 
-    return { current, defaultBranch: target?.branch ?? null, workflows, error }
+    const repos = await Promise.all(roots.map((root) => describeRepo(root, records)))
+    return { repos: repos.sort((a, b) => a.name.localeCompare(b.name)), error: null }
   })
 
   ipcMain.handle(
@@ -254,8 +313,15 @@ export function registerWorkflowHandlers(): void {
             detail: collapseHome(active)
           }
 
+        // `git worktree add` happily checks out into an existing *empty* directory - only a
+        // non-empty one is actually a conflict (e.g. a previous `remove` that unregistered the
+        // worktree but couldn't delete a locked file). An empty leftover is common: `remove`
+        // deletes its own directory tree but can still leave an empty parent behind on Windows.
         const destination = worktreeDirectory(repo, name)
-        if (fs.existsSync(destination)) {
+        const remaining = await fs.promises
+          .readdir(destination)
+          .catch((error) => (error.code === 'ENOENT' ? [] : Promise.reject(error)))
+        if (remaining.length > 0) {
           return {
             ok: false,
             error: 'Worktree directory already exists',

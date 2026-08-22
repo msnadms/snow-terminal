@@ -9,14 +9,16 @@ import HomePage from './components/HomePage'
 import ResizeHandle from './components/ResizeHandle'
 import PanelRestore from './components/PanelRestore'
 import Tour from './components/Tour'
+import WorkflowManager from './components/WorkflowManager'
 import WorkingDiffView from './components/WorkingDiffView'
-import { basename, shortHash, uniqueBy } from './format'
+import { basename, isInside, normalizePath, shortHash, uniqueBy } from './format'
 import { nextTerminalId } from './terminalId'
+import { regroupTabs } from './tabGroups'
 import { useKeybinds, usePresetDigitKeybind } from './keybinds'
 import { useCollapsiblePane } from './useCollapsiblePane'
 import { useSnowconfig, visiblePresetEntries, type Preset } from './useSnowconfig'
 
-type ActiveId = number | 'home'
+type ActiveId = number | 'home' | 'workflows'
 
 const GIT_MIN = 220
 const GIT_COLLAPSE = 120
@@ -50,12 +52,34 @@ function presetIndexFor(presets: Preset[], entry?: Partial<RepoEntry>): number {
   return -1
 }
 
-function normalizePath(p: string): string {
-  return p.replace(/\\/g, '/').replace(/\/+$/, '')
-}
+const byCwdLength =
+  (dir: 1 | -1) =>
+  (a: Preset, b: Preset): number =>
+    dir * (normalizePath(a.cwd).length - normalizePath(b.cwd).length)
 
-function isInside(child: string, parent: string): boolean {
-  return child === parent || child.startsWith(parent + '/')
+/**
+ * The preset a worktree's tab should inherit its startup command from: the shortest-cwd preset
+ * rooted in `repo` when a repo is given (launched from the workflow manager, root wins), otherwise
+ * the active tab's own preset if it has one, falling back to the longest (most specific) preset
+ * containing its parent cwd.
+ */
+function inheritedPreset(
+  presets: Preset[],
+  repo: string | undefined,
+  current: Tab | undefined,
+  parentCwd: string | undefined
+): Preset | undefined {
+  if (repo)
+    return presets
+      .filter((preset) => isInside(normalizePath(preset.cwd), normalizePath(repo)))
+      .sort(byCwdLength(1))[0]
+  if (current?.kind === 'shell' && current.presetName) {
+    const named = presets.find((preset) => preset.name === current.presetName)
+    if (named) return named
+  }
+  return presets
+    .filter((preset) => parentCwd && isInside(normalizePath(parentCwd), normalizePath(preset.cwd)))
+    .sort(byCwdLength(-1))[0]
 }
 
 function App(): React.JSX.Element {
@@ -67,6 +91,7 @@ function App(): React.JSX.Element {
   const [running, setRunning] = useState<Record<string, number>>({})
   const [browserTitles, setBrowserTitles] = useState<Record<number, string>>({})
   const [statuses, setStatuses] = useState<Record<number, SessionStatus>>({})
+  const [titles, setTitles] = useState<Record<number, string>>({})
   const [frozen, setFrozen] = useState<{ entries: RepoEntry[] } | null>(null)
   const [tourDismissed, setTourDismissed] = useState(false)
   const nextIdRef = useRef(1)
@@ -210,6 +235,104 @@ function App(): React.JSX.Element {
   )
 
   const managePresetIndex = commandPresets[0] ?? -1
+
+  const tabCwd = useCallback(
+    (tab: Tab): string | undefined => {
+      if (tab.kind === 'shell') return cwds[tab.id] ?? tab.cwd
+      if (tab.kind === 'commit' || tab.kind === 'diff') return tab.cwd
+      return undefined
+    },
+    [cwds]
+  )
+
+  const { sessionDirStatuses, sessionDirTitles } = useMemo(() => {
+    const sessionDirStatuses: Record<string, SessionStatus> = {}
+    const sessionDirTitles: Record<string, string> = {}
+    for (const tab of tabs) {
+      if (tab.kind !== 'shell') continue
+      const dir = tabCwd(tab)
+      if (!dir) continue
+      const status = statuses[tab.id]
+      if (status) sessionDirStatuses[normalizePath(dir)] = status
+      const title = titles[tab.id]
+      if (title) sessionDirTitles[normalizePath(dir)] = title
+    }
+    return { sessionDirStatuses, sessionDirTitles }
+  }, [tabs, tabCwd, statuses, titles])
+
+  const [roots, setRoots] = useState<Record<string, string | null>>({})
+  const [rootsEpoch, setRootsEpoch] = useState(0)
+  const rootsRef = useRef(roots)
+  useEffect(() => {
+    rootsRef.current = roots
+  }, [roots])
+  const rootsKey = useMemo(
+    () =>
+      uniqueBy(
+        tabs.map(tabCwd).filter((dir): dir is string => dir != null),
+        (dir) => dir
+      ).join('\n'),
+    [tabs, tabCwd]
+  )
+
+  useEffect(
+    () =>
+      window.api.git.onReposChanged(() => {
+        setRoots({})
+        setRootsEpoch((epoch) => epoch + 1)
+      }),
+    []
+  )
+
+  useEffect(() => {
+    let cancelled = false
+    const dirs = (rootsKey ? rootsKey.split('\n') : []).filter((dir) => !(dir in rootsRef.current))
+    if (dirs.length === 0) return
+    Promise.all(
+      dirs.map(async (dir) => {
+        const owner = (repos ?? []).find((repo) =>
+          isInside(normalizePath(dir), normalizePath(repo.path))
+        )
+        const root = owner ? owner.common : await window.api.git.mainRoot(dir)
+        return [dir, root] as const
+      })
+    ).then((resolved) => {
+      if (!cancelled) setRoots((prev) => ({ ...prev, ...Object.fromEntries(resolved) }))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [rootsKey, rootsEpoch, repos])
+
+  const tabGroups = useMemo(() => {
+    const result: Record<number, string | null> = {}
+    for (const tab of tabs) {
+      const dir = tabCwd(tab)
+      const root = dir ? roots[dir] : null
+      const presetName = tab.kind === 'shell' ? tab.presetName : undefined
+      result[tab.id] = root || (presetName ? `preset:${presetName}` : null)
+    }
+    return result
+  }, [tabs, tabCwd, roots])
+
+  const groupsRef = useRef(tabGroups)
+  useEffect(() => {
+    groupsRef.current = tabGroups
+  }, [tabGroups])
+
+  const orderedTabs = useMemo(
+    () => regroupTabs(tabs, (tab) => tabGroups[tab.id] ?? null),
+    [tabs, tabGroups]
+  )
+  const orderedTabsRef = useRef(orderedTabs)
+  useEffect(() => {
+    orderedTabsRef.current = orderedTabs
+  }, [orderedTabs])
+
+  const sessionItems = useMemo(
+    () => orderedTabs.map((tab) => ({ id: tab.id, group: tabGroups[tab.id] ?? null })),
+    [orderedTabs, tabGroups]
+  )
 
   const labels = useMemo(() => {
     const result: Record<number, string> = {}
@@ -377,6 +500,10 @@ function App(): React.JSX.Element {
     setStatuses((prev) => (prev[sessionId] === status ? prev : { ...prev, [sessionId]: status }))
   }, [])
 
+  const handleSessionTitle = useCallback((sessionId: number, title: string): void => {
+    setTitles((prev) => (prev[sessionId] === title ? prev : { ...prev, [sessionId]: title }))
+  }, [])
+
   const handleBottomLayout = useCallback((height: number, collapsed: boolean): void => {
     window.api.snowconfig.setLayout({ bottomHeight: height, bottomCollapsed: collapsed })
   }, [])
@@ -444,7 +571,7 @@ function App(): React.JSX.Element {
   }
 
   const closeSession = useCallback((id: number): void => {
-    const current = tabsRef.current
+    const current = orderedTabsRef.current
     const index = current.findIndex((t) => t.id === id)
     if (index === -1) return
     const remaining = current.filter((t) => t.id !== id)
@@ -463,10 +590,11 @@ function App(): React.JSX.Element {
     setSplits(dropKey)
     setBrowserTitles(dropKey)
     setStatuses(dropKey)
+    setTitles(dropKey)
   }, [])
 
   const openWorktree = useCallback(
-    (worktree: string): void => {
+    (worktree: string, repo?: string): void => {
       const existing = tabsRef.current.find(
         (tab) =>
           tab.kind === 'shell' &&
@@ -481,15 +609,7 @@ function App(): React.JSX.Element {
       const current = tabsRef.current.find((tab) => tab.id === activeIdRef.current)
       const parentCwd =
         current?.kind === 'shell' ? (current.cwd ?? cwdsRef.current[current.id]) : undefined
-      const inherited =
-        (current?.kind === 'shell' && current.presetName
-          ? presets.find((preset) => preset.name === current.presetName)
-          : undefined) ??
-        presets
-          .filter(
-            (preset) => parentCwd && isInside(normalizePath(parentCwd), normalizePath(preset.cwd))
-          )
-          .sort((a, b) => normalizePath(b.cwd).length - normalizePath(a.cwd).length)[0]
+      const inherited = inheritedPreset(presets, repo, current, parentCwd)
       const id = nextIdRef.current++
       setTabs((prev) => [
         ...prev,
@@ -521,19 +641,24 @@ function App(): React.JSX.Element {
     [closeSession]
   )
 
+  const openWorkflows = useCallback((): void => {
+    setActiveId('workflows')
+  }, [])
+
   const reorderTab = useCallback((from: number, to: number): void => {
     setTabs((prev) => {
+      const ordered = regroupTabs(prev, (tab) => groupsRef.current[tab.id] ?? null)
       const target = to > from ? to - 1 : to
-      if (from < 0 || from >= prev.length || target < 0 || target >= prev.length) return prev
+      if (from < 0 || from >= ordered.length || target < 0 || target >= ordered.length) return prev
       if (target === from) return prev
-      const next = [...prev]
+      const next = [...ordered]
       next.splice(target, 0, next.splice(from, 1)[0])
       return next
     })
   }, [])
 
   const cycleTab = (delta: number): void => {
-    const order: ActiveId[] = ['home', ...tabs.map((t) => t.id)]
+    const order: ActiveId[] = ['home', ...orderedTabs.map((t) => t.id)]
     const index = order.indexOf(activeId)
     if (index === -1) return
     setActiveId(order[(index + delta + order.length) % order.length])
@@ -541,7 +666,7 @@ function App(): React.JSX.Element {
 
   useKeybinds(keybinds, {
     newTab: addDefaultSession,
-    closeTab: activeId !== 'home' ? () => closeSession(activeId) : undefined,
+    closeTab: typeof activeId === 'number' ? () => closeSession(activeId) : undefined,
     nextTab: tabs.length > 0 ? () => cycleTab(1) : undefined,
     prevTab: tabs.length > 0 ? () => cycleTab(-1) : undefined,
     newSplit: activeTab?.kind === 'shell' ? () => splitActive() : undefined,
@@ -551,7 +676,8 @@ function App(): React.JSX.Element {
     switchRepo: actionRepos.length > 1 ? switchRepo : undefined,
     focusCommit: actionCwd
       ? () => document.querySelector<HTMLInputElement>('.actionbar-input')?.focus()
-      : undefined
+      : undefined,
+    openWorkflows
   })
 
   usePresetDigitKeybind(
@@ -586,12 +712,13 @@ function App(): React.JSX.Element {
         onOpenPullRequest={(url) => openBrowser(url)}
         onOpenWorktree={openWorktree}
         onCloseWorktree={closeWorktree}
+        onManageWorkflows={openWorkflows}
         keybinds={keybinds}
       />
       <div className="content">
         <div className="terminal-area">
           <TabBar
-            sessions={tabs}
+            sessions={sessionItems}
             activeId={activeId}
             labels={labels}
             statuses={statuses}
@@ -600,6 +727,7 @@ function App(): React.JSX.Element {
             onReorder={reorderTab}
             onAdd={addDefaultSession}
             onOpenBrowser={openBlankBrowser}
+            onOpenWorkflows={openWorkflows}
             onSplit={splitActiveBlank}
             presets={visiblePresets}
             onSplitWithPreset={splitActive}
@@ -618,6 +746,13 @@ function App(): React.JSX.Element {
               theme={themeName ?? 'theme'}
               error={presetsError}
               onOpenPreset={addSession}
+            />
+            <WorkflowManager
+              active={activeId === 'workflows'}
+              onLaunch={openWorktree}
+              onCloseWorktree={closeWorktree}
+              sessionStatuses={sessionDirStatuses}
+              sessionTitles={sessionDirTitles}
             />
             {mountedTabs.map((tab) => {
               if (tab.kind === 'commit')
@@ -671,6 +806,7 @@ function App(): React.JSX.Element {
                   onClosePane={closePane}
                   onCwd={handleSessionCwd}
                   onStatus={handleSessionStatus}
+                  onTitle={handleSessionTitle}
                 />
               )
             })}

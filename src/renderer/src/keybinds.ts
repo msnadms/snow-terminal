@@ -9,6 +9,7 @@ export type KeybindAction =
   | 'diffSplit'
   | 'runCommand'
   | 'switchRepo'
+  | 'openWorkflows'
   | 'focusCommit'
   | 'aiCommit'
   | 'pushRemote'
@@ -26,6 +27,7 @@ export const defaultKeybinds: Record<KeybindAction, string> = {
   diffSplit: 'Mod+Shift+G',
   runCommand: 'Mod+Shift+Q',
   switchRepo: 'Mod+Shift+?',
+  openWorkflows: 'Mod+Shift+O',
   focusCommit: 'Mod+Shift+M',
   aiCommit: 'Mod+Shift+Enter',
   pushRemote: 'Mod+Shift+P',

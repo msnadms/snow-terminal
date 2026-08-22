@@ -560,7 +560,9 @@ its handler is `undefined` on the home page (which has no closeable tab). `nextT
 `activeId` through `['home', ...tabs]`, the tab strip's own order, wrapping at both ends; their handlers
 are `undefined` when no session tabs exist, so the keys fall through to the terminal on a bare home page. `switchRepo` (default
 `Mod+Shift+?`) cycles the action bar's `activeRepo` through the same `switchRepo`/`⇄` path, and its
-handler is `undefined` unless more than one repo is in view. `focusCommit` (default `Mod+Shift+M`)
+handler is `undefined` unless more than one repo is in view. `openWorkflows` (default `Mod+Shift+O`)
+opens (or focuses) the workflow manager tab; it is always available, since the screen is global rather
+than scoped to whatever the active tab points at. `focusCommit` (default `Mod+Shift+M`)
 focuses the action bar's commit-message `<input>`, resolved by its `.actionbar-input` class (the same
 DOM-query approach the focus binds use) rather than a threaded ref; its handler is `undefined` when no
 repo is in view (`actionCwd` absent). `pushRemote` (default `Mod+Shift+P`) runs the sync button's
@@ -828,6 +830,48 @@ vocabulary — the chrome classes in `main.css` are named `picker-*`, not `branc
 register button, and the remove button. Its button reads the branch name when that branch is a
 registered workflow and a neutral "Workflows" when it is not.
 
+#### The workflow manager
+
+`WorkflowManager` is a **tab kind** (`{ kind: 'workflows' }`), opened from the tab-bar button, the
+`openWorkflows` keybind, or the dropdown's "Manage workflows…" row — all three route through `App`'s
+one `openWorkflows`, which focuses the existing tab instead of minting a second. It is the only
+surface that is not scoped to a cwd, which is exactly why it exists: `workflow:list` needs an open
+repo, so a repo with no tab open is invisible everywhere else.
+
+`workflow:overview` is that unscoped read. It groups `readRecords()` by `samePath`'d repo and
+describes each through the **same** `describeWorkflows` the cwd-scoped `workflow:list` uses — one
+enrichment path, so a row cannot read differently in the two places. A repo whose directory has
+moved or been deleted comes back `unreachable: true` with its branches listed as non-existent rather
+than being dropped, since the registry entry is still there and removing it is the only fix. Repos
+listed are **exactly** the registry's, never presets or discovery: a repo appears once you register
+a workflow in it, which keeps the screen's contents equal to what parking and restoring actually
+act on.
+
+**Launch** is the screen's verb, and it resolves per row: a usable worktree opens (or focuses) its
+tab, the branch checked out in the main worktree opens a tab on the repo root, and a park-mode
+workflow is **promoted first** — `git worktree add`, then the tab. Launching is the one place that
+creates a worktree implicitly, because "run these three branches at once" has no other meaning in
+park mode. A launched tab inherits the preset whose `cwd` lives inside that repo (shortest match, so
+a preset on the root wins), which is what carries `startupCommand` and `presetName` over so the tab
+keeps its command buttons; `openWorktree` takes that repo as an optional second argument and falls
+back to inheriting from the active tab when it is absent, since a launch from the manager has no
+meaningful active session to inherit from.
+
+**Launch all** is that loop, sequentially and to the end. It never stops at the first failure and
+never rolls back: promotions are serialized by `withRepoLock` anyway, and a branch that cannot start
+(directory already there, branch checked out elsewhere) says nothing about the others. Failures are
+collected and reported **once**, as a single `FailureDialog` titled "Launched N of M workflows"
+listing each branch and its reason, rather than one dialog per branch.
+
+Every mutating action runs through the shared `useGitAction`, whose single `pending` disables every
+button on the screen — the same "one git action at a time" shape `WorkingDiffView` uses — and whose
+`onSettled` bumps the reload key. `RemoveWorkflowDialog` and `StopWorkflowDialog` are shared with
+`WorkflowSelect` rather than reimplemented: the copy is the load-bearing part (what stays in the
+stash, what gets deleted), and two surfaces wording it separately is how they drift. Extracting them
+also moved both onto `GitDialog`, so they now close on Escape like every other dialog. The
+vocabulary they share with `WorkflowSelect` — `usable`, `staleTitle`, `parkedTitle`, `parkedStay` —
+lives in `workflowText.ts` for the same reason.
+
 ## Session tabs
 
 `App.tsx` owns the tab model: `sessions` (each `{ id, cwd? }`), `activeId` (`number | 'home'`), and a
@@ -845,6 +889,38 @@ which half of the hovered tab the pointer is in; `insertAt` collapses the two no
 (`from` and `from + 1`) to `null`, so both the drop indicator and the drop itself are gated on one
 value and a drag that changes nothing never writes state. `App.reorderTab(from, to)` splices `tabs`,
 converting the slot to an index (`to > from ? to - 1 : to`).
+
+### Repo tab groups
+
+Every tab that has a directory belongs to a **repo group**, keyed on that directory's
+`mainWorktreeRoot` — so a linked worktree's tab groups with the repo it was cut from rather than
+standing alone, which is the whole point of grouping a parallel session next to its parent. `App`
+resolves the key per distinct tab cwd through `git:mainRoot` (a one-`rev-parse` handler) and caches it
+by cwd, because discovery only ever runs for the **active** tab and grouping needs an answer for all
+of them. The cache is dropped and re-resolved on `git:reposChanged`, so a `git init` or `rm -rf .git`
+under a pane regroups it; the resolution effect keys on the joined cwd list plus that epoch, and reads
+the cache through a ref so it never re-runs on its own writes. An unresolved (or non-repo) cwd is
+simply ungrouped until the answer lands.
+
+Grouping is **enforced, not merely drawn**: `regroupTabs` pulls every tab of one repo back next to the
+first tab of that repo, so a group can never end up interleaved. It is a derived order
+(`orderedTabs`), not a `setTabs` correction — deriving keeps a group from fighting a drag mid-gesture
+and cannot loop. `tabs` stays the raw array; the tab strip, `cycleTab`, `closeSession`'s neighbor
+pick, and `reorderTab` all work in the regrouped order, and `reorderTab` writes that order back so a
+later regroup is a no-op. Tabs with **no** repo (browser tabs, the workflow manager, a shell outside
+any repo) keep their place instead of being herded to one end, so they can sit between groups.
+
+`TabBar` therefore constrains the drop rather than accepting any slot: a grouped tab may only land
+within `[first, last + 1]` of its own group, and an ungrouped tab may land anywhere except strictly
+inside a group's run. Both cases resolve to `insertAt === null`, which already suppresses the drop
+indicator and the drop itself — a refused drop shows nothing rather than snapping back.
+
+The color is `repoColor(key, lanes)` — an FNV hash of the normalized root into the theme's existing
+`git.lanes` palette. Hashing (rather than handing colors out in open order) keeps a repo the same
+color across restarts, at the cost of two repos occasionally sharing a lane; the divider between
+groups is what keeps those legible. `TabBar` reads `lanes` from `useGitColors` itself, so `App` passes
+only the group key and the whole strip recolors with the theme. `WorkflowManager` colors each repo
+card off the same function, so a card and its tabs match.
 
 The pane stack is deliberately rendered from **`mountedTabs`** — `tabs` sorted by `id`, an order
 reordering can never disturb — not from `tabs`. Keyed reconciliation moves a reordered child with

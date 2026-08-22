@@ -66,12 +66,13 @@ function writeRecords(records: WorkflowRecord[]): string | null {
   }
 }
 
+export function filterByRepo(records: WorkflowRecord[], repo: string): WorkflowRecord[] {
+  return records.filter((r) => samePath(expandHome(r.repo), repo))
+}
+
 export function recordsFor(repo: string): { records: WorkflowRecord[]; error: string | null } {
   const { records, error } = readRecords()
-  return {
-    records: records.filter((r) => samePath(expandHome(r.repo), repo)),
-    error
-  }
+  return { records: filterByRepo(records, repo), error }
 }
 
 export function parkableBranches(repo: string): { branches: string[]; error: string | null } {

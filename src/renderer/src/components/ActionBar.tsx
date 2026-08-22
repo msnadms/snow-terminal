@@ -19,6 +19,7 @@ interface ActionBarProps {
   onOpenPullRequest: (url: string) => void
   onOpenWorktree?: (cwd: string) => void
   onCloseWorktree?: (cwd: string) => void
+  onManageWorkflows?: () => void
   keybinds: Record<string, string>
 }
 
@@ -81,6 +82,7 @@ function ActionBar({
   onOpenPullRequest,
   onOpenWorktree,
   onCloseWorktree,
+  onManageWorkflows,
   keybinds
 }: ActionBarProps): React.JSX.Element {
   const [isRepo, setIsRepo] = useState(false)
@@ -345,6 +347,7 @@ function ActionBar({
           cwd={cwd}
           onOpenWorktree={onOpenWorktree}
           onCloseWorktree={onCloseWorktree}
+          onManage={onManageWorkflows}
         />
         <BranchSelect key={cwd ?? 'none'} cwd={cwd} />
         <button

@@ -31,6 +31,7 @@ interface SessionProps {
   onOpenCommit: (cwd: string, hash: string) => void
   onCwd: (sessionId: number, cwd: string) => void
   onStatus: (sessionId: number, status: SessionStatus) => void
+  onTitle: (sessionId: number, title: string) => void
 }
 
 function focusPane(container: Element | null | undefined): void {
@@ -54,7 +55,8 @@ function Session({
   onCloseSplit,
   onOpenCommit,
   onCwd,
-  onStatus
+  onStatus,
+  onTitle
 }: SessionProps): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const mainRef = useRef<HTMLDivElement>(null)
@@ -109,6 +111,7 @@ function Session({
   })
 
   const handleBottomCwd = useCallback((next: string) => onCwd(id, next), [onCwd, id])
+  const handlePrimaryTitle = useCallback((next: string) => onTitle(id, next), [onTitle, id])
 
   const savedGrows: Record<string, number> = {}
   if (savedPaneRatios && savedPaneRatios.length === panes.length) {
@@ -215,6 +218,7 @@ function Session({
                 active={active}
                 focusOnActivate={i === 0}
                 onStatus={paneStatusCbs[pane.id]}
+                onTitle={i === 0 ? handlePrimaryTitle : undefined}
               />
             </div>
           </Fragment>
