@@ -5,6 +5,7 @@ import os from 'os'
 import path from 'path'
 import { simpleGit, SimpleGit, StatusResult } from 'simple-git'
 import { filterPaths } from './snowignore'
+import { activeCommitAgent, CommitAgent } from './snowconfig'
 import { parkableBranches, workflowsPath } from './registry'
 import { collapseHome, samePath } from './config'
 import { isExternalUrl } from './external'
@@ -246,12 +247,57 @@ const commitMessageDisallowedTools = [
   'Task'
 ]
 
-function runClaude(input: string): Promise<string> {
+interface CommitAgentSpec {
+  command: string
+  timeoutMs: number
+  args: (messageFile: string) => string[]
+  read: (stdout: string, messageFile: string) => string
+}
+
+const commitAgentSpecs: Record<CommitAgent, CommitAgentSpec> = {
+  claude: {
+    command: 'claude',
+    timeoutMs: commitMessageTimeoutMs,
+    args: () => ['-p', '--disallowedTools', ...commitMessageDisallowedTools],
+    read: (stdout) => stdout
+  },
+  codex: {
+    command: 'codex',
+    timeoutMs: commitMessageTimeoutMs * 2,
+    args: (messageFile) => [
+      'exec',
+      '--sandbox',
+      'read-only',
+      '--skip-git-repo-check',
+      '--color',
+      'never',
+      '-c',
+      'model_reasoning_effort=low',
+      '--output-last-message',
+      messageFile,
+      '-'
+    ],
+    read: (_stdout, messageFile) => {
+      try {
+        return fs.readFileSync(messageFile, 'utf8')
+      } catch {
+        return ''
+      }
+    }
+  }
+}
+
+function shellQuote(arg: string): string {
+  return `"${arg.replace(/"/g, '\\"')}"`
+}
+
+function spawnCommitAgent(spec: CommitAgentSpec, args: string[], input: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn('claude', ['-p', '--disallowedTools', ...commitMessageDisallowedTools], {
+    const useShell = process.platform === 'win32'
+    const child = spawn(spec.command, useShell ? args.map(shellQuote) : args, {
       cwd: os.tmpdir(),
       windowsHide: true,
-      shell: process.platform === 'win32'
+      shell: useShell
     })
 
     let stdout = ''
@@ -262,8 +308,8 @@ function runClaude(input: string): Promise<string> {
       if (settled) return
       settled = true
       child.kill()
-      reject(new Error('Timed out waiting for claude to generate a commit message'))
-    }, commitMessageTimeoutMs)
+      reject(new Error(`Timed out waiting for ${spec.command} to generate a commit message`))
+    }, spec.timeoutMs)
 
     child.stdout.on('data', (chunk: Buffer) => (stdout += chunk))
     child.stderr.on('data', (chunk: Buffer) => (stderr += chunk))
@@ -278,12 +324,23 @@ function runClaude(input: string): Promise<string> {
       settled = true
       clearTimeout(timer)
       if (code === 0) resolve(stdout)
-      else reject(new Error(stderr.trim() || `claude exited with code ${code}`))
+      else reject(new Error(stderr.trim() || `${spec.command} exited with code ${code}`))
     })
 
     child.stdin.write(input)
     child.stdin.end()
   })
+}
+
+async function runCommitAgent(agent: CommitAgent, input: string): Promise<string> {
+  const spec = commitAgentSpecs[agent]
+  const messageFile = path.join(os.tmpdir(), `snow-commit-${process.pid}-${Date.now()}.txt`)
+  try {
+    const stdout = await spawnCommitAgent(spec, spec.args(messageFile), input)
+    return spec.read(stdout, messageFile)
+  } finally {
+    fs.rmSync(messageFile, { force: true })
+  }
 }
 
 function parseNumstat(raw: string): GitCommitFile[] {
@@ -1766,12 +1823,18 @@ export function registerGitHandlers(): void {
       if (outcome.diff === undefined) return outcome
       if (!outcome.diff.trim()) return { ok: false, error: 'Nothing to commit' }
 
+      const agent = activeCommitAgent()
       try {
-        const raw = await runClaude(
+        const raw = await runCommitAgent(
+          agent,
           `${commitMessagePrompt}\n\n${truncateDiffForPrompt(outcome.diff)}`
         )
         const message = cleanCommitMessage(raw)
-        if (!message) return { ok: false, error: 'Claude returned an empty commit message' }
+        if (!message)
+          return {
+            ok: false,
+            error: `${commitAgentSpecs[agent].command} returned an empty commit message`
+          }
         return { ok: true, message }
       } catch (error) {
         return {

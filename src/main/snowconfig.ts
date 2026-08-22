@@ -27,10 +27,15 @@ export interface Layout {
   bottomCollapsed?: boolean
 }
 
+export type CommitAgent = 'claude' | 'codex'
+
+export const commitAgents: CommitAgent[] = ['claude', 'codex']
+
 export interface SnowConfig {
   presets: Preset[]
   name?: string
   startupCommand?: string
+  commitAgent?: CommitAgent
   gradients?: boolean
   theme?: string
   tourSeen?: boolean
@@ -114,6 +119,11 @@ function validateStringField(raw: unknown, key: string): string | null {
   return validatePresentString(raw, key) || null
 }
 
+function validateCommitAgent(raw: unknown, key: string): CommitAgent | null {
+  const value = validatePresentString(raw, key)?.toLowerCase()
+  return commitAgents.find((agent) => agent === value) ?? null
+}
+
 function validateBooleanField(raw: unknown, key: string): boolean | null {
   if (!raw || typeof raw !== 'object') return null
   const value = (raw as Record<string, unknown>)[key]
@@ -157,6 +167,7 @@ interface RawConfig {
   presets: Preset[]
   name: string | null
   startupCommand: string | null
+  commitAgent: CommitAgent | null
   gradients: boolean | null
   theme: string | null
   tourSeen: boolean | null
@@ -173,6 +184,7 @@ function rawConfig(): RawConfig {
       presets: validate(raw),
       name: validateStringField(raw, 'name'),
       startupCommand: validatePresentString(raw, 'startupCommand'),
+      commitAgent: validateCommitAgent(raw, 'commitAgent'),
       gradients: validateBooleanField(raw, 'gradients'),
       theme: validateStringField(raw, 'theme'),
       tourSeen: validateBooleanField(raw, 'tourSeen'),
@@ -187,6 +199,7 @@ function rawConfig(): RawConfig {
         presets: validate(defaultConfig),
         name: null,
         startupCommand: null,
+        commitAgent: null,
         gradients: null,
         theme: null,
         tourSeen: null,
@@ -198,6 +211,7 @@ function rawConfig(): RawConfig {
       presets: [],
       name: null,
       startupCommand: null,
+      commitAgent: null,
       gradients: null,
       theme: null,
       tourSeen: null,
@@ -210,13 +224,24 @@ function rawConfig(): RawConfig {
 
 function readSnowconfig(): SnowconfigResult {
   const file = snowconfigPath()
-  const { presets, name, startupCommand, gradients, theme, tourSeen, keybinds, layout, error } =
-    rawConfig()
+  const {
+    presets,
+    name,
+    startupCommand,
+    commitAgent,
+    gradients,
+    theme,
+    tourSeen,
+    keybinds,
+    layout,
+    error
+  } = rawConfig()
   return {
     config: {
       presets: presets.map((p) => ({ ...p, cwd: expandHome(p.cwd) })),
       ...(name ? { name } : {}),
       ...(startupCommand !== null ? { startupCommand } : {}),
+      ...(commitAgent ? { commitAgent } : {}),
       ...(gradients !== null ? { gradients } : {}),
       ...(theme ? { theme } : {}),
       ...(tourSeen !== null ? { tourSeen } : {}),
@@ -232,6 +257,10 @@ export function activeThemeName(): string {
   return rawConfig().theme ?? 'theme'
 }
 
+export function activeCommitAgent(): CommitAgent {
+  return rawConfig().commitAgent ?? 'claude'
+}
+
 function writeConfig(next: Omit<RawConfig, 'error'>): SnowconfigResult {
   const file = snowconfigPath()
   try {
@@ -239,6 +268,7 @@ function writeConfig(next: Omit<RawConfig, 'error'>): SnowconfigResult {
     const data: SnowConfig = { presets: next.presets }
     if (next.name) data.name = next.name
     if (next.startupCommand !== null) data.startupCommand = next.startupCommand
+    if (next.commitAgent) data.commitAgent = next.commitAgent
     if (next.gradients !== null) data.gradients = next.gradients
     if (next.theme) data.theme = next.theme
     if (next.tourSeen !== null) data.tourSeen = next.tourSeen
@@ -252,12 +282,39 @@ function writeConfig(next: Omit<RawConfig, 'error'>): SnowconfigResult {
 }
 
 function mutateConfig(mutate: (cfg: Omit<RawConfig, 'error'>) => boolean): SnowconfigResult {
-  const { presets, name, startupCommand, gradients, theme, tourSeen, keybinds, layout, error } =
-    rawConfig()
+  const {
+    presets,
+    name,
+    startupCommand,
+    commitAgent,
+    gradients,
+    theme,
+    tourSeen,
+    keybinds,
+    layout,
+    error
+  } = rawConfig()
   if (error) return readSnowconfig()
-  const cfg = { presets, name, startupCommand, gradients, theme, tourSeen, keybinds, layout }
+  const cfg = {
+    presets,
+    name,
+    startupCommand,
+    commitAgent,
+    gradients,
+    theme,
+    tourSeen,
+    keybinds,
+    layout
+  }
   if (!mutate(cfg)) return readSnowconfig()
   return writeConfig(cfg)
+}
+
+export function setActiveTheme(name: string): SnowconfigResult {
+  return mutateConfig((cfg) => {
+    cfg.theme = name || null
+    return true
+  })
 }
 
 export function presetForDir(dir: string, startupCommand?: string): Preset | null {
@@ -467,13 +524,9 @@ export function registerSnowconfigHandlers(): void {
         return true
       })
   )
-  ipcMain.handle('snowconfig:setTheme', (_e, theme: string): SnowconfigResult => {
-    const name = String(theme ?? '').trim()
-    return mutateConfig((cfg) => {
-      cfg.theme = name || null
-      return true
-    })
-  })
+  ipcMain.handle('snowconfig:setTheme', (_e, theme: string): SnowconfigResult =>
+    setActiveTheme(String(theme ?? '').trim())
+  )
   ipcMain.handle('snowconfig:setTourSeen', (): SnowconfigResult =>
     mutateConfig((cfg) => {
       cfg.tourSeen = true

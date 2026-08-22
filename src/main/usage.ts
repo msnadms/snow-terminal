@@ -5,23 +5,22 @@ import path from 'path'
 import { broadcast } from './config'
 import { log } from './log'
 
+export type UsageAgent = 'claude' | 'codex'
+
 export interface UsageResult {
   session: number
+  agents: Record<UsageAgent, number>
   error: string | null
 }
 
 const sessionStart = Date.now()
-
-function projectsDir(): string {
-  return path.join(os.homedir(), '.claude', 'projects')
-}
 
 interface Rates {
   input: number
   output: number
 }
 
-function ratesFor(model: string): Rates {
+function anthropicRates(model: string): Rates {
   const m = model.toLowerCase()
   if (m.includes('fable') || m.includes('mythos')) return { input: 10, output: 50 }
   if (m.includes('opus')) return { input: 5, output: 25 }
@@ -30,7 +29,16 @@ function ratesFor(model: string): Rates {
   return { input: 0, output: 0 }
 }
 
-interface Usage {
+function openaiRates(model: string): Rates {
+  const m = model.toLowerCase()
+  if (!m.startsWith('gpt-5') && !m.startsWith('codex')) return { input: 0, output: 0 }
+  if (m.includes('codex-mini')) return { input: 1.5, output: 6 }
+  if (m.includes('nano')) return { input: 0.05, output: 0.4 }
+  if (m.includes('mini')) return { input: 0.25, output: 2 }
+  return { input: 1.25, output: 10 }
+}
+
+interface AnthropicUsage {
   input_tokens?: number
   output_tokens?: number
   cache_read_input_tokens?: number
@@ -41,8 +49,8 @@ interface Usage {
   }
 }
 
-function costOf(model: string, usage: Usage): number {
-  const { input, output } = ratesFor(model)
+function anthropicCost(model: string, usage: AnthropicUsage): number {
+  const { input, output } = anthropicRates(model)
   if (!input && !output) return 0
   const perIn = input / 1_000_000
   const perOut = output / 1_000_000
@@ -58,6 +66,22 @@ function costOf(model: string, usage: Usage): number {
   )
 }
 
+interface CodexUsage {
+  input_tokens?: number
+  cached_input_tokens?: number
+  output_tokens?: number
+}
+
+function codexCost(model: string, usage: CodexUsage): number {
+  const { input, output } = openaiRates(model)
+  if (!input && !output) return 0
+  const perIn = input / 1_000_000
+  const perOut = output / 1_000_000
+  const cached = usage.cached_input_tokens ?? 0
+  const uncached = Math.max(0, (usage.input_tokens ?? 0) - cached)
+  return uncached * perIn + cached * perIn * 0.1 + (usage.output_tokens ?? 0) * perOut
+}
+
 interface Entry {
   key: string
   ts: number
@@ -70,22 +94,22 @@ interface CachedFile {
   entries: Entry[]
 }
 
-const fileCache = new Map<string, CachedFile>()
-
-function parseFile(full: string): Entry[] {
-  let raw: string
+function readLines(full: string): string[] {
   try {
-    raw = fs.readFileSync(full, 'utf8')
+    return fs.readFileSync(full, 'utf8').split('\n')
   } catch {
     return []
   }
+}
+
+function parseClaudeFile(full: string): Entry[] {
   const entries: Entry[] = []
-  for (const line of raw.split('\n')) {
+  for (const line of readLines(full)) {
     if (!line.includes('"usage"')) continue
     let entry: {
       timestamp?: string
       requestId?: string
-      message?: { model?: string; id?: string; usage?: Usage }
+      message?: { model?: string; id?: string; usage?: AnthropicUsage }
     }
     try {
       entry = JSON.parse(line)
@@ -97,38 +121,81 @@ function parseFile(full: string): Entry[] {
     const ts = Date.parse(entry.timestamp)
     if (Number.isNaN(ts)) continue
     const key = `${entry.message?.id ?? ''}:${entry.requestId ?? ''}`
-    entries.push({ key, ts, cost: costOf(entry.message?.model ?? '', usage) })
+    entries.push({ key, ts, cost: anthropicCost(entry.message?.model ?? '', usage) })
   }
   return entries
 }
 
-function computeUsage(): UsageResult {
-  const dir = projectsDir()
-  const seen = new Set<string>()
-  let session = 0
-
-  let projects: string[]
-  try {
-    projects = fs.readdirSync(dir)
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException
-    if (e.code === 'ENOENT') return { session: 0, error: null }
-    return { session: 0, error: e.message }
-  }
-
-  const live = new Set<string>()
-  const all: Entry[] = []
-  for (const project of projects) {
-    const projectDir = path.join(dir, project)
-    let files: string[]
+function parseCodexFile(full: string): Entry[] {
+  const entries: Entry[] = []
+  let model = ''
+  for (const line of readLines(full)) {
+    if (!line.includes('"model"') && !line.includes('"token_count"')) continue
+    let entry: {
+      timestamp?: string
+      payload?: {
+        type?: string
+        model?: string
+        info?: { last_token_usage?: CodexUsage }
+      }
+    }
     try {
-      files = fs.readdirSync(projectDir)
+      entry = JSON.parse(line)
     } catch {
       continue
     }
-    for (const file of files) {
-      if (!file.endsWith('.jsonl')) continue
-      const full = path.join(projectDir, file)
+    const payload = entry.payload
+    if (!payload) continue
+    if (payload.model) model = payload.model
+    if (payload.type !== 'token_count') continue
+    const usage = payload.info?.last_token_usage
+    if (!usage || !entry.timestamp) continue
+    const ts = Date.parse(entry.timestamp)
+    if (Number.isNaN(ts)) continue
+    entries.push({ key: ':', ts, cost: codexCost(model, usage) })
+  }
+  return entries
+}
+
+interface Source {
+  agent: UsageAgent
+  dir: string
+  parse: (full: string) => Entry[]
+}
+
+const sources: Source[] = [
+  { agent: 'claude', dir: path.join(os.homedir(), '.claude', 'projects'), parse: parseClaudeFile },
+  { agent: 'codex', dir: path.join(os.homedir(), '.codex', 'sessions'), parse: parseCodexFile }
+]
+
+const fileCache = new Map<string, CachedFile>()
+
+function sessionFiles(dir: string): string[] | NodeJS.ErrnoException {
+  try {
+    return fs
+      .readdirSync(dir, { recursive: true })
+      .map((name) => String(name))
+      .filter((name) => name.endsWith('.jsonl'))
+      .map((name) => path.join(dir, name))
+  } catch (err) {
+    return err as NodeJS.ErrnoException
+  }
+}
+
+function computeUsage(): UsageResult {
+  const agents: Record<UsageAgent, number> = { claude: 0, codex: 0 }
+  const live = new Set<string>()
+  let error: string | null = null
+
+  for (const source of sources) {
+    const files = sessionFiles(source.dir)
+    if (!Array.isArray(files)) {
+      if (files.code !== 'ENOENT') error = error ?? files.message
+      continue
+    }
+
+    const seen = new Set<string>()
+    for (const full of files) {
       let stat: fs.Stats
       try {
         stat = fs.statSync(full)
@@ -141,11 +208,16 @@ function computeUsage(): UsageResult {
       const entries =
         cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size
           ? cached.entries
-          : parseFile(full)
+          : source.parse(full)
       if (entries !== cached?.entries) {
         fileCache.set(full, { mtimeMs: stat.mtimeMs, size: stat.size, entries })
       }
-      for (const entry of entries) all.push(entry)
+      for (const { key, ts, cost } of entries) {
+        if (ts < sessionStart) continue
+        if (key !== ':' && seen.has(key)) continue
+        seen.add(key)
+        agents[source.agent] += cost
+      }
     }
   }
 
@@ -153,42 +225,36 @@ function computeUsage(): UsageResult {
     if (!live.has(full)) fileCache.delete(full)
   }
 
-  for (const { key, ts, cost } of all) {
-    if (ts < sessionStart) continue
-    if (key !== ':' && seen.has(key)) continue
-    seen.add(key)
-    session += cost
-  }
-
-  return { session, error: null }
+  return { session: agents.claude + agents.codex, agents, error }
 }
 
-let watcher: fs.FSWatcher | null = null
+const watchers: fs.FSWatcher[] = []
 let timer: NodeJS.Timeout | null = null
 
 function watchUsage(): void {
-  const dir = projectsDir()
-  try {
-    fs.mkdirSync(dir, { recursive: true })
-    const fsWatcher = fs.watch(dir, { recursive: true }, (_event, filename) => {
-      if (filename && !filename.endsWith('.jsonl')) return
-      if (timer) clearTimeout(timer)
-      timer = setTimeout(() => {
-        timer = null
-        broadcast('usage:changed', computeUsage())
-      }, 1000)
-    })
-    fsWatcher.on('error', () => fsWatcher.close())
-    watcher = fsWatcher
-  } catch (err) {
-    log('warn', 'usage', 'watch failed', { error: String(err) })
-    watcher = null
+  for (const { dir, agent } of sources) {
+    try {
+      if (!fs.existsSync(path.dirname(dir))) continue
+      fs.mkdirSync(dir, { recursive: true })
+      const watcher = fs.watch(dir, { recursive: true }, (_event, filename) => {
+        if (filename && !filename.endsWith('.jsonl')) return
+        if (timer) clearTimeout(timer)
+        timer = setTimeout(() => {
+          timer = null
+          broadcast('usage:changed', computeUsage())
+        }, 1000)
+      })
+      watcher.on('error', () => watcher.close())
+      watchers.push(watcher)
+    } catch (err) {
+      log('warn', 'usage', 'watch failed', { agent, error: String(err) })
+    }
   }
 }
 
 export function disposeUsageWatcher(): void {
-  watcher?.close()
-  watcher = null
+  for (const watcher of watchers) watcher.close()
+  watchers.length = 0
   if (timer) clearTimeout(timer)
   timer = null
 }

@@ -246,9 +246,7 @@ function WorkflowManager({
                             title={status === 'busy' ? 'Busy' : 'Ready for input'}
                           />
                         )}
-                        {state && (
-                          <span className={`wfm-state wfm-state-${state}`}>{state}</span>
-                        )}
+                        {state && <span className={`wfm-state wfm-state-${state}`}>{state}</span>}
                       </span>
                       <span
                         className={`wfm-branch${entry.exists ? '' : ' wfm-branch-missing'}`}

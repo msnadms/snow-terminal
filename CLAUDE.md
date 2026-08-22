@@ -209,7 +209,8 @@ active file hot-reloads it. A **switch** writes `.snowconfig`, not `themes/`, so
 doesn't fire — instead the renderer's shared theme store (`themeStore.ts`) re-fetches `theme:get` on
 `snowconfig:changed`, which is why it subscribes to both events. `theme.ts` importing
 `activeThemeName` from `snowconfig.ts` is the one cross-config dependency and stays acyclic
-(`snowconfig.ts` imports nothing back).
+(`snowconfig.ts` imports nothing back). Files land in that directory by hand or through
+`snow theme <url>` (see _The `snow` command_).
 
 The picker is `ThemeSelect` (bottom-left of the home page): it lists `theme:list`, shows the active
 name, and writes the choice through `snowconfig:setTheme`. It is styled with the `--ui-*` vars, so the
@@ -348,7 +349,7 @@ from `Add, Commit` to `Commit N staged files`.
 Session presets for the home tab, as JSON. `src/main/snowconfig.ts` mirrors `theme.ts`'s lifecycle
 (default written with `flag: 'wx'` on first launch, directory `fs.watch` broadcasting
 `snowconfig:changed`). Shape is
-`{ presets: { name, cwd, default?, commands?, startupCommand?, splits?, paneRatios?, hidden? }[], name?, startupCommand?, gradients?, theme?, tourSeen?, keybinds?, layout? }` (`splits` are other presets' names); entries
+`{ presets: { name, cwd, default?, commands?, startupCommand?, splits?, paneRatios?, hidden? }[], name?, startupCommand?, commitAgent?, gradients?, theme?, tourSeen?, keybinds?, layout? }` (`splits` are other presets' names); entries
 missing a string `name`/`cwd` are dropped, and a leading `~` in `cwd` is expanded to the home dir **only on
 read**, so the renderer gets absolute paths while the file keeps the raw `~`. The top-level `name`
 drives the home tab's `Hello {name}` greeting (falling back to `snow`); `seedName()` on registration
@@ -365,6 +366,14 @@ that `useSnowconfig` exposes and `App` passes to `GitPanel` to toggle the animat
 gradients on or off. `theme` is the active theme's base filename under `themes/` (see `theme.json`
 above); the home-page `ThemeSelect` picker writes it through `snowconfig:setTheme`, and `theme.ts`
 reads it back via `activeThemeName()` to pick which file to load.
+
+`commitAgent` picks which CLI writes the AI commit message — `"claude"` (the default when absent or
+unrecognized) or `"codex"`. It is hand-edited only, and validated as an enum rather than a free
+string: a typo falls back to Claude instead of spawning a command that does not exist. `git.ts` reads
+it through `activeCommitAgent()`, the second cross-config dependency on `snowconfig.ts` after
+`theme.ts`'s `activeThemeName()`, and it stays acyclic for the same reason (`snowconfig.ts` imports
+nothing back). It is read **per invocation**, not cached, so an edit takes effect on the next click
+without a restart. See _AI commit messages_ below for what each agent is spawned as.
 
 `layout` is an optional `{ gitWidth?, gitCollapsed?, bottomHeight?, bottomCollapsed? }` object that
 persists the resizable-pane sizes across sessions (deliberately in the config, not renderer
@@ -620,6 +629,70 @@ unit, so every open path (`HomePage`, the tab strip `+`, the `newTab`/`openPrese
 keybinds) shares one signature — which seeds the session's cwd (so git/tab-label are correct before the
 shell's first OSC 7) and passes it to both terminals' spawn.
 
+## Agents (Claude and Codex)
+
+Both agent-facing features — the AI commit message and the usage meter — support **Claude Code and
+Codex**. They are separate mechanisms and do not share a selector: the commit message runs whichever
+one `.snowconfig`'s `commitAgent` names, while the usage meter always reports both, because cost is
+observed after the fact rather than chosen.
+
+### AI commit messages
+
+`git:generateCommitMessage` builds the prompt and diff exactly as before, then hands them to
+`runCommitAgent(agent, input)`. The per-agent differences live in one `commitAgentSpecs` table
+(`command`, `timeoutMs`, `args`, `read`) so the spawn/timeout/stdin plumbing in `spawnCommitAgent` is
+written once; the error strings interpolate `spec.command`, so a failure names the CLI that actually
+ran rather than always saying "claude".
+
+- **claude** — `claude -p --disallowedTools …`, message read from **stdout**.
+- **codex** — `codex exec … -` , message read from the file passed to `--output-last-message`.
+  Reading stdout would not work: `codex exec` prints a session banner, the turn log, and a token
+  count around the message, so the file is the only clean channel. A missing file reads as empty,
+  which surfaces as the ordinary "returned an empty commit message" error instead of an ENOENT.
+
+Three codex flags are load-bearing. `--skip-git-repo-check` is required because the child runs in
+`os.tmpdir()`, which is not a repo (the diff arrives on stdin, so it never needs the worktree).
+`--sandbox read-only` matches the intent of Claude's `--disallowedTools` list — writing a commit
+message needs no tools. `-c model_reasoning_effort=low` overrides the user's `config.toml` **for this
+one invocation**: the task is mechanical, and at the default effort a large diff costs seconds and
+cents per click. Codex still gets `timeoutMs * 2`, since its floor is a full agent turn rather than a
+single completion.
+
+On Windows both CLIs are `.cmd` shims, so the child is spawned with `shell: true` — and Node does not
+quote arguments in shell mode, so `spawnCommitAgent` quotes any argument containing whitespace. That
+is not hypothetical: the `--output-last-message` path goes through `os.tmpdir()`, which sits under the
+user's profile and contains a space whenever their account name does.
+
+### Usage cost
+
+`src/main/usage.ts` estimates spend **since snow started** (`sessionStart`) by reading each CLI's own
+session logs — nothing is ever sent anywhere to price it. One `sources` table drives everything: an
+agent name, a directory, and a parser.
+
+- **claude** — `~/.claude/projects/**/*.jsonl`, priced from `message.usage` at Anthropic rates
+  (separate 5m/1h cache-write tiers, cache reads at 0.1×).
+- **codex** — `~/.codex/sessions/**/*.jsonl` (rollout files, nested by date), priced from
+  `payload.info.last_token_usage` at OpenAI rates (cached input at 0.1×).
+
+Codex needs two things Claude does not. Its events carry no model, so the parser tracks the most
+recent `payload.model` — emitted by `turn_context`, which always precedes that turn's `token_count`
+events — and an unresolved model prices at zero rather than guessing. And `last_token_usage` is a
+**per-turn delta** while the sibling `total_token_usage` is cumulative, so summing the deltas is what
+avoids counting every turn again on each subsequent event. Codex entries therefore carry the `':'`
+key, the existing "never dedup" sentinel, since a rollout file has no request id and each event is
+already counted once; Claude entries keep their `id:requestId` dedup, which is scoped per source.
+
+Files are cached on `mtimeMs:size` and skipped entirely when older than `sessionStart`. Directory
+listing is one recursive `readdirSync`, which handles Claude's one-level and Codex's date-nested
+layouts without encoding either depth. A missing root is not an error — the common case is simply not
+having one of the two CLIs installed — so only a non-`ENOENT` failure sets `error`.
+
+`UsageResult` reports `agents` (per-agent cost) alongside `session` (their total), so the meter stays
+one number and the tooltip names the split only when both are non-zero. The watcher is per source and
+**never creates a root whose parent is absent**: a machine without Codex does not get a `~/.codex`
+directory conjured by snow, but one that has it gets the watcher attached so the meter comes alive
+the first time Codex writes.
+
 #### `snow.log`
 
 `src/main/log.ts` owns it. `initLogging()` runs at the top of `src/main/index.ts` — before
@@ -670,6 +743,43 @@ just-created preset entirely. `App` still prefers its own copy when it has one
 (`presets.find(…) ?? preset`), which is what keeps a `splits` preset opening its splits; the startup
 pull is gated on `presets.length > 0` for the same reason (a corrupt config yields no preset to
 lose, since `presetForDir` bails on a read error).
+
+#### `snow theme <url> [name]`
+
+The other verb. `runArgs` dispatches on the first positional being `theme` **with at least one more
+argument**, so a bare `snow theme` still means "open the `./theme` directory" and the verb never
+shadows a real folder of that name. Everything else falls through to the folder path unchanged, and
+both entry points — startup argv and `second-instance` — go through the one `runArgs`, so the command
+works whether or not a window is already open.
+
+`themeInstall.ts` owns the download, keeping argv/PATH concerns in `cli.ts` and theme-file concerns in
+`theme.ts`. Sources must be `https:`; a `github.com/<owner>/<repo>/blob/…` URL is rewritten to
+`raw.githubusercontent.com`, since pasting the page URL is the obvious thing to do and it returns
+HTML. The name comes from the URL's `.json` basename (sanitized to `[A-Za-z0-9_-]`) or from the
+optional second argument, and a URL whose last segment is **not** a `.json` file refuses to guess
+rather than naming the theme after a directory. An existing file of that name is never overwritten
+without `--force`, which is what keeps two remote themes whose names sanitize to the same local one
+from silently clobbering each other.
+
+Downloaded JSON is checked by `validateTheme`, which is deliberately **stricter than `mergeColors`**.
+`mergeColors` degrades per key so a hand-edit can never break the running app; a download has no
+author present to notice, so a malformed value is a refusal instead. The split is between values and
+keys: a missing **section** or a non-hex value is an error and nothing is written, while a missing
+**key** installs and is reported as `Using defaults for: …`. That asymmetry is what keeps a theme
+published against an older snow working the moment a new key is added, while still rejecting an
+unrelated JSON file — which under a keys-optional rule would install happily as an all-defaults theme.
+
+Install writes the file and then activates it through `setActiveTheme`, the non-IPC path into
+`mutateConfig` (the same shape as `presetForDir`, and now also what the `snowconfig:setTheme` handler
+calls). Write order does not matter: the `themes/` watcher re-reads the **active** theme, so the file
+write is a no-op broadcast, and the `.snowconfig` write is what the renderer's `themeStore` picks up
+on `snowconfig:changed`.
+
+**The shim detaches, so the command cannot print.** Both `start ""` and `nohup … &` discard stdout,
+and a packaged Electron app on Windows has no console attached in the first place — so results go to
+`snow.log` and to the window. Success is self-evident (the app recolors); a failure broadcasts
+`theme:installed` with an `error`, which `App` renders in the shared `FailureDialog`. That is why the
+CLI surface is an action rather than a query: a `list` verb would have nowhere to print.
 
 `installCommand()` is the PATH shim, and it runs itself — on every start, from `registerCliHandlers`,
 with **no UI at all**. `commandState` decides: `install` and `update` (the shim points at a

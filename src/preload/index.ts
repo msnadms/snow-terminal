@@ -21,6 +21,7 @@ import type {
 import type { BrowserBounds, BrowserState } from '../main/browser'
 import type { WorkflowList, WorkflowOverview, WorkflowResult } from '../main/workflow'
 import type { ThemeResult } from '../main/theme'
+import type { ThemeInstallResult } from '../main/themeInstall'
 import type { SnowignoreResult } from '../main/snowignore'
 import type { SnowconfigResult, Layout, Preset } from '../main/snowconfig'
 import type { UsageResult } from '../main/usage'
@@ -212,10 +213,17 @@ const workflow = {
 const theme = {
   get: (): Promise<ThemeResult> => ipcRenderer.invoke('theme:get'),
   list: (): Promise<string[]> => ipcRenderer.invoke('theme:list'),
+  pendingInstall: (): Promise<ThemeInstallResult | null> =>
+    ipcRenderer.invoke('theme:pendingInstall'),
   onChanged: (callback: (result: ThemeResult) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, result: ThemeResult): void => callback(result)
     ipcRenderer.on('theme:changed', listener)
     return () => ipcRenderer.removeListener('theme:changed', listener)
+  },
+  onInstalled: (callback: (result: ThemeInstallResult) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, result: ThemeInstallResult): void => callback(result)
+    ipcRenderer.on('theme:installed', listener)
+    return () => ipcRenderer.removeListener('theme:installed', listener)
   }
 }
 

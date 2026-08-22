@@ -155,7 +155,7 @@ export function themesDir(): string {
   return path.join(configDir(), 'themes')
 }
 
-function themeFile(name: string): string {
+export function themeFile(name: string): string {
   const safe = name.replace(/[^a-zA-Z0-9_-]/g, '') || 'theme'
   return path.join(themesDir(), `${safe}.json`)
 }
@@ -187,6 +187,43 @@ function mergeColors<T extends object>(raw: unknown, base: T): T {
   return Object.fromEntries(
     entries.map(([key, fallback]) => [key, color(source[key], fallback)])
   ) as T
+}
+
+export interface ThemeCheck {
+  errors: string[]
+  missing: string[]
+}
+
+export function validateTheme(raw: unknown): ThemeCheck {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    return { errors: ['the file is not a JSON object'], missing: [] }
+
+  const source = raw as Record<string, unknown>
+  const sections = Object.entries(defaultTheme) as [string, Record<string, string | string[]>][]
+  const errors: string[] = []
+  const missing: string[] = []
+
+  for (const [section, base] of sections) {
+    const block = source[section]
+    if (!block || typeof block !== 'object' || Array.isArray(block)) {
+      errors.push(`"${section}" is missing`)
+      continue
+    }
+    const values = block as Record<string, unknown>
+    for (const [key, fallback] of Object.entries(base)) {
+      const value = values[key]
+      if (value === undefined) missing.push(`${section}.${key}`)
+      else if (Array.isArray(fallback)) {
+        const list = Array.isArray(value) ? value : null
+        if (!list || !list.every((v) => typeof v === 'string' && hexColor.test(v.trim())))
+          errors.push(`${section}.${key} is not a list of hex colors`)
+        else if (list.length === 0) errors.push(`${section}.${key} is empty`)
+      } else if (typeof value !== 'string' || !hexColor.test(value.trim()))
+        errors.push(`${section}.${key} is not a hex color`)
+    }
+  }
+
+  return { errors, missing }
 }
 
 function mergeGit(raw: unknown): GitColors {

@@ -11,12 +11,15 @@ import PanelRestore from './components/PanelRestore'
 import Tour from './components/Tour'
 import WorkflowManager from './components/WorkflowManager'
 import WorkingDiffView from './components/WorkingDiffView'
-import { basename, isInside, normalizePath, shortHash, uniqueBy } from './format'
+import FailureDialog from './components/FailureDialog'
+import { basename, failureOf, isInside, normalizePath, shortHash, uniqueBy } from './format'
+import type { Failure } from './format'
 import { nextTerminalId } from './terminalId'
 import { regroupTabs } from './tabGroups'
 import { useKeybinds, usePresetDigitKeybind } from './keybinds'
 import { useCollapsiblePane } from './useCollapsiblePane'
 import { useSnowconfig, visiblePresetEntries, type Preset } from './useSnowconfig'
+import type { ThemeInstallResult } from '../../main/themeInstall'
 
 type ActiveId = number | 'home' | 'workflows'
 
@@ -398,6 +401,18 @@ function App(): React.JSX.Element {
       })
     return window.api.cli.onOpen(open)
   }, [presets])
+
+  const [themeFailure, setThemeFailure] = useState<Failure | null>(null)
+
+  useEffect(() => {
+    const installed = (result: ThemeInstallResult): void => {
+      if (result.error) setThemeFailure(failureOf({ error: result.error, detail: result.detail }))
+    }
+    void window.api.theme.pendingInstall().then((result) => {
+      if (result) installed(result)
+    })
+    return window.api.theme.onInstalled(installed)
+  }, [])
 
   const openCommit = useCallback((cwd: string, hash: string): void => {
     const existing = tabsRef.current.find(
@@ -844,6 +859,9 @@ function App(): React.JSX.Element {
         )}
       </div>
       {showTour && <Tour onClose={closeTour} />}
+      {themeFailure && (
+        <FailureDialog failure={themeFailure} onDismiss={() => setThemeFailure(null)} />
+      )}
     </div>
   )
 }
