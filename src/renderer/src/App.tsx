@@ -115,6 +115,7 @@ function App(): React.JSX.Element {
     gradients,
     theme: themeName,
     tourSeen,
+    hooksPrompted,
     keybinds,
     layout,
     error: presetsError
@@ -824,6 +825,7 @@ function App(): React.JSX.Element {
               name={configName}
               theme={themeName ?? 'theme'}
               error={presetsError}
+              hooksPrompted={hooksPrompted}
               onOpenPreset={addSession}
             />
             <WorkflowManager

@@ -349,7 +349,7 @@ from `Add, Commit` to `Commit N staged files`.
 Session presets for the home tab, as JSON. `src/main/snowconfig.ts` mirrors `theme.ts`'s lifecycle
 (default written with `flag: 'wx'` on first launch, directory `fs.watch` broadcasting
 `snowconfig:changed`). Shape is
-`{ presets: { name, cwd, default?, commands?, startupCommand?, splits?, paneRatios?, hidden? }[], name?, startupCommand?, commitAgent?, gradients?, theme?, tourSeen?, keybinds?, layout? }` (`splits` are other presets' names); entries
+`{ presets: { name, cwd, default?, commands?, startupCommand?, splits?, paneRatios?, hidden? }[], name?, startupCommand?, commitAgent?, gradients?, theme?, tourSeen?, hooksPrompted?, keybinds?, layout? }` (`splits` are other presets' names); entries
 missing a string `name`/`cwd` are dropped, and a leading `~` in `cwd` is expanded to the home dir **only on
 read**, so the renderer gets absolute paths while the file keeps the raw `~`. The top-level `name`
 drives the home tab's `Hello {name}` greeting (falling back to `snow`); `seedName()` on registration
@@ -532,6 +532,11 @@ instead of renderer `localStorage`**: a synchronous `localStorage.getItem` on th
 observed blocking the renderer's main thread for ~5s while Chromium's DOM-Storage backend opened,
 freezing first paint and interactivity. Reading it from the already-loaded snowconfig (async IPC) keeps
 that off the main thread entirely — no renderer code touches `localStorage`.
+
+`hooksPrompted` is its sibling, set once the home page's one-time `snow hooks` offer is answered —
+and it records that snow **asked**, not that the user declined, which is why running
+`snow hooks remove` later does not bring the offer back. It lives here for the same
+`localStorage` reason `tourSeen` does.
 
 Whether the tour is **showing** is derived in `App`, not stored: `showTour` is
 `!tourSeen && !tourDismissed && activeTab.kind === 'shell' && repos.length > 0`, where `tourDismissed`
@@ -902,6 +907,19 @@ The shim prefers `node` on `PATH` and falls back to the app binary with `ELECTRO
 Electron-as-node is the fallback rather than the default because it costs an extra ~60 ms of startup
 on every single tool call; it is there at all because a native-binary Claude Code install does not
 imply a Node on `PATH`.
+
+The CLI verb stays the real entry point, but nothing in the UI would otherwise say the feature
+exists, so `HooksPrompt` offers it **once** from the home page. It is the narrow exception the §4c
+rule leaves open: the rule forbids installing silently, not asking. `hooks:state` answers whether to
+show it — `available` (is there a `~/.claude` at all, so a machine without Claude Code is never
+nagged), `installed` (snow's marker already present, so an install done from the CLI suppresses it),
+and the config's `hooksPrompted`. `hooks:run` is the same `runHooks` the verb calls and broadcasts
+the same `hooks:changed`, so the result lands in `App`'s shared notice dialog by the path that
+already existed rather than being reported twice.
+
+The answer is recorded whichever button is pressed, including when the install fails — the flag
+means "asked", and the failure dialog names what to fix and the verb to retry with. Snow asks once
+and then gets out of the way.
 
 Like `snow theme`, the shim detaches and cannot print, so the result goes to `snow.log` and is
 broadcast as `hooks:changed` for the window to render. Unlike a theme install, **success is not

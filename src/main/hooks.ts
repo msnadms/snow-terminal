@@ -1,14 +1,22 @@
-import { app } from 'electron'
+import { app, ipcMain } from 'electron'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { collapseHome, configDir } from './config'
+import { broadcast, collapseHome, configDir } from './config'
 import { log } from './log'
 
 export interface HooksResult {
   ok: boolean
   message: string
   detail: string
+  error: string | null
+}
+
+export interface HooksState {
+  /** Whether Claude Code is on this machine at all; nothing is worth offering when it is not. */
+  available: boolean
+  installed: boolean
+  settings: string
   error: string | null
 }
 
@@ -258,6 +266,14 @@ function remove(): HooksResult {
   }
 }
 
+export function hooksState(): HooksState {
+  const available = fs.existsSync(claudeDir())
+  const settings = collapseHome(settingsFile())
+  const { settings: parsed, error } = readSettings()
+  if (error) return { available, installed: false, settings, error }
+  return { available, installed: withoutSnow(parsed.hooks).removed > 0, settings, error: null }
+}
+
 export function runHooks(action: string): HooksResult {
   const result =
     action === 'install'
@@ -285,4 +301,13 @@ export function refreshHooks(): void {
   } catch (err) {
     log('warn', 'hooks', 'refresh failed', { error: (err as Error).message })
   }
+}
+
+export function registerHooksHandlers(): void {
+  ipcMain.handle('hooks:state', (): HooksState => hooksState())
+  ipcMain.handle('hooks:run', (_event, action: string): HooksResult => {
+    const result = runHooks(String(action ?? ''))
+    broadcast('hooks:changed', result)
+    return result
+  })
 }

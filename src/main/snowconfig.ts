@@ -39,6 +39,7 @@ export interface SnowConfig {
   gradients?: boolean
   theme?: string
   tourSeen?: boolean
+  hooksPrompted?: boolean
   keybinds?: Record<string, string>
   layout?: Layout
 }
@@ -171,6 +172,7 @@ interface RawConfig {
   gradients: boolean | null
   theme: string | null
   tourSeen: boolean | null
+  hooksPrompted: boolean | null
   keybinds: Record<string, string> | null
   layout: Layout | null
   error: string | null
@@ -188,6 +190,7 @@ function rawConfig(): RawConfig {
       gradients: validateBooleanField(raw, 'gradients'),
       theme: validateStringField(raw, 'theme'),
       tourSeen: validateBooleanField(raw, 'tourSeen'),
+      hooksPrompted: validateBooleanField(raw, 'hooksPrompted'),
       keybinds: validateKeybinds(raw, 'keybinds'),
       layout: validateLayout(raw, 'layout'),
       error: null
@@ -203,6 +206,7 @@ function rawConfig(): RawConfig {
         gradients: null,
         theme: null,
         tourSeen: null,
+        hooksPrompted: null,
         keybinds: null,
         layout: null,
         error: null
@@ -215,6 +219,7 @@ function rawConfig(): RawConfig {
       gradients: null,
       theme: null,
       tourSeen: null,
+      hooksPrompted: null,
       keybinds: null,
       layout: null,
       error: e.message
@@ -232,6 +237,7 @@ function readSnowconfig(): SnowconfigResult {
     gradients,
     theme,
     tourSeen,
+    hooksPrompted,
     keybinds,
     layout,
     error
@@ -245,6 +251,7 @@ function readSnowconfig(): SnowconfigResult {
       ...(gradients !== null ? { gradients } : {}),
       ...(theme ? { theme } : {}),
       ...(tourSeen !== null ? { tourSeen } : {}),
+      ...(hooksPrompted !== null ? { hooksPrompted } : {}),
       ...(keybinds ? { keybinds } : {}),
       ...(layout ? { layout } : {})
     },
@@ -272,6 +279,7 @@ function writeConfig(next: Omit<RawConfig, 'error'>): SnowconfigResult {
     if (next.gradients !== null) data.gradients = next.gradients
     if (next.theme) data.theme = next.theme
     if (next.tourSeen !== null) data.tourSeen = next.tourSeen
+    if (next.hooksPrompted !== null) data.hooksPrompted = next.hooksPrompted
     if (next.keybinds) data.keybinds = next.keybinds
     if (next.layout) data.layout = next.layout
     fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`)
@@ -290,6 +298,7 @@ function mutateConfig(mutate: (cfg: Omit<RawConfig, 'error'>) => boolean): Snowc
     gradients,
     theme,
     tourSeen,
+    hooksPrompted,
     keybinds,
     layout,
     error
@@ -303,6 +312,7 @@ function mutateConfig(mutate: (cfg: Omit<RawConfig, 'error'>) => boolean): Snowc
     gradients,
     theme,
     tourSeen,
+    hooksPrompted,
     keybinds,
     layout
   }
@@ -530,6 +540,12 @@ export function registerSnowconfigHandlers(): void {
   ipcMain.handle('snowconfig:setTourSeen', (): SnowconfigResult =>
     mutateConfig((cfg) => {
       cfg.tourSeen = true
+      return true
+    })
+  )
+  ipcMain.handle('snowconfig:setHooksPrompted', (): SnowconfigResult =>
+    mutateConfig((cfg) => {
+      cfg.hooksPrompted = true
       return true
     })
   )

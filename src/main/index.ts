@@ -13,7 +13,7 @@ import { registerSnowignoreHandlers, disposeSnowignoreWatcher } from './snowigno
 import { registerSnowconfigHandlers, disposeSnowconfigWatcher } from './snowconfig'
 import { registerUsageHandlers, disposeUsageWatcher } from './usage'
 import { registerAgentHandlers, disposeAgentWatcher } from './agents'
-import { refreshHooks } from './hooks'
+import { refreshHooks, registerHooksHandlers } from './hooks'
 import { initLogging, closeLogging, log, logPath, watchRenderer } from './log'
 import { configDir } from './config'
 import { startCli, registerCliHandlers } from './cli'
@@ -128,6 +128,7 @@ app.whenReady().then(() => {
 
   // Keep an installed hook shim pointing at this copy of the app; never installs one.
   refreshHooks()
+  registerHooksHandlers()
 
   // Resolve a folder passed on the command line into a preset; after the snowconfig
   // handlers, which seed the file this writes to.

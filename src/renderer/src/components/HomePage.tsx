@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { visiblePresetEntries, type Preset } from '../useSnowconfig'
 import ContextMenu from './ContextMenu'
+import HooksPrompt from './HooksPrompt'
 import SnowFall from './SnowFall'
 import ThemeSelect from './ThemeSelect'
 
@@ -10,6 +11,7 @@ interface HomePageProps {
   name: string | null
   theme: string
   error: string | null
+  hooksPrompted: boolean
   onOpenPreset: (preset: Preset) => void
 }
 
@@ -31,6 +33,7 @@ function HomePage({
   name: greetingName,
   theme,
   error,
+  hooksPrompted,
   onOpenPreset
 }: HomePageProps): React.JSX.Element {
   const [name, setName] = useState('')
@@ -146,6 +149,7 @@ function HomePage({
             <pre className="home-error-detail">{error}</pre>
           </div>
         )}
+        <HooksPrompt prompted={hooksPrompted} />
         <div className="home-presets">
           {visibleEntries.map(({ preset, index: i }) => (
             <div

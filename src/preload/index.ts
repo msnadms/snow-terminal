@@ -23,7 +23,7 @@ import type { WorkflowList, WorkflowOverview, WorkflowResult } from '../main/wor
 import type { ThemeResult } from '../main/theme'
 import type { ThemeInstallResult } from '../main/themeInstall'
 import type { AgentsResult } from '../main/agents'
-import type { HooksResult } from '../main/hooks'
+import type { HooksResult, HooksState } from '../main/hooks'
 import type { SnowignoreResult } from '../main/snowignore'
 import type { SnowconfigResult, Layout, Preset } from '../main/snowconfig'
 import type { UsageResult } from '../main/usage'
@@ -269,6 +269,8 @@ const snowconfig = {
   setTheme: (theme: string): Promise<SnowconfigResult> =>
     ipcRenderer.invoke('snowconfig:setTheme', theme),
   setTourSeen: (): Promise<SnowconfigResult> => ipcRenderer.invoke('snowconfig:setTourSeen'),
+  setHooksPrompted: (): Promise<SnowconfigResult> =>
+    ipcRenderer.invoke('snowconfig:setHooksPrompted'),
   setLayout: (patch: Partial<Layout>): Promise<SnowconfigResult> =>
     ipcRenderer.invoke('snowconfig:setLayout', patch),
   onChanged: (callback: (result: SnowconfigResult) => void): (() => void) => {
@@ -298,6 +300,9 @@ const agents = {
 
 const hooks = {
   pending: (): Promise<HooksResult | null> => ipcRenderer.invoke('hooks:pending'),
+  state: (): Promise<HooksState> => ipcRenderer.invoke('hooks:state'),
+  run: (action: 'install' | 'remove'): Promise<HooksResult> =>
+    ipcRenderer.invoke('hooks:run', action),
   onChanged: (callback: (result: HooksResult) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, result: HooksResult): void => callback(result)
     ipcRenderer.on('hooks:changed', listener)
