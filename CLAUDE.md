@@ -760,7 +760,26 @@ layouts without encoding either depth. A missing root is not an error — the co
 having one of the two CLIs installed — so only a non-`ENOENT` failure sets `error`.
 
 `UsageResult` reports `agents` (per-agent cost) alongside `session` (their total), so the meter stays
-one number and the tooltip names the split only when both are non-zero. The watcher is per source and
+one number and the tooltip names the split only when both are non-zero. It also reports
+`byDirectory`, which is what makes "what has this branch cost" answerable at all — with five
+parallel workflows a single global number answers nothing. It is an **added** field rather than a
+changed one, so every existing consumer keeps working.
+
+Attribution costs no extra filesystem work, because **both CLIs record their own working
+directory** in the lines the parsers already read: Claude puts `cwd` on every usage line, Codex puts
+it in the `session_meta` record that opens a rollout. `~/.claude/projects/<dashed-cwd>/` is
+deliberately **not** decoded — that encoding maps separators, dots, and underscores all onto `-`, so
+`Matcha_Flavoured_1_03` and `Matcha-Flavoured-1-03` are indistinguishable in it, and the exact path
+is sitting in the file anyway. The one asymmetry left is where the tag lives: a rollout marks its
+opening record on the **envelope** (`entry.type === 'session_meta'`) while every event marks itself
+on the **payload** (`payload.type === 'token_count'`), and reading the wrong one silently
+attributes nothing. Codex's cwd is per file, so it is stamped onto the entries after the parse loop
+rather than carried through it as a half-known value.
+
+Keys are resolved, slash-normalized absolute paths. The renderer sums a **subtree**, not one key:
+an agent session's cwd is frequently a subdirectory of the worktree it belongs to, so
+`WorkflowManager` folds every `byDirectory` entry inside a row's directory into that row (case
+insensitively, which is what Windows means by the same directory). The watcher is per source and
 **never creates a root whose parent is absent**: a machine without Codex does not get a `~/.codex`
 directory conjured by snow, but one that has it gets the watcher attached so the meter comes alive
 the first time Codex writes.

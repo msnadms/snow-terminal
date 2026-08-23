@@ -50,3 +50,9 @@ export function failureOf(result: { error?: string; detail?: string }): Failure 
   const body = lines[0]?.trim() === title ? lines.slice(1) : lines
   return { title, detail: body.join('\n').trim() }
 }
+
+export function formatCost(value: number): string {
+  if (value >= 100) return `$${Math.round(value)}`
+  if (value >= 10) return `$${value.toFixed(1)}`
+  return `$${value.toFixed(2)}`
+}

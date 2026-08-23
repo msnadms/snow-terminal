@@ -1,10 +1,5 @@
+import { formatCost } from '@renderer/format'
 import { useUsage } from '@renderer/useUsage'
-
-function formatCost(value: number): string {
-  if (value >= 100) return `$${Math.round(value)}`
-  if (value >= 10) return `$${value.toFixed(1)}`
-  return `$${value.toFixed(2)}`
-}
 
 const agentLabels: Record<string, string> = { claude: 'Claude Code', codex: 'Codex' }
 

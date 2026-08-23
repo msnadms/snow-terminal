@@ -777,6 +777,13 @@ body {
   cursor: default;
 }
 
+.wfm-cost {
+  flex: 0 0 auto;
+  color: var(--ui-muted-text, #a6adc8);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 .wfm-parked {
   flex: 0 0 auto;
   color: var(--ui-muted-text, #a6adc8);

@@ -1,13 +1,14 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import FailureDialog from './FailureDialog'
 import RemoveWorkflowDialog from './RemoveWorkflowDialog'
 import StopWorkflowDialog from './StopWorkflowDialog'
 import type { SessionStatus } from '../App'
-import { failureOf, normalizePath, type Failure } from '@renderer/format'
+import { failureOf, formatCost, isInside, normalizePath, type Failure } from '@renderer/format'
 import { repoColor } from '@renderer/repoColor'
 import { useGitAction } from '@renderer/useGitAction'
 import { useGitColors } from '@renderer/useGitColors'
 import { useLatestRun } from '@renderer/useLatestRun'
+import { useUsage } from '@renderer/useUsage'
 import {
   inScope,
   isRegistered,
@@ -67,6 +68,24 @@ function WorkflowManager({
   const [refreshKey, setRefreshKey] = useState(0)
   const latestRun = useLatestRun()
   const lanes = useGitColors()?.lanes
+  const usage = useUsage()
+  /**
+   * Cost is recorded against each agent session's own cwd, which is often a subdirectory of the
+   * worktree it belongs to, so a row sums its whole subtree rather than looking one key up. Paths
+   * arrive here from git (forward slashes) and from the registry (platform separators), and reach
+   * only as far as a case-insensitive match, which is what Windows means by the same directory.
+   */
+  const costDirs = useMemo(
+    () =>
+      Object.entries(usage?.byDirectory ?? {}).map(
+        ([dir, cost]) => [normalizePath(dir).toLowerCase(), cost] as const
+      ),
+    [usage]
+  )
+  const costFor = (dir: string): number => {
+    const root = normalizePath(dir).toLowerCase()
+    return costDirs.reduce((sum, [key, cost]) => (isInside(key, root) ? sum + cost : sum), 0)
+  }
   const overviewRef = useRef<Overview | null>(null)
   useEffect(() => {
     overviewRef.current = overview
@@ -246,6 +265,7 @@ function WorkflowManager({
                   const state = stateLabel(entry)
                   const dir = openDir(repo, entry)
                   const status = dir ? sessionStatuses[normalizePath(dir)] : undefined
+                  const cost = dir ? costFor(dir) : 0
                   const title = dir ? sessionTitles[normalizePath(dir)] : undefined
                   return (
                     <div className="wfm-row" key={entry.branch}>
@@ -269,6 +289,14 @@ function WorkflowManager({
                       {title && (
                         <span className="wfm-activity" title={title}>
                           {title}
+                        </span>
+                      )}
+                      {!!cost && (
+                        <span
+                          className="wfm-cost"
+                          title="Estimated agent spend in this directory since snow started"
+                        >
+                          {formatCost(cost)}
                         </span>
                       )}
                       {entry.review && (

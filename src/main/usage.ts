@@ -10,6 +10,8 @@ export type UsageAgent = 'claude' | 'codex'
 export interface UsageResult {
   session: number
   agents: Record<UsageAgent, number>
+  /** Cost per working directory, so a workflow can be asked what it has spent. */
+  byDirectory: Record<string, number>
   error: string | null
 }
 
@@ -86,12 +88,23 @@ interface Entry {
   key: string
   ts: number
   cost: number
+  dir: string
 }
 
 interface CachedFile {
   mtimeMs: number
   size: number
   entries: Entry[]
+}
+
+/**
+ * Both CLIs record the session's own working directory, so nothing has to decode
+ * `~/.claude/projects/<dashed-cwd>/` - an encoding that maps separators and dots onto the same
+ * character and cannot be reversed.
+ */
+function normalizeDir(raw: unknown): string {
+  if (typeof raw !== 'string' || !raw) return ''
+  return path.resolve(raw).split(path.sep).join('/').replace(/\/+$/, '')
 }
 
 function readLines(full: string): string[] {
@@ -109,6 +122,7 @@ function parseClaudeFile(full: string): Entry[] {
     let entry: {
       timestamp?: string
       requestId?: string
+      cwd?: string
       message?: { model?: string; id?: string; usage?: AnthropicUsage }
     }
     try {
@@ -121,7 +135,12 @@ function parseClaudeFile(full: string): Entry[] {
     const ts = Date.parse(entry.timestamp)
     if (Number.isNaN(ts)) continue
     const key = `${entry.message?.id ?? ''}:${entry.requestId ?? ''}`
-    entries.push({ key, ts, cost: anthropicCost(entry.message?.model ?? '', usage) })
+    entries.push({
+      key,
+      ts,
+      cost: anthropicCost(entry.message?.model ?? '', usage),
+      dir: normalizeDir(entry.cwd)
+    })
   }
   return entries
 }
@@ -129,13 +148,17 @@ function parseClaudeFile(full: string): Entry[] {
 function parseCodexFile(full: string): Entry[] {
   const entries: Entry[] = []
   let model = ''
+  let dir = ''
   for (const line of readLines(full)) {
-    if (!line.includes('"model"') && !line.includes('"token_count"')) continue
+    const meta = !dir && line.includes('"session_meta"')
+    if (!meta && !line.includes('"model"') && !line.includes('"token_count"')) continue
     let entry: {
       timestamp?: string
+      type?: string
       payload?: {
         type?: string
         model?: string
+        cwd?: string
         info?: { last_token_usage?: CodexUsage }
       }
     }
@@ -146,15 +169,23 @@ function parseCodexFile(full: string): Entry[] {
     }
     const payload = entry.payload
     if (!payload) continue
+    // A rollout tags its opening record on the envelope, while every event tags itself on the
+    // payload - so `session_meta` is read from `entry.type`, not from `payload.type`.
+    if (entry.type === 'session_meta') {
+      dir = normalizeDir(payload.cwd)
+      continue
+    }
     if (payload.model) model = payload.model
     if (payload.type !== 'token_count') continue
     const usage = payload.info?.last_token_usage
     if (!usage || !entry.timestamp) continue
     const ts = Date.parse(entry.timestamp)
     if (Number.isNaN(ts)) continue
-    entries.push({ key: ':', ts, cost: codexCost(model, usage) })
+    entries.push({ key: ':', ts, cost: codexCost(model, usage), dir: '' })
   }
-  return entries
+  // A rollout's cwd arrives in its first record, so it is stamped on afterwards rather than being
+  // carried through the loop as a half-known value.
+  return dir ? entries.map((entry) => ({ ...entry, dir })) : entries
 }
 
 interface Source {
@@ -184,6 +215,7 @@ function sessionFiles(dir: string): string[] | NodeJS.ErrnoException {
 
 function computeUsage(): UsageResult {
   const agents: Record<UsageAgent, number> = { claude: 0, codex: 0 }
+  const byDirectory: Record<string, number> = {}
   const live = new Set<string>()
   let error: string | null = null
 
@@ -212,11 +244,12 @@ function computeUsage(): UsageResult {
       if (entries !== cached?.entries) {
         fileCache.set(full, { mtimeMs: stat.mtimeMs, size: stat.size, entries })
       }
-      for (const { key, ts, cost } of entries) {
+      for (const { key, ts, cost, dir } of entries) {
         if (ts < sessionStart) continue
         if (key !== ':' && seen.has(key)) continue
         seen.add(key)
         agents[source.agent] += cost
+        if (dir) byDirectory[dir] = (byDirectory[dir] ?? 0) + cost
       }
     }
   }
@@ -225,7 +258,7 @@ function computeUsage(): UsageResult {
     if (!live.has(full)) fileCache.delete(full)
   }
 
-  return { session: agents.claude + agents.codex, agents, error }
+  return { session: agents.claude + agents.codex, agents, byDirectory, error }
 }
 
 const watchers: fs.FSWatcher[] = []
