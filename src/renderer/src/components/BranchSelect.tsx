@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import FailureDialog from './FailureDialog'
+import GitDialog from './GitDialog'
 import { type Failure } from '@renderer/format'
 import { useGitAction } from '@renderer/useGitAction'
 import { useLatestRun } from '@renderer/useLatestRun'
@@ -21,7 +22,11 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
   const [open, setOpen] = useState(false)
   const [newName, setNewName] = useState('')
   const [failure, setFailure] = useState<Failure | null>(null)
-  const switching = useGitAction<GitBranchResult>({ onFailure: setFailure })
+  const [refreshKey, setRefreshKey] = useState(0)
+  const switching = useGitAction<GitBranchResult>({
+    onFailure: setFailure,
+    onSettled: () => setRefreshKey((key) => key + 1)
+  })
   const [choice, setChoice] = useState<{ name: string; branch: string; files: number } | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
@@ -45,7 +50,7 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
     return () => {
       offChanged()
     }
-  }, [cwd, latestRun])
+  }, [cwd, refreshKey, latestRun])
 
   useEffect(() => {
     if (!open) return
@@ -67,17 +72,6 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
       window.removeEventListener('keydown', onKeyDown)
     }
   }, [open])
-
-  useEffect(() => {
-    if (!choice) return
-
-    const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setChoice(null)
-    }
-
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [choice])
 
   if (!current) return null
 
@@ -201,39 +195,35 @@ function BranchSelect({ cwd }: BranchSelectProps): React.JSX.Element | null {
         </div>
       )}
       {choice && (
-        <div className="git-dialog-backdrop" onPointerDown={() => setChoice(null)}>
-          <div className="git-dialog" onPointerDown={(e) => e.stopPropagation()}>
-            <div className="git-dialog-title">Where do your changes go?</div>
-            <pre className="git-dialog-detail">
-              {[
-                `You have ${choice.files} uncommitted file${choice.files === 1 ? '' : 's'} on ${choice.branch}, a registered workflow.`,
-                '',
-                `Park them: they stay with ${choice.branch} and ${choice.name} starts clean.`,
-                `Bring them: ${choice.name} starts with the changes, as git checkout -b would.`
-              ].join('\n')}
-            </pre>
-            <div className="git-dialog-actions">
-              <button
-                className="git-dialog-button"
-                onClick={() => {
-                  setChoice(null)
-                  switchTo(choice.name, true, false)
-                }}
-              >
-                Park on {choice.branch}
-              </button>
-              <button
-                className="git-dialog-button"
-                onClick={() => {
-                  setChoice(null)
-                  switchTo(choice.name, true, true)
-                }}
-              >
-                Bring to {choice.name}
-              </button>
-            </div>
-          </div>
-        </div>
+        <GitDialog
+          title="Where do your changes go?"
+          detail={[
+            `You have ${choice.files} uncommitted file${choice.files === 1 ? '' : 's'} on ${choice.branch}, a registered workflow.`,
+            '',
+            `Park them: they stay with ${choice.branch} and ${choice.name} starts clean.`,
+            `Bring them: ${choice.name} starts with the changes, as git checkout -b would.`
+          ].join('\n')}
+          onDismiss={() => setChoice(null)}
+        >
+          <button
+            className="git-dialog-button"
+            onClick={() => {
+              setChoice(null)
+              switchTo(choice.name, true, false)
+            }}
+          >
+            Park on {choice.branch}
+          </button>
+          <button
+            className="git-dialog-button"
+            onClick={() => {
+              setChoice(null)
+              switchTo(choice.name, true, true)
+            }}
+          >
+            Bring to {choice.name}
+          </button>
+        </GitDialog>
       )}
       {failure && <FailureDialog failure={failure} onDismiss={() => setFailure(null)} />}
     </div>

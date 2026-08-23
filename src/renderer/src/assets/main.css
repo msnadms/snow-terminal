@@ -748,6 +748,10 @@ body {
   color: var(--ui-danger, #f38ba8);
 }
 
+.wfm-state-checked-out {
+  color: var(--ui-accent, #89b4fa);
+}
+
 .wfm-parked {
   flex: 0 0 auto;
   color: var(--ui-muted-text, #a6adc8);

@@ -6,8 +6,10 @@ import { useGitColors } from '@renderer/useGitColors'
 import type { CommandItem, SessionStatus } from '../App'
 import type { Preset } from '../useSnowconfig'
 
+type TabSession = { id: number; group: string | null; preset?: Preset }
+
 interface TabBarProps {
-  sessions: { id: number; group: string | null }[]
+  sessions: TabSession[]
   activeId: number | 'home' | 'workflows'
   labels: Record<number, string>
   statuses: Record<number, SessionStatus>
@@ -17,6 +19,7 @@ interface TabBarProps {
   onSelect: (id: number | 'home' | 'workflows') => void
   onClose: (id: number) => void
   onCloseGroup: (ids: number[]) => void
+  onAddGroup: (preset: Preset) => void
   onReorder: (from: number, to: number) => void
   onAdd: () => void
   onOpenBrowser: () => void
@@ -40,6 +43,7 @@ function TabBar({
   onSelect,
   onClose,
   onCloseGroup,
+  onAddGroup,
   onReorder,
   onAdd,
   onOpenBrowser,
@@ -56,7 +60,12 @@ function TabBar({
   const [menu, setMenu] = useState<{ item: CommandItem; x: number; y: number } | null>(null)
   const [splitMenu, setSplitMenu] = useState<{ x: number; y: number } | null>(null)
   const [addMenu, setAddMenu] = useState<{ x: number; y: number } | null>(null)
-  const [groupMenu, setGroupMenu] = useState<{ ids: number[]; x: number; y: number } | null>(null)
+  const [groupMenu, setGroupMenu] = useState<{
+    ids: number[]
+    preset?: Preset
+    x: number
+    y: number
+  } | null>(null)
   const [drag, setDrag] = useState<{ from: number; over: number } | null>(null)
   const lanes = useGitColors()?.lanes
 
@@ -93,11 +102,11 @@ function TabBar({
   }
 
   type Segment =
-    | { kind: 'single'; session: { id: number; group: string | null }; index: number }
+    | { kind: 'single'; session: TabSession; index: number }
     | {
         kind: 'group'
         group: string
-        items: { session: { id: number; group: string | null }; index: number }[]
+        items: { session: TabSession; index: number }[]
       }
 
   const segments = useMemo(() => {
@@ -115,10 +124,7 @@ function TabBar({
     return result
   }, [sessions])
 
-  const renderTab = (
-    session: { id: number; group: string | null },
-    i: number
-  ): React.JSX.Element => {
+  const renderTab = (session: TabSession, i: number): React.JSX.Element => {
     const { id } = session
     const drop =
       insertAt === i
@@ -227,9 +233,10 @@ function TabBar({
           const style = { '--tab-group': color } as React.CSSProperties
           const collapsed = collapsedGroups.has(seg.group)
           const ids = seg.items.map((it) => it.session.id)
+          const preset = seg.items.find((it) => it.session.preset != null)?.session.preset
           const onGroupContextMenu = (e: React.MouseEvent): void => {
             e.preventDefault()
-            setGroupMenu({ ids, x: e.clientX, y: e.clientY })
+            setGroupMenu({ ids, preset, x: e.clientX, y: e.clientY })
           }
 
           if (collapsed) {
@@ -357,6 +364,17 @@ function TabBar({
       )}
       {groupMenu && (
         <ContextMenu x={groupMenu.x} y={groupMenu.y} onClose={() => setGroupMenu(null)}>
+          {groupMenu.preset && (
+            <button
+              className="context-menu-item context-menu-item--action"
+              onClick={() => {
+                onAddGroup(groupMenu.preset!)
+                setGroupMenu(null)
+              }}
+            >
+              New tab
+            </button>
+          )}
           <button
             className="context-menu-item context-menu-item--action"
             onClick={() => {

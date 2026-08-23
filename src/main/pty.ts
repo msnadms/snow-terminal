@@ -30,6 +30,32 @@ function isInside(child: string, parent: string): boolean {
   )
 }
 
+// eslint-disable-next-line no-control-regex -- an OSC sequence is delimited by ESC and BEL by definition
+const osc7 = /\u001b]7;file:\/\/[^/]*([^\u0007\u001b]*)(?:\u0007|\u001b\\)/g
+
+/**
+ * Track the shell's live directory from the OSC 7 reports `shellSpec` makes every prompt. The
+ * spawn cwd alone is not enough for `closePtysInDirectory`: a shell started elsewhere that `cd`s
+ * into a worktree holds that directory open just as firmly, and is exactly what makes
+ * `git worktree remove` fail on Windows.
+ */
+function trackCwd(id: number, data: string): void {
+  const session = sessions.get(id)
+  if (!session) return
+  let match: RegExpExecArray | null
+  let latest: string | null = null
+  osc7.lastIndex = 0
+  while ((match = osc7.exec(data))) latest = match[1]
+  if (!latest) return
+  try {
+    const decoded = decodeURIComponent(latest)
+    // A Windows report is `/C:/path`; POSIX reports are already absolute.
+    session.cwd = path.resolve(/^\/[A-Za-z]:/.test(decoded) ? decoded.slice(1) : decoded)
+  } catch {
+    // a partially received escape sequence is not worth acting on
+  }
+}
+
 /**
  * Stop terminals rooted in a worktree before Git removes it. Windows cannot delete a directory
  * while a shell (or Git itself) has that directory as its current working directory.
@@ -130,6 +156,7 @@ export function registerPtyHandlers(): void {
       }
 
       pty.onData((data) => {
+        trackCwd(id, data)
         buffer += data
         if (!flushTimer) flushTimer = setTimeout(flush, 4)
       })

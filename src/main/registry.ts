@@ -75,9 +75,22 @@ export function recordsFor(repo: string): { records: WorkflowRecord[]; error: st
   return { records: filterByRepo(records, repo), error }
 }
 
-export function parkableBranches(repo: string): { branches: string[]; error: string | null } {
+/**
+ * The park-mode branches of `repo`, plus the branch that owns `worktree` when that directory is
+ * itself a workflow's parallel session. One read answers both, because every branch switch needs
+ * to know whether it may park *and* whether it is standing in a worktree it must not leave.
+ */
+export function branchesFor(
+  repo: string,
+  worktree: string | null
+): { parkable: string[]; owner: string | null; error: string | null } {
   const { records, error } = recordsFor(repo)
-  return { branches: records.filter((r) => !r.worktree).map((r) => r.branch), error }
+  const parkable = records.filter((r) => !r.worktree).map((r) => r.branch)
+  const owner = worktree
+    ? (records.find((r) => r.worktree && samePath(expandHome(r.worktree), worktree))?.branch ??
+      null)
+    : null
+  return { parkable, owner, error }
 }
 
 export function addRecord(repo: string, branch: string): string | null {

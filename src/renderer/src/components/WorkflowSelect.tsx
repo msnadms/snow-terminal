@@ -6,8 +6,11 @@ import { type Failure } from '@renderer/format'
 import { useGitAction } from '@renderer/useGitAction'
 import { useLatestRun } from '@renderer/useLatestRun'
 import {
+  inScope,
   isRegistered,
+  parkedBadge,
   parkedTitle,
+  repoScope,
   staleTitle,
   usable,
   type WorkflowEntry,
@@ -29,6 +32,7 @@ function WorkflowSelect({
   onManage
 }: WorkflowSelectProps): React.JSX.Element | null {
   const [list, setList] = useState<WorkflowList | null>(null)
+  const listRef = useRef<WorkflowList | null>(null)
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [newName, setNewName] = useState('')
@@ -52,11 +56,17 @@ function WorkflowSelect({
       const result = await window.api.workflow.list(cwd)
       if (!isCurrent()) return
       if (result.error) console.error(`snow: failed to read workflows: ${result.error}`)
+      listRef.current = result
       setList(result)
     }
 
     load()
-    const offGit = window.api.git.onChanged(() => load())
+    // Describing a workflow list costs two git processes per entry, so it is worth knowing whether
+    // the repo that changed is one this dropdown is showing before paying for it again.
+    const offGit = window.api.git.onChanged((changedCwd) => {
+      const current = listRef.current
+      if (!current || inScope(changedCwd, repoScope(current.repo, current.workflows))) load()
+    })
     const offWorkflow = window.api.workflow.onChanged(() => load())
 
     return () => {
@@ -239,7 +249,7 @@ function WorkflowSelect({
                   </span>
                   {usable(entry) && <span className="workflow-live"> live</span>}
                   {entry.parked && (
-                    <span className="workflow-parked">● {entry.parked.files ?? '?'}</span>
+                    <span className="workflow-parked">{parkedBadge(entry.parked)}</span>
                   )}
                 </button>
                 {!entry.worktree && entry.exists && !entry.current && (

@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron'
+import { createHash } from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import {
@@ -6,10 +7,12 @@ import {
   errorDetail,
   errorText,
   gitFor,
+  markerPrefix,
   newestStash,
   parkedFiles,
   stashEntries,
   switchBranch,
+  unparkBranch,
   withRepoLock,
   mainWorktreeRoot,
   worktreeMap,
@@ -31,6 +34,8 @@ import {
 export interface WorkflowParked {
   files: number | null
   date: string
+  /** Marker stashes on this branch. More than one means an earlier pop conflicted and was kept. */
+  count: number
 }
 
 export interface WorkflowEntry {
@@ -44,6 +49,8 @@ export interface WorkflowEntry {
 }
 
 export interface WorkflowList {
+  /** The main worktree root, so a renderer can tell whether a `git:changed` is worth reloading for. */
+  repo: string | null
   current: string | null
   defaultBranch: string | null
   workflows: WorkflowEntry[]
@@ -67,17 +74,29 @@ function worktreeContainer(repo: string): string {
   return path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`)
 }
 
+/**
+ * Sanitizing collapses distinct branches onto one directory - `feature/login` and `feature-login`
+ * both want `feature-login`. A short digest of the original name, added only when sanitizing
+ * actually changed something, keeps them apart while leaving path-safe branches reading plainly.
+ */
 function worktreeDirectory(repo: string, branch: string): string {
   const safeBranch = branch.replace(/[\\/:*?"<>|]+/g, '-').replace(/^-+|-+$/g, '') || 'workflow'
-  return path.join(worktreeContainer(repo), safeBranch)
+  const suffix =
+    safeBranch === branch ? '' : `-${createHash('sha1').update(branch).digest('hex').slice(0, 7)}`
+  return path.join(worktreeContainer(repo), `${safeBranch}${suffix}`)
 }
 
 function recordFor(records: WorkflowRecord[], branch: string): WorkflowRecord | undefined {
   return records.find((record) => record.branch === branch)
 }
 
-function emptyList(error: string | null = null): WorkflowList {
-  return { current: null, defaultBranch: null, workflows: [], error }
+async function stillLinked(repo: string, branch: string, directory: string): Promise<boolean> {
+  const linked = (await worktreeMap(repo)).get(branch)
+  return !!linked && samePath(linked, directory)
+}
+
+function emptyList(error: string | null = null, repo: string | null = null): WorkflowList {
+  return { repo, current: null, defaultBranch: null, workflows: [], error }
 }
 
 function missingEntry({ branch, worktree }: WorkflowRecord): WorkflowEntry {
@@ -94,6 +113,7 @@ function missingEntry({ branch, worktree }: WorkflowRecord): WorkflowEntry {
 
 async function describeWorkflows(
   cwd: string | undefined,
+  repo: string | null,
   records: WorkflowRecord[],
   error: string | null
 ): Promise<WorkflowList> {
@@ -105,7 +125,7 @@ async function describeWorkflows(
     defaultBranch(cwd, false),
     worktreeMap(cwd)
   ])
-  if (!summary) return emptyList(error)
+  if (!summary) return emptyList(error, repo)
 
   const current = summary.current || null
   const workflows = await Promise.all(
@@ -126,7 +146,13 @@ async function describeWorkflows(
         branch,
         current: branch === current,
         exists: summary.all.includes(branch),
-        parked: entry ? { files: await parkedFiles(cwd, entry.selector), date: entry.date } : null,
+        parked: entry
+          ? {
+              files: await parkedFiles(cwd, entry.selector),
+              date: entry.date,
+              count: entries.filter((candidate) => candidate.branch === branch).length
+            }
+          : null,
         worktree: absoluteWorktree,
         worktreeExists,
         worktreeLinked
@@ -134,25 +160,25 @@ async function describeWorkflows(
     })
   )
 
-  return { current, defaultBranch: target?.branch ?? null, workflows, error }
+  return { repo, current, defaultBranch: target?.branch ?? null, workflows, error }
 }
 
 async function describeRepo(repo: string, records: WorkflowRecord[]): Promise<WorkflowRepo> {
   const root = await mainWorktreeRoot(repo)
   if (root)
     return {
-      repo: root,
       name: path.basename(root),
       unreachable: false,
-      ...(await describeWorkflows(root, filterByRepo(records, root), null))
+      ...(await describeWorkflows(root, root, filterByRepo(records, root), null)),
+      repo: root
     }
 
   return {
-    repo,
     name: path.basename(repo),
     unreachable: true,
-    ...emptyList(),
-    workflows: filterByRepo(records, repo).map(missingEntry)
+    ...emptyList(null, repo),
+    workflows: filterByRepo(records, repo).map(missingEntry),
+    repo
   }
 }
 
@@ -161,7 +187,7 @@ export function registerWorkflowHandlers(): void {
     const repo = await mainWorktreeRoot(cwd)
     if (!repo) return emptyList()
     const { records, error } = recordsFor(repo)
-    return describeWorkflows(cwd, records, error)
+    return describeWorkflows(cwd, repo, records, error)
   })
 
   ipcMain.handle('workflow:overview', async (): Promise<WorkflowOverview> => {
@@ -212,14 +238,11 @@ export function registerWorkflowHandlers(): void {
       const { records, error } = recordsFor(repo)
       if (error) return { ok: false, error: `Could not read ${workflowsPath()}`, detail: error }
       const registeredWorktree = recordFor(records, name)?.worktree
-      if (registeredWorktree) {
-        const linked = (await worktreeMap(cwd)).get(name)
-        if (linked && samePath(linked, expandHome(registeredWorktree)))
-          return {
-            ok: false,
-            error: `Stop ${name}'s parallel session before removing it from workflows`
-          }
-      }
+      if (registeredWorktree && (await stillLinked(repo, name, expandHome(registeredWorktree))))
+        return {
+          ok: false,
+          error: `Stop ${name}'s parallel session before removing it from workflows`
+        }
 
       const failed = removeRecord(repo, name)
       if (failed) return { ok: false, error: `Could not update ${workflowsPath()}`, detail: failed }
@@ -324,8 +347,12 @@ export function registerWorkflowHandlers(): void {
         if (remaining.length > 0) {
           return {
             ok: false,
-            error: 'Worktree directory already exists',
-            detail: collapseHome(destination)
+            error: `${name}'s worktree directory already has files in it`,
+            detail: [
+              collapseHome(destination),
+              '',
+              `snow will not check ${name} out over it. Move or delete that directory, then start the parallel session again.`
+            ].join('\n')
           }
         }
 
@@ -394,28 +421,53 @@ export function registerWorkflowHandlers(): void {
             }
           }
           if (status.files.length > 0) {
-            await gitFor(directory).raw(['stash', 'push', '-u', '-m', `snow-wf:${name}`])
+            await gitFor(directory).raw(['stash', 'push', '-u', '-m', `${markerPrefix}${name}`])
             parked = true
           }
           // Removal deletes the directory whole, ignored files included, with or without --force;
           // the renderer confirms that. --force covers what the stash above could not take.
-          await closePtysInDirectory(directory)
-          terminalsClosed = true
+          //
           // Run from the main worktree: invoking this from the target worktree itself also keeps
           // that directory as Git's current working directory, which prevents its removal on Windows.
-          await gitFor(repo).raw(['worktree', 'remove', '--force', directory])
+          //
+          // Try once with the session still running. Killing the user's shells is the destructive
+          // part of stopping a workflow and it is only needed on Windows, where an open shell holds
+          // the directory - so it is worth finding out whether removal needs it before paying it.
+          try {
+            await gitFor(repo).raw(['worktree', 'remove', '--force', directory])
+          } catch (first) {
+            if (!(await stillLinked(repo, name, directory))) throw first
+            await closePtysInDirectory(directory)
+            terminalsClosed = true
+            await gitFor(repo).raw(['worktree', 'remove', '--force', directory])
+          }
           if (samePath(path.dirname(directory), worktreeContainer(repo)))
             await fs.promises.rmdir(worktreeContainer(repo)).catch(() => {})
         } catch (error) {
           // `worktree remove` deletes its bookkeeping even when it cannot delete every file, and
           // says so: "there's no going back from here". Retrying then only ever reports "is not a
           // working tree", so the registry entry has to be cleared here or the workflow is stranded.
-          const linked = (await worktreeMap(repo)).get(name)
-          if (linked && samePath(linked, directory)) {
+          if (await stillLinked(repo, name, directory)) {
+            // Nothing was removed, so the park has to come back out: leaving the session's work in
+            // the stash would empty a worktree that is still very much alive.
+            const unpark = parked ? await unparkBranch(directory, name) : null
             return {
               ok: false,
               error: errorText(error),
-              detail: errorDetail(error),
+              detail: [
+                errorDetail(error),
+                parked && !unpark
+                  ? `\n${name}'s worktree is untouched and its changes have been put back.`
+                  : '',
+                unpark
+                  ? `\n${name}'s worktree is untouched, but its changes could not be taken back out of the stash: ${unpark}\nRecover them in ${collapseHome(directory)} with: git stash pop`
+                  : '',
+                terminalsClosed
+                  ? `\nIts terminals were closed to try to free the directory. Launch ${name} again to reopen them.`
+                  : ''
+              ]
+                .filter(Boolean)
+                .join('\n'),
               worktree: terminalsClosed ? directory : undefined
             }
           }

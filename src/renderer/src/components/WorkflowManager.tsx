@@ -3,17 +3,21 @@ import FailureDialog from './FailureDialog'
 import RemoveWorkflowDialog from './RemoveWorkflowDialog'
 import StopWorkflowDialog from './StopWorkflowDialog'
 import type { SessionStatus } from '../App'
-import { failureOf, isInside, normalizePath, type Failure } from '@renderer/format'
+import { failureOf, normalizePath, type Failure } from '@renderer/format'
 import { repoColor } from '@renderer/repoColor'
 import { useGitAction } from '@renderer/useGitAction'
 import { useGitColors } from '@renderer/useGitColors'
 import { useLatestRun } from '@renderer/useLatestRun'
 import {
+  inScope,
   isRegistered,
   launchLabel,
+  parkedBadge,
   parkedTitle,
+  repoScope,
   staleTitle,
   stateLabel,
+  stateSlug,
   usable,
   type WorkflowEntry,
   type WorkflowRepo,
@@ -78,11 +82,13 @@ function WorkflowManager({
     }
 
     load()
+    // A repo's linked worktrees live outside its root but share its stash, so they count as in
+    // scope too - without them a commit in a parallel session never refreshes this screen.
     const offGit = window.api.git.onChanged((changedCwd) => {
-      const inScope = overviewRef.current?.repos.some(
-        (repo) => changedCwd && isInside(normalizePath(changedCwd), normalizePath(repo.repo))
+      const hit = overviewRef.current?.repos.some((repo) =>
+        inScope(changedCwd, repoScope(repo.repo, repo.workflows))
       )
-      if (inScope) load()
+      if (hit) load()
     })
     const offWorkflow = window.api.workflow.onChanged(() => load())
 
@@ -246,7 +252,9 @@ function WorkflowManager({
                             title={status === 'busy' ? 'Busy' : 'Ready for input'}
                           />
                         )}
-                        {state && <span className={`wfm-state wfm-state-${state}`}>{state}</span>}
+                        {state && (
+                          <span className={`wfm-state wfm-state-${stateSlug(state)}`}>{state}</span>
+                        )}
                       </span>
                       <span
                         className={`wfm-branch${entry.exists ? '' : ' wfm-branch-missing'}`}
@@ -261,7 +269,7 @@ function WorkflowManager({
                       )}
                       {entry.parked && (
                         <span className="wfm-parked" title={parkedTitle(entry)}>
-                          ● {entry.parked.files ?? '?'}
+                          {parkedBadge(entry.parked)}
                         </span>
                       )}
                       <span className="wfm-row-actions">

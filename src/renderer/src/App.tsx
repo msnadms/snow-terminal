@@ -333,8 +333,16 @@ function App(): React.JSX.Element {
   }, [orderedTabs])
 
   const sessionItems = useMemo(
-    () => orderedTabs.map((tab) => ({ id: tab.id, group: tabGroups[tab.id] ?? null })),
-    [orderedTabs, tabGroups]
+    () =>
+      orderedTabs.map((tab) => ({
+        id: tab.id,
+        group: tabGroups[tab.id] ?? null,
+        preset:
+          tab.kind === 'shell' && tab.presetName
+            ? presets.find((preset) => preset.name === tab.presetName)
+            : undefined
+      })),
+    [orderedTabs, presets, tabGroups]
   )
 
   const labels = useMemo(() => {
@@ -743,6 +751,7 @@ function App(): React.JSX.Element {
             onSelect={setActiveId}
             onClose={closeSession}
             onCloseGroup={closeSessions}
+            onAddGroup={addSession}
             onReorder={reorderTab}
             onAdd={addDefaultSession}
             onOpenBrowser={openBlankBrowser}

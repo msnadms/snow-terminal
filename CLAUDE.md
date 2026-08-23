@@ -828,6 +828,41 @@ declaring it; adding them means revisiting this, and on NSIS installs the propag
 serve. The other cost is that a Start-Menu launch and a `snow` CLI-shim launch no longer share one
 taskbar group, which is moot while packaged snow holds a single-instance lock.
 
+## Windows long paths
+
+Every git command snow runs carries `-c core.longpaths=true` on win32, via the `gitOptions` object
+that both `gitFor` and the scratch-index `simpleGit` pass to their constructor. Without it Git for
+Windows refuses any path over 260 characters, and what blows the budget is the repo's **own** deep or
+long-named files — a `node_modules` chain, a generated fixture, any long filename. **Worktree
+workflows are the case that hits it first** because promotion shifts every one of those paths
+outward: `worktreeDirectory` puts the checkout at `<repo>-worktrees/<branch>` (plus a seven-character
+digest when the branch name had to be sanitized — see _Workflows_), deeper than the repo's
+own root by `len('-worktrees') + 1 + len(branch)`. That overhead is fixed and unavoidable (the branch
+is never truncated, so a long branch name only makes it worse), so a repo sitting comfortably under
+the limit at its own root can cross it purely by being promoted, with `unable to create file …:
+Filename too long` followed by `Could not reset index file to revision 'HEAD'`. `git worktree add` is
+atomic across that failure (git 2.50 leaves no directory and no `.git/worktrees` bookkeeping), so the
+launch merely fails rather than stranding the workflow — but nothing short of the flag makes it
+succeed.
+
+The flag lifts the **total path** limit, not Windows' 255-character limit on a single path
+_component_. The two are distinguishable by git's own wording and it is worth reading before
+assuming this section applies: a total path over 260 fails with `Filename too long` and the flag
+fixes it, while a single filename over 255 fails with `Invalid argument` and the flag does nothing.
+Only a repo carrying such a name (committed on a filesystem that allowed it) can reach the second
+case, and no snow-side change helps.
+
+The flag belongs on `gitFor` rather than on the `worktree add` call, because the whole family of
+write paths hits the same limit: the `stash pop` promotion runs right after, `parkOnLeave`'s
+`stash push -u` and `restoreOnEnter`'s pop, and `worktree remove --force` on the way back out.
+Removal is the one that punishes a partial fix — it deletes its bookkeeping even when it cannot
+delete every file, so a failed remove leaves a directory that every retry answers with `is not a
+working tree` (which is exactly why `demote` clears the registry entry in its `catch`).
+
+snow does **not** write `core.longpaths` into the user's repo or global config. `-c` is per
+invocation, so it changes what snow's own commands can do and nothing else — the same reason snow
+never edits `PATH` itself. A shell in the promoted worktree still gets stock git behavior.
+
 ## Workflows
 
 A **workflow** is a branch you have explicitly registered, plus the uncommitted work parked on it.
@@ -850,9 +885,22 @@ restores them. On a branch that is _not_ registered, snow does nothing special: 
 and a plain `git checkout` runs, so the changes ride along, or git refuses the switch exactly as it
 always would. Nothing is ever stashed on a branch you did not opt in to.
 
-`git:createBranch` is the exception, because `checkout -b` branches from HEAD and so **cannot** fail
-on a dirty tree — parking there rescues nothing and only contradicts what git would do. It takes a
-`carry` flag: `carry: false` routes through `switchBranch` (park on the branch you are leaving),
+**A promoted worktree is the exception, and it refuses rather than parks.** Its directory is
+recorded in the registry against one branch, so checking anything else out there would leave the
+entry pointing at a directory that no longer holds its branch — which reads back as `worktreeLinked:
+false`, renders as a **stale** row, and invites a prune that silently demotes a live session.
+`registryFor` therefore returns the branch that **owns** the current worktree alongside the parkable
+list (one registry read answers both), and `ownedElsewhere` turns a mismatch into an ordinary failed
+switch naming the owner. It is checked in `switchBranch` before `parkOnLeave`, so every path that
+routes through it inherits the guard, and again in `git:createBranch`'s `carry: true` branch, which
+is the one switch that deliberately bypasses `switchBranch` entirely. Parking inside a worktree is
+what the guard makes unnecessary: `parkableBranches` never listed worktree-mode records, so the
+branch in a worktree was silently exempt from parking and its work rode along to whatever you
+checked out next.
+
+`git:createBranch` is the other exception, because `checkout -b` branches from HEAD and so **cannot**
+fail on a dirty tree — parking there rescues nothing and only contradicts what git would do. It takes
+a `carry` flag: `carry: false` routes through `switchBranch` (park on the branch you are leaving),
 `carry: true` runs a plain `checkoutLocalBranch` so the changes come with you. `BranchSelect` never
 guesses. Its create form first calls `git:parkPreview`, which reports the branch and dirty-file count
 when a park _would_ happen and `null` otherwise; on `null` it creates straight away, and on a hit it
@@ -911,7 +959,18 @@ still holds an entry for a branch of that name that was since deleted, where re-
 the parked stash that `WorkflowSelect` was already showing as a missing-branch row.
 
 `switchBranch` is the only park entry point `git.ts` exports; `parkOnLeave`, `restoreOnEnter`,
-`rollbackPark`, and `registeredBranches` are module-private so no caller can take half the gate.
+`rollbackPark`, `parkPlan`, and `registryFor` are module-private so no caller can take half the
+gate. The one other export is `unparkBranch`, which takes a branch's newest marker stash back out —
+`workflow:demote` needs it to undo its own park when the worktree removal it parked for then fails.
+
+**Every pop goes through `popStash`, which pops `--index` first.** A plain `git stash pop` restores
+everything as unstaged work, so a deliberately staged subset — the whole point of the diff view's
+Stage buttons — silently loses its staging across a park and restore. `--index` keeps it. The one
+failure it adds is recoverable and is the only one retried: when the index cannot be reinstated git
+prints `conflicts in index. Try without --index.` and bails **before touching the working tree**,
+leaving the stash listed, so a plain pop can safely follow. Any other failure falls through to the
+existing classification (conflicted paths, untracked collision, or the raw error) untouched, because
+those leave state a blind retry would double-apply.
 
 Every path rolls the park back through `rollbackPark()` if the checkout fails, so a failed call
 leaves the tree exactly where it started. A conflicting pop is reported like `git:updateFromDefault`
@@ -923,6 +982,22 @@ empty with nothing on screen explaining where the changes went.
 Snow never drops a stash. `workflow:unregister` only removes the registry entry; any parked work
 stays in `git stash` and the dialog says so.
 
+**`workflow:demote` pays its destructive costs only once it knows they are needed, and undoes them
+when they were not enough.** Killing the user's shells is the irreversible half of stopping a
+workflow — a pane may be running an agent session — and it is needed only on Windows, where an open
+shell holds the directory against `worktree remove`. So the removal is attempted **first**, with the
+session still running; only if that fails and `stillLinked` confirms nothing was removed does it
+call `closePtysInDirectory` and retry. If the retry also fails, the park is rolled back through
+`unparkBranch`, because leaving the work in the stash would empty a worktree that is still very much
+alive. The result carries `worktree` — which is what makes the renderer close the tab — only when
+terminals were actually closed, so a first-attempt failure leaves the session untouched entirely.
+
+`closePtysInDirectory` matches on each PTY's **live** directory, not its spawn cwd. `pty.ts` tracks
+it by scanning the same OSC 7 reports `shellSpec` emits every prompt (the renderer parses them too,
+for tab labels, but main cannot reach that). Matching the spawn cwd alone missed the exact case the
+function exists for: a shell started elsewhere that `cd`s into the worktree holds it just as firmly.
+A report split across two PTY chunks is simply skipped, since the next prompt re-sends it.
+
 `.snowignore` is deliberately not consulted: it is a commit filter, not a worktree filter, so a
 matched-but-modified file parks and restores unchanged.
 
@@ -930,9 +1005,20 @@ Parked file counts are `git stash show --name-only` plus `git ls-tree -r --name-
 untracked parent, absent when nothing untracked was parked) rather than `git stash show -u`, which
 needs git ≥ 2.32. The missing `^3` is the expected case and counts as zero, but a failed _tracked_
 listing yields `null`, not `0` — a marker stash always has content, so "0 files parked" would be a
-lie. `WorkflowSelect` renders `null` as `● ?`. No git watcher is added: stash writes touch `.git/refs/stash` and
-`.git/logs/refs/stash`, already covered by `git:watch`. `WorkflowSelect` reloads on both
-`git:changed` and `workflow:changed`.
+lie. `WorkflowSelect` renders `null` as `● ?`. `WorkflowParked.count` carries how many marker
+stashes the branch has, so the duplicates a conflicting pop leaves behind are visible as `● N ×2`
+rather than being true-but-invisible; the tooltip explains that snow restores the newest and the
+rest are still in `git stash list`. No git watcher is added: stash writes touch `.git/refs/stash` and
+`.git/logs/refs/stash`, already covered by `git:watch`.
+
+Both `WorkflowSelect` and `WorkflowManager` reload on `workflow:changed` unconditionally, but filter
+`git:changed` by **`repoScope`** — the repo root plus every worktree path in the list. Describing a
+workflow list costs two git processes per entry (`stash show` and `ls-tree`) on top of four fixed
+ones, and `withRepoLock` broadcasts on every mutating handler in every open repo, so an unfiltered
+subscription turns a commit in an unrelated repo into a process storm. The worktree paths are part
+of the scope because a repo's linked worktrees live outside its root yet share its stash — filtering
+on the root alone would miss every change made in a parallel session. `WorkflowList` carries `repo`
+(the main worktree root) purely so the renderer can compute that scope without a second IPC.
 
 `WorkflowSelect` sits beside `BranchSelect` in `.actionbar-right`. The two share one dropdown
 vocabulary — the chrome classes in `main.css` are named `picker-*`, not `branch-*` — and
@@ -957,6 +1043,13 @@ listed are **exactly** the registry's, never presets or discovery: a repo appear
 a workflow in it, which keeps the screen's contents equal to what parking and restoring actually
 act on.
 
+`worktreeDirectory` replaces the characters a path cannot carry, which collapses distinct branches
+onto one directory — `feature/login` and `feature-login` both want `feature-login`. It appends a
+seven-character SHA-1 of the original name **only when sanitizing actually changed something**, so
+path-safe branches keep reading plainly and the two cases stay apart. Promoting onto a non-empty
+directory is still refused rather than checked out over, and the message now names the branch and
+says what to do, since the path alone reads as unrelated to the workflow that produced it.
+
 **Launch** is the screen's verb, and it resolves per row: a usable worktree opens (or focuses) its
 tab, the branch checked out in the main worktree opens a tab on the repo root, and a park-mode
 workflow is **promoted first** — `git worktree add`, then the tab. Launching is the one place that
@@ -979,8 +1072,18 @@ button on the screen — the same "one git action at a time" shape `WorkingDiffV
 `WorkflowSelect` rather than reimplemented: the copy is the load-bearing part (what stays in the
 stash, what gets deleted), and two surfaces wording it separately is how they drift. Extracting them
 also moved both onto `GitDialog`, so they now close on Escape like every other dialog. The
-vocabulary they share with `WorkflowSelect` — `usable`, `staleTitle`, `parkedTitle`, `parkedStay` —
-lives in `workflowText.ts` for the same reason.
+vocabulary they share with `WorkflowSelect` — `usable`, `staleTitle`, `parkedTitle`, `parkedStay`,
+`stateSlug`, `parkedBadge`, `repoScope` — lives in `workflowText.ts` for the same reason.
+
+`RemoveWorkflowDialog` renders a **second, buttonless form** when `usable(entry)`, because
+`workflow:unregister` refuses outright while the branch's worktree is still linked. Promising a
+removal in the dialog and answering with a failure dialog is the drift the shared component exists
+to prevent, so the refusal is stated where the user is deciding, pointing at the pause button that
+actually unblocks it.
+
+`stateLabel` returns prose, so `WorkflowManager` slugs it through `stateSlug` before interpolating a
+class name — `checked out` would otherwise emit `wfm-state-checked` plus a stray global `out`, and
+the badge would go unstyled because no rule matches the half-name.
 
 ## Session tabs
 
@@ -1003,7 +1106,11 @@ converting the slot to an index (`to > from ? to - 1 : to`).
 ### Repo tab groups
 
 Every tab that has a directory belongs to a **repo group**, keyed on that directory's
-`mainWorktreeRoot` — so a linked worktree's tab groups with the repo it was cut from rather than
+`mainWorktreeRoot` (the repo-wide identity behind the `withRepoLock` key and every registry lookup
+too; it answers with the current worktree's own top level whenever the git dir _is_ the common dir,
+falling back to `dirname(common)` only for a linked worktree — taking `dirname` unconditionally
+names an unrelated directory under `--separate-git-dir`) — so a linked worktree's tab groups with
+the repo it was cut from rather than
 standing alone, which is the whole point of grouping a parallel session next to its parent. `App`
 resolves the key per distinct tab cwd through `git:mainRoot` (a one-`rev-parse` handler) and caches it
 by cwd, because discovery only ever runs for the **active** tab and grouping needs an answer for all
@@ -1079,6 +1186,24 @@ needs `root` to decide whether to watch children, and re-deriving it would mean 
 `git rev-parse` per check. Registrations are refcounted per `(webContents, cwd)` like `git:watch`, torn
 down with it in `closeWatchersFor`/`disposeGitWatchers`, and the async setup re-checks that its record
 is still the live one before attaching, so a fast unwatch/rewatch can't leak an orphaned watcher.
+
+#### `git:changed` is not left to the filesystem alone
+
+`fs.watch` is best-effort, so it is the **second** source of `git:changed`, not the only one.
+`withRepoLock` fires the watcher's own `notify()` for the repo it just unlocked, which means every
+mutating handler — every path that takes the lock — announces itself when it settles, whether or not
+the OS reported the writes. Each watcher handle carries the `root` it covers (derived exactly like the
+lock key, so a linked worktree and its main worktree notify each other) and its `notify`, and the
+broadcast still goes out under that watcher's own `cwd` and its own debounce, so the payload the
+renderer filters on is unchanged and the explicit call coalesces with whatever `fs.watch` did report.
+
+Without it a switch is only as reliable as the watcher: a `git:changed` that lands mid-checkout reads
+the pre-switch HEAD (reads deliberately don't take the repo lock), and the display is then correct only
+because a **later** event arrives — `useLatestRun` orders reads by start, so it drops the stale one but
+cannot conjure a fresh one. On a slow machine, where a park + checkout + pop is a seconds-long burst,
+losing that trailing event left the branch name stale with nothing to correct it. An errored watcher is
+re-armed (`maxWatchRetries` attempts, `watchRetryMs` apart) and notifies on the way down rather than
+closing for good, since a watcher that dies silently is exactly that failure with no recovery.
 
 That one `repos` list is the single source of truth for the whole git view. It is passed straight to
 `GitPanel` — now a **pure renderer** that no longer discovers; it lists every repo as an accordion,

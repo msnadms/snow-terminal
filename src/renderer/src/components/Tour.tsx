@@ -34,7 +34,7 @@ const steps: Step[] = [
   },
   {
     title: 'Commit diff',
-    body: 'Each dot on the graph is a commit. Click one to open that commit’s full diff in a tab, or right-click to open it in a split beside the current session.',
+    body: "Each dot on the graph is a commit. Click one to open that commit's full diff in a tab, or right-click to open it in a split beside the current session.",
     selectors: ['.git-node', '.git-log']
   },
   {

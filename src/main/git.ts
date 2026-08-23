@@ -3,10 +3,10 @@ import { spawn } from 'child_process'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { simpleGit, SimpleGit, StatusResult } from 'simple-git'
+import { simpleGit, SimpleGit, SimpleGitOptions, StatusResult } from 'simple-git'
 import { filterPaths } from './snowignore'
 import { activeCommitAgent, CommitAgent } from './snowconfig'
-import { parkableBranches, workflowsPath } from './registry'
+import { branchesFor, workflowsPath } from './registry'
 import { collapseHome, samePath } from './config'
 import { isExternalUrl } from './external'
 
@@ -460,11 +460,14 @@ function layout(
 
 const gitByPath = new Map<string, SimpleGit>()
 
+const gitOptions: Partial<SimpleGitOptions> =
+  process.platform === 'win32' ? { config: ['core.longpaths=true'] } : {}
+
 export function gitFor(cwd?: string): SimpleGit {
   const dir = cwd || os.homedir()
   let git = gitByPath.get(dir)
   if (!git) {
-    git = simpleGit(dir).env('GIT_OPTIONAL_LOCKS', '0')
+    git = simpleGit(dir, gitOptions).env('GIT_OPTIONAL_LOCKS', '0')
     gitByPath.set(dir, git)
   }
   return git
@@ -509,16 +512,32 @@ export async function worktreeRoot(cwd?: string): Promise<string | null> {
   }
 }
 
-/** The root of the primary worktree, shared by every linked worktree. */
+/**
+ * The root of the primary worktree, shared by every linked worktree. A git dir equal to the common
+ * dir means this *is* the primary worktree, so its own top level is the answer - which is the only
+ * form that survives `--separate-git-dir`, where the git dir sits nowhere near its worktree and
+ * `dirname` of it names an unrelated directory. Only a linked worktree needs the derivation, and
+ * there the common dir is the primary worktree's `.git`. Git emits native-looking relative paths in
+ * the primary worktree but absolute forward-slash paths in linked worktrees on Windows, so the
+ * result is normalized before it is used as a registry or lock identity.
+ */
 export async function mainWorktreeRoot(cwd?: string): Promise<string | null> {
   try {
-    const common = (await gitFor(cwd).revparse(['--git-common-dir'])).trim()
-    if (!common) return null
-    const resolved = path.isAbsolute(common) ? common : path.resolve(cwd || os.homedir(), common)
-    // Git emits native-looking relative paths in the primary worktree, but absolute paths with
-    // forward slashes in linked worktrees on Windows. Normalize before using this as a registry
-    // or lock identity so every worktree of a repository shares the same key.
-    return path.resolve(path.dirname(resolved))
+    const git = gitFor(cwd)
+    const absolute = (raw: string): string =>
+      path.resolve(
+        path.isAbsolute(raw.trim()) ? raw.trim() : path.join(cwd || os.homedir(), raw.trim())
+      )
+    const [dir, common] = await Promise.all([
+      git.revparse(['--git-dir']),
+      git.revparse(['--git-common-dir'])
+    ])
+    if (!common.trim()) return null
+    if (samePath(absolute(dir), absolute(common))) {
+      const top = (await git.revparse(['--show-toplevel'])).trim()
+      if (top) return path.resolve(top)
+    }
+    return path.resolve(path.dirname(absolute(common)))
   } catch {
     return null
   }
@@ -767,7 +786,7 @@ function pullRequestUrl(repo: URL, branch: string, base: string, template: strin
   return forge ? forge.path(web, branch, base) : null
 }
 
-const markerPrefix = 'snow-wf:'
+export const markerPrefix = 'snow-wf:'
 const markerPattern = new RegExp(`^(?:On [^:]+: )?${markerPrefix}(.+)$`)
 
 interface StashEntry {
@@ -780,6 +799,7 @@ interface Departure {
   current: string | null
   parked: number
   registered: string[]
+  owner: string | null
 }
 
 export async function stashEntries(cwd?: string): Promise<StashEntry[]> {
@@ -827,23 +847,46 @@ export async function parkedFiles(
   return tracked === null ? null : tracked + (untracked ?? 0)
 }
 
-async function registeredBranches(cwd?: string): Promise<string[]> {
-  const repo = await mainWorktreeRoot(cwd)
-  if (!repo) return []
-  const { branches, error } = parkableBranches(repo)
+async function registryFor(cwd?: string): Promise<{ parkable: string[]; owner: string | null }> {
+  const [repo, here] = await Promise.all([mainWorktreeRoot(cwd), worktreeRoot(cwd)])
+  if (!repo) return { parkable: [], owner: null }
+  const { parkable, owner, error } = branchesFor(repo, here)
   if (error) throw new Error(`Could not read ${workflowsPath()}\n${error}`)
-  return branches
+  return { parkable, owner }
+}
+
+/**
+ * A workflow's worktree exists to hold that one branch, and the registry records it by directory.
+ * Checking out anything else there would leave the entry pointing at a directory that no longer
+ * has its branch, which reads back as a stale worktree and invites a prune that silently demotes a
+ * live session.
+ */
+function ownedElsewhere(owner: string | null, target: string): GitCheckoutResult | null {
+  if (!owner || owner === target) return null
+  return {
+    ok: false,
+    error: `This worktree belongs to ${owner}`,
+    detail: [
+      `snow keeps ${owner}'s parallel session on ${owner}, so ${target} cannot be checked out here.`,
+      '',
+      `Switch to ${target} in the repository's main session, or stop ${owner}'s parallel session first.`
+    ].join('\n')
+  }
 }
 
 async function parkPlan(cwd?: string): Promise<Departure & { status: StatusResult }> {
-  const [registered, status] = await Promise.all([registeredBranches(cwd), gitFor(cwd).status()])
+  const [registry, status] = await Promise.all([registryFor(cwd), gitFor(cwd).status()])
+  const { parkable: registered, owner } = registry
   const current = status.current
   const dirty = !!current && registered.includes(current) && status.files.length > 0
-  return { current, parked: dirty ? status.files.length : 0, registered, status }
+  return { current, parked: dirty ? status.files.length : 0, registered, owner, status }
 }
 
-async function parkOnLeave(cwd?: string): Promise<Departure> {
-  const { status, ...departure } = await parkPlan(cwd)
+async function parkOnLeave(
+  cwd: string | undefined,
+  plan: Awaited<ReturnType<typeof parkPlan>>
+): Promise<Departure> {
+  const { status, ...departure } = plan
   if (departure.parked === 0) return departure
 
   if (status.conflicted.length > 0) {
@@ -854,6 +897,23 @@ async function parkOnLeave(cwd?: string): Promise<Departure> {
 
   await gitFor(cwd).raw(['stash', 'push', '-u', '-m', `${markerPrefix}${departure.current}`])
   return departure
+}
+
+const indexConflictBail = /conflicts in index\. Try without --index/i
+
+/**
+ * `git stash pop` without `--index` restores everything as unstaged work, so a carefully staged
+ * subset silently loses its staging across a park/restore round trip. `--index` keeps it, and when
+ * the index cannot be reinstated git bails *before* touching the working tree with "conflicts in
+ * index. Try without --index." - the one failure it is safe to retry plainly.
+ */
+async function popStash(cwd: string | undefined, selector: string): Promise<void> {
+  try {
+    await gitFor(cwd).raw(['stash', 'pop', '--index', selector])
+  } catch (error) {
+    if (!indexConflictBail.test(error instanceof Error ? error.message : String(error))) throw error
+    await gitFor(cwd).raw(['stash', 'pop', selector])
+  }
 }
 
 const untrackedCollision = /^(.+) already exists, no checkout$/
@@ -877,7 +937,7 @@ async function restoreOnEnter(
 
   const files = await parkedFiles(cwd, entry.selector)
   try {
-    await gitFor(cwd).raw(['stash', 'pop', entry.selector])
+    await popStash(cwd, entry.selector)
     return { ok: true, restored: files ?? 0 }
   } catch (error) {
     let conflicted: string[] = []
@@ -944,10 +1004,25 @@ async function rollbackPark(
   try {
     const entry = newestStash(await stashEntries(cwd), departure.current)
     if (!entry) return stranded()
-    await gitFor(cwd).raw(['stash', 'pop', entry.selector])
+    await popStash(cwd, entry.selector)
     return failure
   } catch {
     return stranded()
+  }
+}
+
+/**
+ * Take a branch's newest marker stash back out. Callers that park before a destructive step use
+ * this to undo the park when that step fails; the returned string is the reason it could not.
+ */
+export async function unparkBranch(cwd: string, branch: string): Promise<string | null> {
+  try {
+    const entry = newestStash(await stashEntries(cwd), branch)
+    if (!entry) return `no ${markerPrefix}${branch} stash was found`
+    await popStash(cwd, entry.selector)
+    return null
+  } catch (error) {
+    return errorDetail(error) || errorText(error)
   }
 }
 
@@ -967,6 +1042,7 @@ export async function withRepoLock<T>(cwd: string | undefined, op: () => Promise
     return await run
   } finally {
     if (repoLocks.get(key) === run) repoLocks.delete(key)
+    watchers.notify(key)
   }
 }
 
@@ -987,7 +1063,10 @@ export async function switchBranch(
   }
   let departure: Departure
   try {
-    departure = await parkOnLeave(cwd)
+    const plan = await parkPlan(cwd)
+    const blocked = ownedElsewhere(plan.owner, target)
+    if (blocked) return blocked
+    departure = await parkOnLeave(cwd, plan)
   } catch (error) {
     return { ok: false, error: errorText(error), detail: errorDetail(error) }
   }
@@ -1069,6 +1148,8 @@ const transientGitEntry = /\.lock$/
 const gitEntry = /^\.git([\\/]|$)/
 const notifyQuietMs = 150
 const notifyMaxWaitMs = 1000
+const watchRetryMs = 500
+const maxWatchRetries = 5
 const discoveryQuietMs = 300
 const maxDiscoveryChildren = 64
 
@@ -1084,6 +1165,8 @@ interface WatcherHandle {
   wcId: number
   count: number
   close: () => void
+  root?: string
+  notify?: () => void
 }
 
 // Shared ref-counted registration for both `git:watch` (content changes within a repo) and
@@ -1106,6 +1189,12 @@ class WatcherRegistry {
 
   isCurrent(key: string, handle: WatcherHandle): boolean {
     return this.entries.get(key) === handle
+  }
+
+  notify(root: string): void {
+    for (const handle of this.entries.values()) {
+      if (handle.root && samePath(handle.root, root)) handle.notify?.()
+    }
   }
 
   bail(key: string, handle: WatcherHandle): void {
@@ -1229,7 +1318,9 @@ export function registerGitHandlers(): void {
 
     const base = head || emptyTree
     const indexFile = path.join(os.tmpdir(), `snow-diff-${process.pid}-${++scratchIndexCount}`)
-    const scratch = simpleGit(root).env('GIT_OPTIONAL_LOCKS', '0').env('GIT_INDEX_FILE', indexFile)
+    const scratch = simpleGit(root, gitOptions)
+      .env('GIT_OPTIONAL_LOCKS', '0')
+      .env('GIT_INDEX_FILE', indexFile)
     const stagedPaths = git
       .raw(['diff', '--cached', '--name-only', '-z', base])
       .then((out) => new Set(out.split('\0').filter(Boolean)))
@@ -1393,6 +1484,8 @@ export function registerGitHandlers(): void {
       return withRepoLock(cwd, async () => {
         if (!carry) return switchBranch(cwd, name, (git) => git.checkoutLocalBranch(name))
         try {
+          const blocked = ownedElsewhere((await registryFor(cwd)).owner, name)
+          if (blocked) return blocked
           await gitFor(cwd).checkoutLocalBranch(name)
           return { ok: true, branch: name }
         } catch (error) {
@@ -2074,20 +2167,38 @@ export function registerGitHandlers(): void {
         if (accept && !accept(filename)) return
         notify()
       }
+      let stopped = false
+      let retries = 0
+      let retry: NodeJS.Timeout | null = null
       const attach = (watcher: fs.FSWatcher): void => {
-        watcher.on('error', () => watcher.close())
-        closers.push(() => watcher.close())
+        watcher.on('error', () => {
+          watcher.close()
+          notify()
+          if (stopped || retries++ >= maxWatchRetries) return
+          retry = setTimeout(open, watchRetryMs)
+        })
+        closers.push(() => {
+          stopped = true
+          if (retry) clearTimeout(retry)
+          watcher.close()
+        })
       }
-      try {
-        attach(fs.watch(target, { recursive }, handler))
-      } catch {
-        if (!recursive) return
+      function open(): void {
+        if (stopped) return
+        retry = null
+        try {
+          attach(fs.watch(target, { recursive }, handler))
+          return
+        } catch {
+          if (!recursive) return
+        }
         try {
           attach(fs.watch(target, handler))
         } catch {
           // path may not exist yet or be unwatchable
         }
       }
+      open()
     }
 
     const notLockFile = (filename: string | null): boolean =>
@@ -2110,6 +2221,9 @@ export function registerGitHandlers(): void {
       watchers.bail(key, handle)
       return
     }
+
+    handle.root = common ?? worktree ?? cwd ?? os.homedir()
+    handle.notify = notify
 
     if (!destroyHooked.has(sender)) {
       destroyHooked.add(sender)
