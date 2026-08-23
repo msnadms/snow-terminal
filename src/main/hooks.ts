@@ -54,6 +54,19 @@ function shimFile(): string {
   return path.join(hooksDir(), process.platform === 'win32' ? `${marker}.cmd` : marker)
 }
 
+/**
+ * What goes in settings.json, and it is **not** the bare path. Claude Code runs a hook command
+ * through a shell - bash even on Windows - so an unquoted `C:\Users\…` arrives with every backslash
+ * eaten as an escape and the hook fails with "command not found". Quoting also covers the ordinary
+ * case of a space in the path. Forward slashes are what make the quoting sufficient rather than
+ * merely usual: inside double quotes bash still unescapes `\$` and `\\`, which a directory starting
+ * with `$` or a UNC home would otherwise hit. Git Bash runs a `.cmd` addressed this way happily.
+ */
+function shimCommand(): string {
+  const file = shimFile()
+  return `"${process.platform === 'win32' ? file.split(path.sep).join('/') : file}"`
+}
+
 function claudeDir(): string {
   const configured = process.env.CLAUDE_CONFIG_DIR
   return configured && path.isAbsolute(configured) ? configured : path.join(os.homedir(), '.claude')
@@ -191,7 +204,7 @@ function install(): HooksResult {
     )
 
   const { hooks } = withoutSnow(settings.hooks)
-  const command = shimFile()
+  const command = shimCommand()
   for (const event of hookEvents) {
     const group: HookGroup = {
       ...(event === 'PreToolUse' ? { matcher: '*' } : {}),
@@ -216,7 +229,7 @@ function install(): HooksResult {
     detail: [
       'snow now reads live session status from Claude Code instead of inferring it from terminal output.',
       '',
-      `Hook: ${collapseHome(command)}`,
+      `Hook: ${collapseHome(shimFile())}`,
       `Settings: ${collapseHome(settingsFile())}`,
       '',
       'Claude sessions that are already running keep their old settings until they restart.',
@@ -290,6 +303,44 @@ export function runHooks(action: string): HooksResult {
 }
 
 /**
+ * Repairs the command string in an already-installed entry. This is maintenance of something the
+ * user asked for, not an install: it runs only when the shim is already on disk, and it rewrites
+ * nothing but snow's own handlers. It exists because the shim path is the half of the install that
+ * settings.json holds, so a shim refresh alone cannot fix an entry written by an older snow.
+ */
+function repairSettings(): void {
+  const command = shimCommand()
+  const { settings, error } = readSettings()
+  if (error) {
+    log('warn', 'hooks', 'settings unreadable, left alone', { error })
+    return
+  }
+
+  const hooks = settings.hooks
+  if (!hooks || typeof hooks !== 'object') return
+  let stale = 0
+  for (const groups of Object.values(hooks as Record<string, unknown>)) {
+    if (!Array.isArray(groups)) continue
+    for (const group of groups as HookGroup[]) {
+      if (!group || !Array.isArray(group.hooks)) continue
+      for (const handler of group.hooks) {
+        if (!isSnowHandler(handler) || handler.command === command) continue
+        handler.command = command
+        stale += 1
+      }
+    }
+  }
+  if (stale === 0) return
+
+  try {
+    writeSettings(settings)
+    log('info', 'hooks', 'hook command repaired', { entries: stale, command })
+  } catch (err) {
+    log('warn', 'hooks', 'repair failed', { error: (err as Error).message })
+  }
+}
+
+/**
  * The shim names a specific app binary, so an update would otherwise leave it dangling. It is only
  * ever refreshed once the user has installed it: snow creates neither this directory nor a hooks
  * entry in settings.json on its own.
@@ -301,6 +352,7 @@ export function refreshHooks(): void {
   } catch (err) {
     log('warn', 'hooks', 'refresh failed', { error: (err as Error).message })
   }
+  repairSettings()
 }
 
 export function registerHooksHandlers(): void {

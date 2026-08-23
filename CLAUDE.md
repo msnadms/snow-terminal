@@ -903,6 +903,22 @@ settings file gets a stable path snow owns, and `refreshHooks()` rewrites the sh
 every launch **only when it already exists**. Snow never creates that directory, or a settings entry,
 on its own.
 
+**What `settings.json` holds is a quoted, forward-slash command, not a bare path.** Claude Code runs
+a hook command through a **shell — bash even on Windows** — so an unquoted `C:\Users\…` arrives with
+every backslash eaten as an escape and the hook dies on every event as
+`C:Usersmason.configsnowhooks…: command not found`. Quoting also covers the ordinary case of a space
+in the path, which broke POSIX installs the same way. Forward slashes are what make the quoting
+sufficient rather than merely usual: bash still unescapes `\$` and `\\` inside double quotes, which a
+directory beginning with `$` or a UNC home would hit. Git Bash runs a `.cmd` addressed this way
+without complaint, so the shim stays a `.cmd` for anything that does go through `cmd.exe`.
+
+`refreshHooks()` therefore **repairs** the command of an entry that is already there, not just the
+shim's contents. The shim path is the half of the install that lives in `settings.json`, so
+rewriting the shim alone cannot reach it and an entry written by an older snow would stay broken
+forever. That is maintenance of something the user asked for rather than an install: it is gated on
+the shim already existing, it rewrites only handlers carrying snow's marker, and every other key in
+the file is left byte-identical.
+
 The shim prefers `node` on `PATH` and falls back to the app binary with `ELECTRON_RUN_AS_NODE=1`.
 Electron-as-node is the fallback rather than the default because it costs an extra ~60 ms of startup
 on every single tool call; it is there at all because a native-binary Claude Code install does not
