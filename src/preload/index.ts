@@ -22,6 +22,8 @@ import type { BrowserBounds, BrowserState } from '../main/browser'
 import type { WorkflowList, WorkflowOverview, WorkflowResult } from '../main/workflow'
 import type { ThemeResult } from '../main/theme'
 import type { ThemeInstallResult } from '../main/themeInstall'
+import type { AgentsResult } from '../main/agents'
+import type { HooksResult } from '../main/hooks'
 import type { SnowignoreResult } from '../main/snowignore'
 import type { SnowconfigResult, Layout, Preset } from '../main/snowconfig'
 import type { UsageResult } from '../main/usage'
@@ -283,6 +285,24 @@ const usage = {
   }
 }
 
+const agents = {
+  get: (): Promise<AgentsResult> => ipcRenderer.invoke('agents:get'),
+  onChanged: (callback: (result: AgentsResult) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, result: AgentsResult): void => callback(result)
+    ipcRenderer.on('agents:changed', listener)
+    return () => ipcRenderer.removeListener('agents:changed', listener)
+  }
+}
+
+const hooks = {
+  pending: (): Promise<HooksResult | null> => ipcRenderer.invoke('hooks:pending'),
+  onChanged: (callback: (result: HooksResult) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, result: HooksResult): void => callback(result)
+    ipcRenderer.on('hooks:changed', listener)
+    return () => ipcRenderer.removeListener('hooks:changed', listener)
+  }
+}
+
 const cli = {
   pending: (): Promise<Preset | null> => ipcRenderer.invoke('cli:pending'),
   onOpen: (callback: (preset: Preset) => void): (() => void) => {
@@ -292,7 +312,19 @@ const cli = {
   }
 }
 
-const api = { terminal, browser, git, workflow, theme, snowignore, snowconfig, usage, cli }
+const api = {
+  terminal,
+  browser,
+  git,
+  workflow,
+  theme,
+  snowignore,
+  snowconfig,
+  usage,
+  agents,
+  hooks,
+  cli
+}
 
 export type Api = typeof api
 

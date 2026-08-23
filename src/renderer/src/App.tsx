@@ -17,9 +17,11 @@ import type { Failure } from './format'
 import { nextTerminalId } from './terminalId'
 import { regroupTabs } from './tabGroups'
 import { useKeybinds, usePresetDigitKeybind } from './keybinds'
+import { useAgents } from './useAgents'
 import { useCollapsiblePane } from './useCollapsiblePane'
 import { useSnowconfig, visiblePresetEntries, type Preset } from './useSnowconfig'
 import type { ThemeInstallResult } from '../../main/themeInstall'
+import type { HooksResult } from '../../main/hooks'
 
 type ActiveId = number | 'home' | 'workflows'
 
@@ -248,20 +250,55 @@ function App(): React.JSX.Element {
     [cwds]
   )
 
-  const { sessionDirStatuses, sessionDirTitles } = useMemo(() => {
+  const agentSessions = useAgents()
+
+  /**
+   * Two agents in one directory are one row on screen, so the loudest state wins rather than the
+   * newest: an agent waiting on a permission prompt is the thing worth surfacing even while its
+   * neighbour keeps working.
+   */
+  const agentDirs = useMemo(() => {
+    const rank: Record<SessionStatus, number> = { attention: 2, busy: 1, idle: 0 }
+    const map: Record<string, { state: SessionStatus; detail: string; updated: number }> = {}
+    for (const session of agentSessions) {
+      if (!session.cwd) continue
+      const key = normalizePath(session.cwd)
+      const current = map[key]
+      const better =
+        !current ||
+        rank[session.state] > rank[current.state] ||
+        (rank[session.state] === rank[current.state] && session.updated > current.updated)
+      if (better)
+        map[key] = { state: session.state, detail: session.detail, updated: session.updated }
+    }
+    return map
+  }, [agentSessions])
+
+  /**
+   * A hook-reported state always beats the PTY byte heuristic, which stays as the floor for panes
+   * no agent reports - a bottom shell, an `npm run dev` split, a session with no hooks installed.
+   */
+  const { sessionDirStatuses, sessionDirTitles, tabStatuses } = useMemo(() => {
     const sessionDirStatuses: Record<string, SessionStatus> = {}
     const sessionDirTitles: Record<string, string> = {}
+    const tabStatuses: Record<number, SessionStatus> = {}
     for (const tab of tabs) {
       if (tab.kind !== 'shell') continue
       const dir = tabCwd(tab)
+      const agent = dir ? agentDirs[normalizePath(dir)] : undefined
+      const status = agent?.state ?? statuses[tab.id]
+      if (status) tabStatuses[tab.id] = status
       if (!dir) continue
-      const status = statuses[tab.id]
       if (status) sessionDirStatuses[normalizePath(dir)] = status
-      const title = titles[tab.id]
+      const title = agent?.detail || titles[tab.id]
       if (title) sessionDirTitles[normalizePath(dir)] = title
     }
-    return { sessionDirStatuses, sessionDirTitles }
-  }, [tabs, tabCwd, statuses, titles])
+    for (const [dir, agent] of Object.entries(agentDirs)) {
+      sessionDirStatuses[dir] = agent.state
+      if (agent.detail) sessionDirTitles[dir] = agent.detail
+    }
+    return { sessionDirStatuses, sessionDirTitles, tabStatuses }
+  }, [tabs, tabCwd, statuses, titles, agentDirs])
 
   const [roots, setRoots] = useState<Record<string, string | null>>({})
   const [rootsEpoch, setRootsEpoch] = useState(0)
@@ -410,16 +447,30 @@ function App(): React.JSX.Element {
     return window.api.cli.onOpen(open)
   }, [presets])
 
-  const [themeFailure, setThemeFailure] = useState<Failure | null>(null)
+  const [notice, setNotice] = useState<Failure | null>(null)
 
   useEffect(() => {
     const installed = (result: ThemeInstallResult): void => {
-      if (result.error) setThemeFailure(failureOf({ error: result.error, detail: result.detail }))
+      if (result.error) setNotice(failureOf({ error: result.error, detail: result.detail }))
     }
     void window.api.theme.pendingInstall().then((result) => {
       if (result) installed(result)
     })
     return window.api.theme.onInstalled(installed)
+  }, [])
+
+  useEffect(() => {
+    const ran = (result: HooksResult): void => {
+      setNotice(
+        result.error
+          ? failureOf({ error: result.error, detail: result.detail })
+          : { title: result.message, detail: result.detail }
+      )
+    }
+    void window.api.hooks.pending().then((result) => {
+      if (result) ran(result)
+    })
+    return window.api.hooks.onChanged(ran)
   }, [])
 
   const openCommit = useCallback((cwd: string, hash: string): void => {
@@ -747,7 +798,7 @@ function App(): React.JSX.Element {
             sessions={sessionItems}
             activeId={activeId}
             labels={labels}
-            statuses={statuses}
+            statuses={tabStatuses}
             onSelect={setActiveId}
             onClose={closeSession}
             onCloseGroup={closeSessions}
@@ -868,9 +919,7 @@ function App(): React.JSX.Element {
         )}
       </div>
       {showTour && <Tour onClose={closeTour} />}
-      {themeFailure && (
-        <FailureDialog failure={themeFailure} onDismiss={() => setThemeFailure(null)} />
-      )}
+      {notice && <FailureDialog failure={notice} onDismiss={() => setNotice(null)} />}
     </div>
   )
 }

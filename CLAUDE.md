@@ -631,10 +631,11 @@ shell's first OSC 7) and passes it to both terminals' spawn.
 
 ## Agents (Claude and Codex)
 
-Both agent-facing features — the AI commit message and the usage meter — support **Claude Code and
-Codex**. They are separate mechanisms and do not share a selector: the commit message runs whichever
-one `.snowconfig`'s `commitAgent` names, while the usage meter always reports both, because cost is
-observed after the fact rather than chosen.
+Two of the three agent-facing features — the AI commit message and the usage meter — support
+**Claude Code and Codex**. They are separate mechanisms and do not share a selector: the commit
+message runs whichever one `.snowconfig`'s `commitAgent` names, while the usage meter always reports
+both, because cost is observed after the fact rather than chosen. The third, agent status, is Claude
+Code only, because it is fed by Claude Code's hook system and Codex has no equivalent.
 
 ### AI commit messages
 
@@ -662,6 +663,55 @@ On Windows both CLIs are `.cmd` shims, so the child is spawned with `shell: true
 quote arguments in shell mode, so `spawnCommitAgent` quotes any argument containing whitespace. That
 is not hypothetical: the `--output-last-message` path goes through `os.tmpdir()`, which sits under the
 user's profile and contains a space whenever their account name does.
+
+### Agent status
+
+Session status used to be **inferred from bytes**: `Terminal.tsx` calls a pane `busy` after a
+sustained burst of PTY output and `idle` after quiet. That heuristic cannot tell "Claude finished"
+from "Claude is blocked on a permission prompt", cannot see thinking (quiet, no output), and pins
+`busy` forever on an animated spinner — so the one state worth surfacing, _it needs you_, is exactly
+the one it cannot see. `snow hooks install` (see _The `snow` command_) replaces the source with
+events Claude Code emits.
+
+The channel is a **directory of files, not an IPC socket**: the hook runs as a short-lived child of
+the user's `claude` process, which has no way to talk to a running snow. So the hook writes
+`~/.config/snow/agents/<session_id>.json` (`{ sessionId, cwd, state, detail, agent, updated }`) and
+`src/main/agents.ts` reads and watches that directory — snow only ever reads it, and nothing but the
+hook writes it.
+
+| Event              | State                                                    |
+| ------------------ | -------------------------------------------------------- |
+| `SessionStart`     | `idle` — an agent is alive in this cwd                   |
+| `UserPromptSubmit` | `busy`                                                   |
+| `PreToolUse`       | `busy`, plus a `detail` string built from the tool call  |
+| `Notification`     | `attention` — Claude is waiting on the user              |
+| `SubagentStop`     | `busy` — a dispatched agent finished, the parent has not |
+| `Stop`             | `idle`                                                   |
+| `SessionEnd`       | the record is deleted                                    |
+
+`resources/hooks/snow-agent-hook.mjs` is the whole hook. It **exits 0 unconditionally, prints
+nothing, and carries its own 5 s watchdog**, because a hook that fails, hangs, or writes to stdout
+degrades the user's Claude session and a status badge is not worth that. Records are written to a
+temp file and renamed, so a reader never sees a half-written one; the `session_id` is sanitized
+before it becomes a filename, since it arrives as external input.
+
+`readAgents()` drops records older than 12 h **and deletes their files**: a session killed at the
+terminal never fires `SessionEnd`, so nothing else would ever clean up after it. A malformed file is
+skipped rather than deleted, matching how `snowignore.ts` degrades.
+
+**The heuristic stays as the floor, not the ceiling.** `App` keeps `statuses` (per tab, from the PTY
+byte burst) and adds `agentDirs` (per normalized cwd, from `agents:get` + `agents:changed`); a
+hook-reported state always wins, and the heuristic answers only for a directory no agent reports — a
+bottom shell, an `npm run dev` split, a Codex pane, a Claude session with no hooks installed.
+Deleting it would regress every non-Claude pane to no status at all. The merge also folds in agent
+directories with **no tab**, which is what lets the workflow manager show a worktree someone is
+running `claude` in from outside snow.
+
+Where two agents share a directory the **loudest state wins, not the newest**: they are one row on
+screen, and an agent waiting on a permission prompt is the thing worth surfacing even while its
+neighbour keeps working. The tab-strip badges and the manager rows then improve with no changes of
+their own, because both already read those directory-keyed maps — the display end was built before
+this channel existed.
 
 ### Usage cost
 
@@ -780,6 +830,43 @@ and a packaged Electron app on Windows has no console attached in the first plac
 `snow.log` and to the window. Success is self-evident (the app recolors); a failure broadcasts
 `theme:installed` with an `error`, which `App` renders in the shared `FailureDialog`. That is why the
 CLI surface is an action rather than a query: a `list` verb would have nowhere to print.
+
+#### `snow hooks install` / `snow hooks remove`
+
+The third verb, and the reason it is a verb at all. Reading status needs a `hooks` block in
+`~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`), and **that file is the user's**.
+`installCommand()` is not a precedent for writing it on launch: that writes a file snow owns, in a
+directory snow chose, the same reason snow refuses to edit `PATH`. So installing is an explicit
+command, and it **merges** — every key, and every hook the user already had, is preserved.
+
+`runArgs` dispatches on the first positional with **at least one more argument**, so `snow hooks`
+alone still opens a `./hooks` directory, exactly as `snow theme` still opens `./theme`. The guard is
+now shared by both verbs rather than repeated. An unrecognized second positional (`snow hooks fix`)
+is an error naming the two it accepts, not a fall-through to the folder path — a folder named
+`hooks` with a subfolder in it would otherwise silently open.
+
+Removal is keyed on the **command string containing `snow-agent-hook`**, so it takes out exactly
+snow's entries and leaves any group it merely shared an event with intact. A `settings.json` that
+does not parse is a refusal, never an overwrite.
+
+Two files land in `~/.config/snow/hooks/`: the script itself, copied out of the app's `resources/`,
+and a shim (`snow-agent-hook.cmd` / `snow-agent-hook`) which is what `settings.json` actually names.
+The indirection is load-bearing. A path into the app breaks the next time the app moves or updates,
+and an AppImage's `execPath` points inside a temporary mount that is gone by the next boot — so the
+settings file gets a stable path snow owns, and `refreshHooks()` rewrites the shim's contents on
+every launch **only when it already exists**. Snow never creates that directory, or a settings entry,
+on its own.
+
+The shim prefers `node` on `PATH` and falls back to the app binary with `ELECTRON_RUN_AS_NODE=1`.
+Electron-as-node is the fallback rather than the default because it costs an extra ~60 ms of startup
+on every single tool call; it is there at all because a native-binary Claude Code install does not
+imply a Node on `PATH`.
+
+Like `snow theme`, the shim detaches and cannot print, so the result goes to `snow.log` and is
+broadcast as `hooks:changed` for the window to render. Unlike a theme install, **success is not
+self-evident** — nothing recolors — so `App` shows the result either way, which is why its dialog
+state is a `notice` rather than a `themeFailure`. The `HooksResult` carries a `message` and a
+`detail` alongside `error`; the renderer composes the prose, main does not.
 
 `installCommand()` is the PATH shim, and it runs itself — on every start, from `registerCliHandlers`,
 with **no UI at all**. `commandState` decides: `install` and `update` (the shim points at a

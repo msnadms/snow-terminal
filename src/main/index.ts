@@ -12,6 +12,8 @@ import { registerThemeHandlers, disposeThemeWatcher } from './theme'
 import { registerSnowignoreHandlers, disposeSnowignoreWatcher } from './snowignore'
 import { registerSnowconfigHandlers, disposeSnowconfigWatcher } from './snowconfig'
 import { registerUsageHandlers, disposeUsageWatcher } from './usage'
+import { registerAgentHandlers, disposeAgentWatcher } from './agents'
+import { refreshHooks } from './hooks'
 import { initLogging, closeLogging, log, logPath, watchRenderer } from './log'
 import { configDir } from './config'
 import { startCli, registerCliHandlers } from './cli'
@@ -121,6 +123,12 @@ app.whenReady().then(() => {
   // Watch ~/.claude/projects for Claude Code session logs to tally daily/weekly cost.
   registerUsageHandlers()
 
+  // Watch ~/.config/snow/agents for the status records `snow hooks install` makes Claude Code write.
+  registerAgentHandlers()
+
+  // Keep an installed hook shim pointing at this copy of the app; never installs one.
+  refreshHooks()
+
   // Resolve a folder passed on the command line into a preset; after the snowconfig
   // handlers, which seed the file this writes to.
   registerCliHandlers()
@@ -155,6 +163,7 @@ app.on('will-quit', () => {
   disposeSnowignoreWatcher()
   disposeSnowconfigWatcher()
   disposeUsageWatcher()
+  disposeAgentWatcher()
   closeLogging()
 })
 

@@ -18,6 +18,10 @@ export default defineConfig(
     }
   },
   {
+    files: ['resources/**/*.mjs'],
+    rules: { '@typescript-eslint/explicit-function-return-type': 'off' }
+  },
+  {
     files: ['**/*.{ts,tsx}'],
     plugins: {
       'react-hooks': eslintPluginReactHooks,

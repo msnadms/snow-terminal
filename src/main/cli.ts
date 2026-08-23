@@ -4,6 +4,7 @@ import os from 'os'
 import path from 'path'
 import { broadcast, expandHome, samePath } from './config'
 import { log } from './log'
+import { runHooks, type HooksResult } from './hooks'
 import { presetForDir, type Preset } from './snowconfig'
 import { installTheme } from './themeInstall'
 import type { ThemeInstallResult } from './themeInstall'
@@ -11,6 +12,7 @@ import type { ThemeInstallResult } from './themeInstall'
 type CommandState = 'ready' | 'install' | 'update' | 'path'
 
 let startupThemeInstall: ThemeInstallResult | null = null
+let startupHooks: HooksResult | null = null
 
 function positionalArgs(argv: string[], cwd: string): string[] {
   return argv
@@ -40,14 +42,30 @@ function presetFor(args: string[], cwd: string): Preset | null {
   return preset
 }
 
-function runArgs(argv: string[], cwd: string, retainThemeResult = false): Preset | null {
+/**
+ * A verb only shadows a directory of the same name when it carries its own argument, so `snow theme`
+ * and `snow hooks` still open `./theme` and `./hooks`.
+ */
+function runArgs(argv: string[], cwd: string, retainResult = false): Preset | null {
   const args = positionalArgs(argv, cwd)
-  if (args[0] !== 'theme' || args.length < 2) return presetFor(args, cwd)
-  void installTheme(args[1], args[2] ?? null, argv.includes('--force')).then((result) => {
-    if (retainThemeResult) startupThemeInstall = result
-    broadcast('theme:installed', result)
-  })
-  return null
+  if (args.length < 2) return presetFor(args, cwd)
+
+  if (args[0] === 'theme') {
+    void installTheme(args[1], args[2] ?? null, argv.includes('--force')).then((result) => {
+      if (retainResult) startupThemeInstall = result
+      broadcast('theme:installed', result)
+    })
+    return null
+  }
+
+  if (args[0] === 'hooks') {
+    const result = runHooks(args[1])
+    if (retainResult) startupHooks = result
+    broadcast('hooks:changed', result)
+    return null
+  }
+
+  return presetFor(args, cwd)
 }
 
 function focusWindow(): void {
@@ -165,6 +183,11 @@ export function registerCliHandlers(): void {
   ipcMain.handle('theme:pendingInstall', (): ThemeInstallResult | null => {
     const result = startupThemeInstall
     startupThemeInstall = null
+    return result
+  })
+  ipcMain.handle('hooks:pending', (): HooksResult | null => {
+    const result = startupHooks
+    startupHooks = null
     return result
   })
 }
