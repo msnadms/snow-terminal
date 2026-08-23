@@ -48,13 +48,13 @@ const steps: Step[] = [
     selectors: ['.picker-branch']
   },
   {
-    title: 'Workflows',
-    body: 'Register a branch as a workflow and snow parks its uncommitted work when you switch away, then restores it when you return. Branching off a dirty workflow asks whether to carry your changes along or park them behind.',
+    title: 'Workspaces',
+    body: 'Register a branch as a workspace and snow parks its uncommitted work when you switch away, then restores it when you return. Branching off a dirty workspace asks whether to carry your changes along or park them behind.',
     selectors: ['.picker-workflow']
   },
   {
-    title: 'Workflow manager',
-    body: 'Lists every registered workflow across every repo. Launch one into its own git worktree to run it alongside your current session, or launch them all at once.',
+    title: 'Workspace manager',
+    body: 'Lists every registered workspace across every repo. Open one in its own git worktree, or open them all with their matching preset startup commands. Start an additional agent explicitly; its dispatcher remains responsible for tasks.',
     selectors: ['.tab-workflows']
   }
 ]

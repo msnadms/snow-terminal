@@ -19,11 +19,11 @@ function RemoveWorkflowDialog({
   if (usable(entry))
     return (
       <GitDialog
-        title={`${entry.branch} is running in parallel`}
+        title={`${entry.branch}'s workspace is active`}
         detail={[
-          `${entry.branch} has its own worktree, so snow keeps tracking it while that session is live.`,
+          `${entry.branch} has its own worktree, so snow keeps tracking it while that workspace is active.`,
           '',
-          `Stop the parallel session first - the pause button on this row - and then remove it.`
+          `Remove the workspace first - the pause button on this row - and then remove its record.`
         ].join('\n')}
         onDismiss={onCancel}
       >
@@ -35,9 +35,9 @@ function RemoveWorkflowDialog({
 
   return (
     <GitDialog
-      title={`Remove workflow ${entry.branch}?`}
+      title={`Remove workspace ${entry.branch}?`}
       detail={[
-        `The branch ${entry.branch} is not deleted - snow just stops tracking it as a workflow.`,
+        `The branch ${entry.branch} is not deleted - snow just stops tracking it as a workspace.`,
         entry.parked
           ? `\n${parkedStay(entry.parked.files)} Recover them with:\n  git stash list\n  git stash pop <entry>`
           : ''

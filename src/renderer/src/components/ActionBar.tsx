@@ -8,6 +8,7 @@ import { type Failure } from '@renderer/format'
 import { useGitAction } from '@renderer/useGitAction'
 import { useKeybinds } from '@renderer/keybinds'
 import { useLatestRun } from '@renderer/useLatestRun'
+import type { AgentSession } from '@renderer/useAgents'
 
 interface ActionBarProps {
   cwd?: string
@@ -20,6 +21,7 @@ interface ActionBarProps {
   onOpenWorktree?: (cwd: string) => void
   onCloseWorktree?: (cwd: string) => void
   onManageWorkflows?: () => void
+  agentSessions: AgentSession[]
   keybinds: Record<string, string>
 }
 
@@ -83,6 +85,7 @@ function ActionBar({
   onOpenWorktree,
   onCloseWorktree,
   onManageWorkflows,
+  agentSessions,
   keybinds
 }: ActionBarProps): React.JSX.Element {
   const [isRepo, setIsRepo] = useState(false)
@@ -348,6 +351,7 @@ function ActionBar({
           onOpenWorktree={onOpenWorktree}
           onCloseWorktree={onCloseWorktree}
           onManage={onManageWorkflows}
+          agentSessions={agentSessions}
         />
         <BranchSelect key={cwd ?? 'none'} cwd={cwd} />
         <button

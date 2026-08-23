@@ -7,6 +7,7 @@ import { simpleGit, SimpleGit, SimpleGitOptions, StatusResult } from 'simple-git
 import { filterPaths } from './snowignore'
 import { activeCommitAgent, CommitAgent } from './snowconfig'
 import { branchesFor, readRecords, workflowsPath } from './registry'
+import { withSharedStashLock } from './stashLock'
 import { collapseHome, expandHome, samePath } from './config'
 import { isExternalUrl } from './external'
 
@@ -923,7 +924,9 @@ async function parkOnLeave(
     )
   }
 
-  await gitFor(cwd).raw(['stash', 'push', '-u', '-m', `${markerPrefix}${departure.current}`])
+  await withSharedStashLock(cwd, () =>
+    gitFor(cwd).raw(['stash', 'push', '-u', '-m', `${markerPrefix}${departure.current}`])
+  )
   return departure
 }
 
@@ -960,13 +963,16 @@ async function restoreOnEnter(
   registered: string[]
 ): Promise<GitCheckoutResult | null> {
   if (!registered.includes(branch)) return null
-  const entry = newestStash(await stashEntries(cwd), branch)
-  if (!entry) return null
-
-  const files = await parkedFiles(cwd, entry.selector)
   try {
-    await popStash(cwd, entry.selector)
-    return { ok: true, restored: files ?? 0 }
+    const restored = await withSharedStashLock(cwd, async () => {
+      const entry = newestStash(await stashEntries(cwd), branch)
+      if (!entry) return null
+      const files = await parkedFiles(cwd, entry.selector)
+      await popStash(cwd, entry.selector)
+      return files
+    })
+    if (restored === null) return null
+    return { ok: true, restored: restored ?? 0 }
   } catch (error) {
     let conflicted: string[] = []
     try {
@@ -1030,9 +1036,13 @@ async function rollbackPark(
   })
 
   try {
-    const entry = newestStash(await stashEntries(cwd), departure.current)
-    if (!entry) return stranded()
-    await popStash(cwd, entry.selector)
+    const restored = await withSharedStashLock(cwd, async () => {
+      const entry = newestStash(await stashEntries(cwd), departure.current as string)
+      if (!entry) return false
+      await popStash(cwd, entry.selector)
+      return true
+    })
+    if (!restored) return stranded()
     return failure
   } catch {
     return stranded()
@@ -1045,9 +1055,13 @@ async function rollbackPark(
  */
 export async function unparkBranch(cwd: string, branch: string): Promise<string | null> {
   try {
-    const entry = newestStash(await stashEntries(cwd), branch)
-    if (!entry) return `no ${markerPrefix}${branch} stash was found`
-    await popStash(cwd, entry.selector)
+    const restored = await withSharedStashLock(cwd, async () => {
+      const entry = newestStash(await stashEntries(cwd), branch)
+      if (!entry) return false
+      await popStash(cwd, entry.selector)
+      return true
+    })
+    if (!restored) return `no ${markerPrefix}${branch} stash was found`
     return null
   } catch (error) {
     return errorDetail(error) || errorText(error)

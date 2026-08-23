@@ -616,6 +616,12 @@ body {
   font-size: 11px;
 }
 
+.wfm-subtitle {
+  color: var(--ui-faint-text, #6c7086);
+  font-size: 11px;
+  font-weight: normal;
+}
+
 .wfm-empty {
   padding: 8px 2px;
   color: var(--ui-muted-text, #a6adc8);
@@ -731,6 +737,13 @@ body {
   white-space: nowrap;
   color: var(--ui-muted-text, #a6adc8);
   font-size: 11px;
+}
+
+.wfm-agent-count {
+  flex: 0 0 auto;
+  color: var(--ui-faint-text, #6c7086);
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .wfm-state {

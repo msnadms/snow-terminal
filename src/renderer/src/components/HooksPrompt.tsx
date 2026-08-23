@@ -39,8 +39,9 @@ function HooksPrompt({ prompted }: HooksPromptProps): React.JSX.Element | null {
     setBusy(false)
   }
 
+  if (!state || state.error || !state.available) return null
+  if (state.installed) return null
   if (prompted || busy) return null
-  if (!state || state.error || !state.available || state.installed) return null
 
   return (
     <div className="home-hooks">
@@ -51,6 +52,9 @@ function HooksPrompt({ prompted }: HooksPromptProps): React.JSX.Element | null {
         <span className="home-hooks-path">{state.settings}</span>
         {' that reports it directly. Undo any time with '}
         <span className="home-hooks-path">snow hooks remove</span>.
+        {' Shared-stash protection starts in deny mode; change it with '}
+        <span className="home-hooks-path">snow hooks protection deny|warn|off</span>
+        {' to choose its behavior.'}
       </div>
       <div className="home-hooks-actions">
         <button className="home-hooks-button home-hooks-accept" onClick={() => answer(true)}>

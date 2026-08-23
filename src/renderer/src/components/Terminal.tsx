@@ -39,6 +39,7 @@ interface TerminalProps {
   onCwd?: (cwd: string) => void
   onStatus?: (status: 'busy' | 'idle') => void
   onTitle?: (title: string) => void
+  onInterrupt?: () => void
   startupCommand?: string
   active?: boolean
   focusOnActivate?: boolean
@@ -49,6 +50,7 @@ function Terminal({
   onCwd,
   onStatus,
   onTitle,
+  onInterrupt,
   startupCommand,
   active = true,
   focusOnActivate
@@ -57,6 +59,7 @@ function Terminal({
   const onCwdRef = useRef(onCwd)
   const onStatusRef = useRef(onStatus)
   const onTitleRef = useRef(onTitle)
+  const onInterruptRef = useRef(onInterrupt)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const searchAddonRef = useRef<SearchAddon | null>(null)
   const termRef = useRef<XTerm | null>(null)
@@ -78,6 +81,10 @@ function Terminal({
   useEffect(() => {
     onTitleRef.current = onTitle
   }, [onTitle])
+
+  useEffect(() => {
+    onInterruptRef.current = onInterrupt
+  }, [onInterrupt])
 
   useEffect(() => {
     const container = containerRef.current
@@ -168,6 +175,7 @@ function Terminal({
     })
 
     const inputDisposable = term.onData((data) => {
+      if (data === '\u0003' || data === '\x1b') onInterruptRef.current?.()
       window.api.terminal.write(id, data)
     })
 

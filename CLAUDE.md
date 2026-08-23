@@ -349,7 +349,7 @@ from `Add, Commit` to `Commit N staged files`.
 Session presets for the home tab, as JSON. `src/main/snowconfig.ts` mirrors `theme.ts`'s lifecycle
 (default written with `flag: 'wx'` on first launch, directory `fs.watch` broadcasting
 `snowconfig:changed`). Shape is
-`{ presets: { name, cwd, default?, commands?, startupCommand?, splits?, paneRatios?, hidden? }[], name?, startupCommand?, commitAgent?, gradients?, theme?, tourSeen?, hooksPrompted?, keybinds?, layout? }` (`splits` are other presets' names); entries
+`{ presets: { name, cwd, default?, commands?, startupCommand?, splits?, paneRatios?, hidden? }[], name?, startupCommand?, commitAgent?, gradients?, theme?, tourSeen?, hooksPrompted?, workflowStashProtection?, keybinds?, layout? }` (`splits` are other presets' names); entries
 missing a string `name`/`cwd` are dropped, and a leading `~` in `cwd` is expanded to the home dir **only on
 read**, so the renderer gets absolute paths while the file keeps the raw `~`. The top-level `name`
 drives the home tab's `Hello {name}` greeting (falling back to `snow`); `seedName()` on registration
@@ -680,9 +680,14 @@ events Claude Code emits.
 
 The channel is a **directory of files, not an IPC socket**: the hook runs as a short-lived child of
 the user's `claude` process, which has no way to talk to a running snow. So the hook writes
-`~/.config/snow/agents/<session_id>.json` (`{ sessionId, cwd, state, detail, agent, updated }`) and
+`~/.config/snow/agents/<session_id>.json` (`{ sessionId, parentSessionId?, cwd, state, detail, task?, result?, agent, updated }`) and
 `src/main/agents.ts` reads and watches that directory — snow only ever reads it, and nothing but the
 hook writes it.
+
+This is deliberately an **observation contract**, not an agent-control API. Other dispatchers may
+write the same optional fields, using their own `agent` name and stable session IDs; Snow groups the
+records by workspace for the human operator, but it never creates tasks, chooses a next agent, or
+turns a stopped session into a completed task.
 
 | Event              | State                                                    |
 | ------------------ | -------------------------------------------------------- |
@@ -691,7 +696,7 @@ hook writes it.
 | `PreToolUse`       | `busy`, plus a `detail` string built from the tool call  |
 | `Notification`     | `attention` — Claude is waiting on the user              |
 | `SubagentStop`     | `busy` — a dispatched agent finished, the parent has not |
-| `Stop`             | `idle`                                                   |
+| `Stop`             | `idle` (not emitted for a user interrupt)                |
 | `SessionEnd`       | the record is deleted                                    |
 
 `resources/hooks/snow-agent-hook.mjs` is the whole hook. It **exits 0 unconditionally, prints
@@ -721,17 +726,24 @@ this channel existed.
 #### Blocking shared-stash commands
 
 The other half of the hook channel. Because `refs/stash` is repo-wide (see _Parked work_), a
-`git stash pop` an agent runs in a promoted worktree can consume a **different** workflow's parked
-changes. `snow-agent-hook.mjs` answers `PreToolUse` on `Bash` with a `permissionDecision: "deny"`,
+`git stash pop` an agent runs in a promoted worktree can consume a **different** workspace's parked
+changes. `snow-agent-hook.mjs` can answer `PreToolUse` on `Bash` with a `permissionDecision: "deny"`,
 and it needs no extra `settings.json` entry — the installed `PreToolUse` group already matches every
 tool, so the guard is a branch in the script rather than a second hook.
 
-It is a **blocklist**: everything but `git stash list` and `git stash show` is refused, unless the
-command names an entry explicitly (`stash@{…}`) or carries snow's own `snow-wf:` marker. Push is
-refused along with pop, because an unmarked stash pushed from one worktree lands in the list every
-other worktree reads. The command is split on shell operators and tokenized with quotes honoured, so
+In deny mode it is a **blocklist**: everything but `git stash list` and `git stash show` is refused,
+including explicit stash selectors. Push is
+refused too, so agents cannot create look-alike marker stashes. The installed
+`snow-workspace-stash restore` helper is the only permitted restore path: it resolves the marker for
+the workspace that owns the current cwd and restores it with `--index`. The command is split on shell
+operators and tokenized with quotes honoured, so
 `cd src && git stash pop` is caught while `echo "git stash pop"` is not, and git's own value-taking
 global flags (`-C`, `-c`, …) are skipped to find the subcommand.
+
+`workflowStashProtection` in `.snowconfig` selects `deny` (the default), `warn`, or `off`. Warn adds
+an activity warning without changing the agent command; deny blocks it; off leaves it alone. Change
+it with `snow hooks protection <warn|deny|off>` or while installing with
+`snow hooks install <warn|deny|off>`.
 
 Two things bound the blast radius. The scope is the **registered worktrees**, read out of
 `.snowworkflows` by the hook process itself — it cannot talk to a running snow, and the file is plain
@@ -1025,9 +1037,12 @@ snow does **not** write `core.longpaths` into the user's repo or global config. 
 invocation, so it changes what snow's own commands can do and nothing else — the same reason snow
 never edits `PATH` itself. A shell in the promoted worktree still gets stock git behavior.
 
-## Workflows
+## Workspaces (workflow internals)
 
-A **workflow** is a branch you have explicitly registered, plus the uncommitted work parked on it.
+A **workspace** is a branch you have explicitly registered, plus the uncommitted work parked on it.
+The public UI uses “workspace” to make the boundary explicit: Snow owns isolated Git context and
+human review, while an agent dispatcher owns task planning, agent lifecycle, and synthesis. The
+internal file and IPC names remain `workflow` for compatibility.
 Three modules, in a strict one-way dependency chain — `registry.ts` ← `git.ts` ← `workflow.ts`:
 
 - `src/main/registry.ts` — the `.snowworkflows` file. Imports nothing from git, which is what keeps

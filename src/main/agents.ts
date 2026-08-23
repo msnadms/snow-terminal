@@ -8,9 +8,12 @@ export type AgentState = 'busy' | 'attention' | 'idle'
 
 export interface AgentSession {
   sessionId: string
+  parentSessionId?: string
   cwd: string
   state: AgentState
   detail: string
+  task?: string
+  result?: string
   agent: string
   updated: number
 }
@@ -42,9 +45,14 @@ function parseSession(full: string): AgentSession | null {
   if (typeof o.updated !== 'number' || !Number.isFinite(o.updated)) return null
   return {
     sessionId: o.sessionId,
+    ...(typeof o.parentSessionId === 'string' && o.parentSessionId
+      ? { parentSessionId: o.parentSessionId }
+      : {}),
     cwd: o.cwd,
     state: o.state as AgentState,
     detail: typeof o.detail === 'string' ? o.detail : '',
+    ...(typeof o.task === 'string' && o.task ? { task: o.task } : {}),
+    ...(typeof o.result === 'string' && o.result ? { result: o.result } : {}),
     agent: typeof o.agent === 'string' ? o.agent : 'claude',
     updated: o.updated
   }

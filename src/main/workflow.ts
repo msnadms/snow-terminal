@@ -19,6 +19,7 @@ import {
   worktreeMap,
   type GitCheckoutResult
 } from './git'
+import { withSharedStashLock } from './stashLock'
 import { collapseHome, expandHome, samePath } from './config'
 import { closePtysInDirectory } from './pty'
 import {
@@ -302,7 +303,7 @@ export function registerWorkflowHandlers(): void {
       if (registeredWorktree && (await stillLinked(repo, name, expandHome(registeredWorktree))))
         return {
           ok: false,
-          error: `Stop ${name}'s parallel session before removing it from workflows`
+          error: `Remove ${name}'s workspace before removing its workspace record`
         }
 
       const failed = removeRecord(repo, name)
@@ -412,7 +413,7 @@ export function registerWorkflowHandlers(): void {
             detail: [
               collapseHome(destination),
               '',
-              `snow will not check ${name} out over it. Move or delete that directory, then start the parallel session again.`
+              `snow will not check ${name} out over it. Move or delete that directory, then open the workspace again.`
             ].join('\n')
           }
         }
@@ -421,8 +422,16 @@ export function registerWorkflowHandlers(): void {
         try {
           await gitFor(cwd).raw(['worktree', 'add', destination, name])
           created = true
-          const entry = newestStash(await stashEntries(destination), name)
-          if (entry) await gitFor(destination).raw(['stash', 'pop', entry.selector])
+          await withSharedStashLock(destination, async () => {
+            const entry = newestStash(await stashEntries(destination), name)
+            if (!entry) return
+            try {
+              await gitFor(destination).raw(['stash', 'pop', '--index', entry.selector])
+            } catch (error) {
+              if (!/conflicts in index\. Try without --index/i.test(errorText(error))) throw error
+              await gitFor(destination).raw(['stash', 'pop', entry.selector])
+            }
+          })
         } catch (error) {
           if (created) {
             const failed = setWorktree(repo, name, destination)
@@ -477,12 +486,14 @@ export function registerWorkflowHandlers(): void {
           if (status.conflicted.length > 0) {
             return {
               ok: false,
-              error: `Resolve conflicts in ${name} before stopping its parallel session`,
+              error: `Resolve conflicts in ${name} before removing its workspace`,
               detail: status.conflicted.join('\n')
             }
           }
           if (status.files.length > 0) {
-            await gitFor(directory).raw(['stash', 'push', '-u', '-m', `${markerPrefix}${name}`])
+            await withSharedStashLock(directory, () =>
+              gitFor(directory).raw(['stash', 'push', '-u', '-m', `${markerPrefix}${name}`])
+            )
             parked = true
           }
           // Removal deletes the directory whole, ignored files included, with or without --force;

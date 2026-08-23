@@ -35,7 +35,14 @@ export type Pane = { id: number; cwd?: string; startupCommand?: string; presetNa
 export type SessionStatus = 'busy' | 'attention' | 'idle'
 
 type Tab =
-  | { kind: 'shell'; id: number; cwd?: string; startupCommand?: string; presetName?: string }
+  | {
+      kind: 'shell'
+      id: number
+      cwd?: string
+      startupCommand?: string
+      presetName?: string
+      workspace?: boolean
+    }
   | { kind: 'commit'; id: number; cwd: string; hash: string }
   | { kind: 'diff'; id: number; cwd: string; branch: string; focus?: string; focusKey: number }
   | { kind: 'browser'; id: number; url: string }
@@ -97,6 +104,7 @@ function App(): React.JSX.Element {
   const [browserTitles, setBrowserTitles] = useState<Record<number, string>>({})
   const [statuses, setStatuses] = useState<Record<number, SessionStatus>>({})
   const [titles, setTitles] = useState<Record<number, string>>({})
+  const [interruptedAgentDirs, setInterruptedAgentDirs] = useState<Record<string, number>>({})
   const [frozen, setFrozen] = useState<{ entries: RepoEntry[] } | null>(null)
   const [tourDismissed, setTourDismissed] = useState(false)
   const nextIdRef = useRef(1)
@@ -264,6 +272,7 @@ function App(): React.JSX.Element {
     for (const session of agentSessions) {
       if (!session.cwd) continue
       const key = normalizePath(session.cwd)
+      if (session.updated <= (interruptedAgentDirs[key] ?? 0)) continue
       const current = map[key]
       const better =
         !current ||
@@ -273,7 +282,7 @@ function App(): React.JSX.Element {
         map[key] = { state: session.state, detail: session.detail, updated: session.updated }
     }
     return map
-  }, [agentSessions])
+  }, [agentSessions, interruptedAgentDirs])
 
   /**
    * A hook-reported state always beats the PTY byte heuristic, which stays as the floor for panes
@@ -579,6 +588,16 @@ function App(): React.JSX.Element {
     setTitles((prev) => (prev[sessionId] === title ? prev : { ...prev, [sessionId]: title }))
   }, [])
 
+  const handleSessionInterrupt = useCallback((sessionId: number, interruptedCwd?: string): void => {
+    const tab = tabsRef.current.find((candidate) => candidate.id === sessionId)
+    const cwd =
+      interruptedCwd ??
+      (tab?.kind === 'shell' ? (cwdsRef.current[sessionId] ?? tab.cwd) : undefined)
+    if (!cwd) return
+    const dir = normalizePath(cwd)
+    setInterruptedAgentDirs((prev) => ({ ...prev, [dir]: Date.now() }))
+  }, [])
+
   const handleBottomLayout = useCallback((height: number, collapsed: boolean): void => {
     window.api.snowconfig.setLayout({ bottomHeight: height, bottomCollapsed: collapsed })
   }, [])
@@ -696,7 +715,8 @@ function App(): React.JSX.Element {
           id,
           cwd: worktree,
           startupCommand: inherited?.startupCommand,
-          presetName: inherited?.name
+          presetName: inherited?.name,
+          workspace: true
         }
       ])
       setCwds((prev) => ({ ...prev, [id]: worktree }))
@@ -704,6 +724,46 @@ function App(): React.JSX.Element {
       setActiveId(id)
     },
     [presets]
+  )
+
+  const startWorkspaceAgent = useCallback(
+    (worktree: string, repo: string): void => {
+      const current = tabsRef.current.find((tab) => tab.id === activeIdRef.current)
+      const inherited = inheritedPreset(presets, repo, current, undefined)
+      const command = inherited?.startupCommand ?? startupCommand ?? 'claude'
+      const existing = tabsRef.current.find(
+        (tab) =>
+          tab.kind === 'shell' &&
+          normalizePath(tab.cwd ?? cwdsRef.current[tab.id] ?? '') === normalizePath(worktree)
+      )
+      if (existing?.kind === 'shell') {
+        setPanes((prev) => ({
+          ...prev,
+          [existing.id]: [
+            ...(prev[existing.id] ?? []),
+            { id: nextTerminalId(), cwd: worktree, startupCommand: command }
+          ]
+        }))
+        setActiveId(existing.id)
+        return
+      }
+
+      const id = nextIdRef.current++
+      setTabs((prev) => [
+        ...prev,
+        { kind: 'shell', id, cwd: worktree, startupCommand: '', workspace: true }
+      ])
+      setCwds((prev) => ({ ...prev, [id]: worktree }))
+      setPanes((prev) => ({
+        ...prev,
+        [id]: [
+          { id: nextTerminalId() },
+          { id: nextTerminalId(), cwd: worktree, startupCommand: command }
+        ]
+      }))
+      setActiveId(id)
+    },
+    [presets, startupCommand]
   )
 
   const closeWorktree = useCallback(
@@ -791,6 +851,7 @@ function App(): React.JSX.Element {
         onOpenWorktree={openWorktree}
         onCloseWorktree={closeWorktree}
         onManageWorkflows={openWorkflows}
+        agentSessions={agentSessions}
         keybinds={keybinds}
       />
       <div className="content">
@@ -831,10 +892,12 @@ function App(): React.JSX.Element {
             <WorkflowManager
               active={activeId === 'workflows'}
               onLaunch={openWorktree}
+              onStartAgent={startWorkspaceAgent}
               onOpenDiff={openDiff}
               onCloseWorktree={closeWorktree}
               sessionStatuses={sessionDirStatuses}
               sessionTitles={sessionDirTitles}
+              agentSessions={agentSessions}
             />
             {mountedTabs.map((tab) => {
               if (tab.kind === 'commit')
@@ -889,6 +952,7 @@ function App(): React.JSX.Element {
                   onCwd={handleSessionCwd}
                   onStatus={handleSessionStatus}
                   onTitle={handleSessionTitle}
+                  onInterrupt={handleSessionInterrupt}
                 />
               )
             })}

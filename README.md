@@ -20,13 +20,19 @@ next to the code they touch.
   beside your terminal, with `git blame` inline, syntax highlighting (run in a
   web worker over 22 grammars), and find-in-diff (`Ctrl+F`) via the native CSS
   Custom Highlight API.
-- **Workflows** - register a branch as a workflow and snow _parks_ its
+- **Workspaces** - register a branch as a workspace and snow _parks_ its
   uncommitted work in a dedicated git stash when you leave it and restores it
   when you return, so switching branches never loses in-progress changes.
-  Parked work lives in git's own stash list and is never dropped. A
-  **workflow manager** tab lists every registered workflow across every repo,
-  each launchable into its own git worktree so you can run several branches of
-  the same repo side by side - individually or all at once.
+  Parked work lives in git's own stash list and is never dropped. A **workspace
+  manager** tab lists every registered branch across every repo, each openable
+  in its own git worktree. Opening a workspace applies its matching preset's
+  startup command; starting an additional agent is a separate action, so Snow
+  supplies Git context while Claude Code, Codex, or another dispatcher owns
+  task assignment.
+- **Agent activity** - Snow can read agent activity published by Claude Code
+  hooks or another tool into its local activity directory. It surfaces agents
+  by workspace, attention state, activity detail, cost, and Git review state;
+  it never dispatches or declares agent tasks complete.
 - **Repo tab groups** - tabs are grouped and colored by the repo (or worktree)
   they belong to, so a linked worktree's session sits next to the repo it came
   from instead of scattered across the tab strip.
@@ -105,8 +111,19 @@ edit:
 - `themes/*.json` - named theme files (`ui`, `git`, and `syntax` color
   sections).
 - `.snowignore` - `.gitignore`-syntax paths snow's git actions never stage.
-- `.snowworkflows` - the registry of branches opted in to workflow parking.
+- `.snowworkflows` - the registry of branches opted in to workspace parking
+  (the filename is retained for compatibility).
 - `snow.log` - a rolling log of main-process and IPC activity.
+
+When Claude Code activity hooks are installed, `.snowconfig` can set
+`workflowStashProtection` to `deny` (default), `warn`, or `off` for ambiguous
+`git stash` commands inside a Snow worktree. Change it from Home or with
+`snow hooks protection <warn|deny|off>`.
+
+In deny mode, agents can inspect stashes but cannot run raw restore or write
+commands. Snow's denial supplies the path to its `snow-workspace-stash restore`
+helper, which restores only the marker stash belonging to the workspace they
+are in.
 
 ### Example: a Claude + vim split
 
@@ -155,7 +172,7 @@ default. Combos are `+`-joined: `Ctrl` / `Cmd` / `Meta` / `Alt` / `Shift`, plus
 | `diffSplit`                                          | `Mod+Shift+G`                   | Open the working-tree diff as a split                 |
 | `runCommand`                                         | `Mod+Shift+Q`                   | Toggle the preset's first command button              |
 | `switchRepo`                                         | `Mod+Shift+?`                   | Switch the action bar's repo (when more than one)     |
-| `openWorkflows`                                      | `Mod+Shift+O`                   | Open (or focus) the workflow manager tab              |
+| `openWorkflows`                                      | `Mod+Shift+O`                   | Open (or focus) the workspace manager tab             |
 | `focusCommit`                                        | `Mod+Shift+M`                   | Focus the commit-message input                        |
 | `pushRemote`                                         | `Mod+Shift+P`                   | Push commits (or publish the branch) to the remote    |
 | `focusLeft` / `focusDown` / `focusUp` / `focusRight` | `Mod+Shift+H` / `J` / `K` / `L` | Move pane focus (vim directions)                      |

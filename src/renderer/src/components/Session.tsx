@@ -32,6 +32,7 @@ interface SessionProps {
   onCwd: (sessionId: number, cwd: string) => void
   onStatus: (sessionId: number, status: SessionStatus) => void
   onTitle: (sessionId: number, title: string) => void
+  onInterrupt: (sessionId: number, cwd?: string) => void
 }
 
 function focusPane(container: Element | null | undefined): void {
@@ -56,7 +57,8 @@ function Session({
   onOpenCommit,
   onCwd,
   onStatus,
-  onTitle
+  onTitle,
+  onInterrupt
 }: SessionProps): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const mainRef = useRef<HTMLDivElement>(null)
@@ -112,6 +114,10 @@ function Session({
 
   const handleBottomCwd = useCallback((next: string) => onCwd(id, next), [onCwd, id])
   const handlePrimaryTitle = useCallback((next: string) => onTitle(id, next), [onTitle, id])
+  const handleInterrupt = useCallback(
+    (interruptedCwd?: string) => onInterrupt(id, interruptedCwd),
+    [id, onInterrupt]
+  )
 
   const savedGrows: Record<string, number> = {}
   if (savedPaneRatios && savedPaneRatios.length === panes.length) {
@@ -219,6 +225,7 @@ function Session({
                 focusOnActivate={i === 0}
                 onStatus={paneStatusCbs[pane.id]}
                 onTitle={i === 0 ? handlePrimaryTitle : undefined}
+                onInterrupt={() => handleInterrupt(pane.cwd ?? cwd)}
               />
             </div>
           </Fragment>

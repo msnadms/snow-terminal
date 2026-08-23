@@ -301,8 +301,10 @@ const agents = {
 const hooks = {
   pending: (): Promise<HooksResult | null> => ipcRenderer.invoke('hooks:pending'),
   state: (): Promise<HooksState> => ipcRenderer.invoke('hooks:state'),
-  run: (action: 'install' | 'remove'): Promise<HooksResult> =>
-    ipcRenderer.invoke('hooks:run', action),
+  run: (
+    action: 'install' | 'remove' | 'protection',
+    protection?: 'warn' | 'deny' | 'off'
+  ): Promise<HooksResult> => ipcRenderer.invoke('hooks:run', action, protection),
   onChanged: (callback: (result: HooksResult) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, result: HooksResult): void => callback(result)
     ipcRenderer.on('hooks:changed', listener)

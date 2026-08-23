@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import FailureDialog from './FailureDialog'
 import RemoveWorkflowDialog from './RemoveWorkflowDialog'
 import StopWorkflowDialog from './StopWorkflowDialog'
-import { type Failure } from '@renderer/format'
+import { isInside, normalizePath, type Failure } from '@renderer/format'
 import { useGitAction } from '@renderer/useGitAction'
 import { useLatestRun } from '@renderer/useLatestRun'
+import type { AgentSession } from '@renderer/useAgents'
 import {
   inScope,
   isRegistered,
@@ -23,13 +24,15 @@ interface WorkflowSelectProps {
   onOpenWorktree?: (cwd: string) => void
   onCloseWorktree?: (cwd: string) => void
   onManage?: () => void
+  agentSessions: AgentSession[]
 }
 
 function WorkflowSelect({
   cwd,
   onOpenWorktree,
   onCloseWorktree,
-  onManage
+  onManage,
+  agentSessions
 }: WorkflowSelectProps): React.JSX.Element | null {
   const [list, setList] = useState<WorkflowList | null>(null)
   const listRef = useRef<WorkflowList | null>(null)
@@ -133,7 +136,7 @@ function WorkflowSelect({
       const result = await window.api.workflow.promote(cwd, entry.branch)
       if (result.worktree) onOpenWorktree?.(result.worktree)
       return result
-    }, 'Starting parallel session…')
+    }, 'Creating workspace…')
   }
 
   const demote = (): void => {
@@ -144,7 +147,15 @@ function WorkflowSelect({
       const result = await window.api.workflow.demote(cwd, entry.branch)
       if (result.worktree) onCloseWorktree?.(result.worktree)
       return result
-    }, 'Stopping parallel session…')
+    }, 'Removing workspace…')
+  }
+
+  const agentsFor = (entry: WorkflowEntry): AgentSession[] => {
+    if (!entry.worktree) return []
+    const root = normalizePath(entry.worktree)
+    return agentSessions.filter(
+      (session) => session.cwd && isInside(normalizePath(session.cwd), root)
+    )
   }
 
   const prune = (): void => {
@@ -189,13 +200,13 @@ function WorkflowSelect({
           action.error ||
           (readError && `Could not read your workflows - ${readError}`) ||
           (registered
-            ? `Workflow: ${current}`
-            : `${current} is not a registered workflow - snow leaves it alone`)
+            ? `Workspace branch: ${current}`
+            : `${current} is not a registered workspace branch - snow leaves it alone`)
         }
       >
         <span className="picker-icon">{''}</span>
         <span className={`picker-name${registered ? '' : ' workflow-unregistered'}`}>
-          {action.label || (registered ? current : 'Workflows')}
+          {action.label || (registered ? current : 'Workspaces')}
         </span>
         <span className="picker-caret">▾</span>
       </button>
@@ -203,7 +214,7 @@ function WorkflowSelect({
         <div className="picker-menu">
           {readError && (
             <div className="workflow-error">
-              Could not read your workflows. Branch switches will not park or restore until this is
+              Could not read your workspaces. Branch switches will not park or restore until this is
               fixed.
               {'\n'}
               {readError}
@@ -213,7 +224,7 @@ function WorkflowSelect({
             <input
               ref={searchRef}
               className="picker-search"
-              placeholder="Search workflows…"
+              placeholder="Search workspaces…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
@@ -221,7 +232,7 @@ function WorkflowSelect({
           <div className="picker-list">
             {visible.length === 0 && (
               <div className="picker-none">
-                {workflows.length === 0 ? 'No workflows registered' : 'No matches'}
+                {workflows.length === 0 ? 'No workspaces registered' : 'No matches'}
               </div>
             )}
             {visible.map((entry) => (
@@ -232,7 +243,7 @@ function WorkflowSelect({
                   }`}
                   title={
                     usable(entry)
-                      ? `Open ${entry.branch}'s session`
+                      ? `Open ${entry.branch}'s workspace shell`
                       : entry.worktree
                         ? staleTitle(entry)
                         : entry.exists
@@ -255,7 +266,7 @@ function WorkflowSelect({
                 {!entry.worktree && entry.exists && !entry.current && (
                   <button
                     className="workflow-drop"
-                    title={`Run ${entry.branch} in parallel`}
+                    title={`Create ${entry.branch}'s isolated workspace`}
                     onClick={() => promote(entry)}
                   >
                     
@@ -264,7 +275,7 @@ function WorkflowSelect({
                 {usable(entry) && (
                   <button
                     className="workflow-drop"
-                    title={`Stop ${entry.branch}'s parallel session`}
+                    title={`Remove ${entry.branch}'s workspace`}
                     onClick={() => setDemoting(entry)}
                   >
                     󰏤
@@ -287,13 +298,13 @@ function WorkflowSelect({
           </div>
           {!registered && (
             <button className="workflow-register" onClick={register}>
-              Register {current}
+              Register workspace
             </button>
           )}
           <form className="picker-create" onSubmit={create}>
             <input
               className="picker-create-input"
-              placeholder="New workflow…"
+              placeholder="New workspace…"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
             />
@@ -312,7 +323,7 @@ function WorkflowSelect({
                 onManage()
               }}
             >
-              Manage workflows…
+              Manage workspaces…
             </button>
           )}
         </div>
@@ -327,6 +338,7 @@ function WorkflowSelect({
       {demoting && (
         <StopWorkflowDialog
           entry={demoting}
+          agents={agentsFor(demoting)}
           onCancel={() => setDemoting(null)}
           onConfirm={demote}
         />

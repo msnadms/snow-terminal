@@ -205,7 +205,7 @@ function TabBar({
       <button
         className={`tab-workflows${activeId === 'workflows' ? ' tab-active' : ''}`}
         onClick={onOpenWorkflows}
-        title="Workflows"
+        title="Workspaces"
       >
         
       </button>

@@ -9,6 +9,7 @@ import { useGitAction } from '@renderer/useGitAction'
 import { useGitColors } from '@renderer/useGitColors'
 import { useLatestRun } from '@renderer/useLatestRun'
 import { useUsage } from '@renderer/useUsage'
+import type { AgentSession } from '@renderer/useAgents'
 import {
   inScope,
   isRegistered,
@@ -33,10 +34,12 @@ type Targeted = { repo: WorkflowRepo; entry: WorkflowEntry }
 interface WorkflowManagerProps {
   active: boolean
   onLaunch: (dir: string, repo: string) => void
+  onStartAgent: (dir: string, repo: string) => void
   onOpenDiff: (cwd: string, branch: string) => void
   onCloseWorktree?: (dir: string) => void
   sessionStatuses: Record<string, SessionStatus>
   sessionTitles: Record<string, string>
+  agentSessions: AgentSession[]
 }
 
 function openDir(repo: WorkflowRepo, entry: WorkflowEntry): string | undefined {
@@ -55,10 +58,12 @@ function indent(text: string): string {
 function WorkflowManager({
   active,
   onLaunch,
+  onStartAgent,
   onOpenDiff,
   onCloseWorktree,
   sessionStatuses,
-  sessionTitles
+  sessionTitles,
+  agentSessions
 }: WorkflowManagerProps): React.JSX.Element {
   const [overview, setOverview] = useState<Overview | null>(null)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
@@ -86,15 +91,51 @@ function WorkflowManager({
     const root = directoryKey(dir)
     return costDirs.reduce((sum, [key, cost]) => (isInside(key, root) ? sum + cost : sum), 0)
   }
-  const activityFor = (dir: string): { status?: SessionStatus; title?: string } => {
+  const activityFor = (
+    dir: string
+  ): { status?: SessionStatus; title?: string; label?: string; agents: AgentSession[] } => {
     const root = normalizePath(dir)
     const rank: Record<SessionStatus, number> = { attention: 2, busy: 1, idle: 0 }
-    let selected: { path: string; status: SessionStatus } | null = null
+    const agents = agentSessions.filter(
+      (session) => session.cwd && isInside(normalizePath(session.cwd), root)
+    )
+    let tabSelected: { path: string; status: SessionStatus } | null = null
     for (const [path, status] of Object.entries(sessionStatuses)) {
+      if (!isInside(path, root)) continue
+      if (!tabSelected || rank[status] > rank[tabSelected.status]) tabSelected = { path, status }
+    }
+    let selected: { path: string; status: SessionStatus } | null = null
+    for (const session of agents) {
+      const path = normalizePath(session.cwd)
+      const status = session.state
       if (!isInside(path, root)) continue
       if (!selected || rank[status] > rank[selected.status]) selected = { path, status }
     }
-    return selected ? { status: selected.status, title: sessionTitles[selected.path] } : {}
+    if (agents.length) {
+      const waiting = agents.filter((session) => session.state === 'attention').length
+      const working = agents.filter((session) => session.state === 'busy').length
+      const label = [
+        `${agents.length} agent${agents.length === 1 ? '' : 's'}`,
+        waiting ? `${waiting} needs input` : working ? `${working} working` : 'waiting'
+      ].join(' · ')
+      const detail = agents
+        .map((session) => {
+          const state = session.state === 'attention' ? 'needs input' : session.state
+          const context = [
+            session.task || session.detail,
+            session.result && `result: ${session.result}`
+          ]
+            .filter(Boolean)
+            .join(' · ')
+          return `${session.agent} · ${state} · ${context || 'no activity detail'}`
+        })
+        .join('\n')
+      const title = tabSelected ? sessionTitles[tabSelected.path] : undefined
+      return { status: selected?.status, title: title || detail, label, agents }
+    }
+    return tabSelected
+      ? { status: tabSelected.status, title: sessionTitles[tabSelected.path], agents }
+      : { agents }
   }
   const overviewRef = useRef<Overview | null>(null)
   useEffect(() => {
@@ -158,7 +199,7 @@ function WorkflowManager({
     action.run(async () => {
       const failed = await launchOne(repo, entry)
       return failed ? { ok: false, error: failed.title, detail: failed.detail } : { ok: true }
-    }, 'Launching…')
+    }, 'Opening workspace…')
   }
 
   const launchAll = (repo: WorkflowRepo): void => {
@@ -178,7 +219,7 @@ function WorkflowManager({
         error: `Launched ${repo.workflows.length - failed.length} of ${repo.workflows.length} workflows in ${repo.name}`,
         detail: failed.join('\n\n')
       }
-    }, `Launching ${repo.name}…`)
+    }, `Opening ${repo.name} workspaces…`)
   }
 
   const create = (repo: WorkflowRepo, e: React.FormEvent): void => {
@@ -217,7 +258,7 @@ function WorkflowManager({
       const result = await window.api.workflow.demote(target.repo.repo, target.entry.branch)
       if (result.worktree) onCloseWorktree?.(result.worktree)
       return result
-    }, 'Stopping parallel session…')
+    }, 'Removing workspace…')
   }
 
   const body = (): React.JSX.Element => {
@@ -225,7 +266,7 @@ function WorkflowManager({
     if (overview.error)
       return (
         <div className="wfm-empty">
-          Could not read your workflows.
+          Could not read your workspaces.
           {'\n'}
           {overview.error}
         </div>
@@ -233,9 +274,9 @@ function WorkflowManager({
     if (overview.repos.length === 0)
       return (
         <div className="wfm-empty">
-          No workflows registered yet.
+          No workspaces registered yet.
           {'\n'}
-          Register a branch from the workflow dropdown in the action bar, and it shows up here.
+          Register a branch from the workspace dropdown in the action bar, and it shows up here.
         </div>
       )
 
@@ -258,15 +299,15 @@ function WorkflowManager({
                   className="wfm-launch-all"
                   disabled={action.pending || repo.workflows.length === 0 || repo.unreachable}
                   onClick={() => launchAll(repo)}
-                  title={`Open a session for every workflow in ${repo.name}, promoting the parked ones to worktrees`}
+                  title={`Open every workspace in ${repo.name}, applying each matching preset startup command`}
                 >
-                  ▸ Launch all {repo.workflows.length}
+                  ▸ Open all {repo.workflows.length}
                 </button>
               </div>
               {repo.unreachable && (
                 <div className="wfm-note">
                   snow could not read this repository - the directory may have moved or been
-                  deleted. Its workflows can still be removed.
+                  deleted. Its workspace records can still be removed.
                 </div>
               )}
               {repo.error && <div className="wfm-note">{repo.error}</div>}
@@ -274,7 +315,7 @@ function WorkflowManager({
                 {repo.workflows.map((entry) => {
                   const state = stateLabel(entry)
                   const dir = openDir(repo, entry)
-                  const activity = dir ? activityFor(dir) : {}
+                  const activity = dir ? activityFor(dir) : { agents: [] }
                   const status = activity.status
                   const cost = dir ? costFor(dir) : 0
                   const title = activity.title
@@ -300,6 +341,11 @@ function WorkflowManager({
                       {title && (
                         <span className="wfm-activity" title={title}>
                           {title}
+                        </span>
+                      )}
+                      {activity.label && (
+                        <span className="wfm-agent-count" title={activity.title}>
+                          {activity.label}
                         </span>
                       )}
                       {!!cost && (
@@ -332,19 +378,29 @@ function WorkflowManager({
                           onClick={() => launch(repo, entry)}
                           title={
                             usable(entry) || entry.current
-                              ? `Open ${entry.branch}'s session`
-                              : `Run ${entry.branch} in its own worktree`
+                              ? `Open ${entry.branch}'s workspace shell`
+                              : `Create ${entry.branch}'s isolated workspace`
                           }
                         >
                           ▸ {launchLabel(entry)}
                         </button>
+                        {dir && entry.exists && (
+                          <button
+                            className="wfm-action"
+                            disabled={action.pending}
+                            onClick={() => onStartAgent(dir, repo.repo)}
+                            title="Open a new agent pane. snow does not assign tasks or manage the agent."
+                          >
+                            Start agent
+                          </button>
+                        )}
                         <span className="wfm-action-slot">
                           {usable(entry) && (
                             <button
                               className="wfm-action wfm-action-icon"
                               disabled={action.pending}
                               onClick={() => setDemoting({ repo, entry })}
-                              title={`Stop ${entry.branch}'s parallel session`}
+                              title={`Remove ${entry.branch}'s workspace and terminate its terminals if required`}
                             >
                               󰏤
                             </button>
@@ -377,7 +433,7 @@ function WorkflowManager({
                 <form className="wfm-create" onSubmit={(e) => create(repo, e)}>
                   <input
                     className="wfm-create-input"
-                    placeholder="New workflow…"
+                    placeholder="New workspace…"
                     value={drafts[repo.repo] ?? ''}
                     disabled={repo.unreachable}
                     onChange={(e) =>
@@ -397,9 +453,9 @@ function WorkflowManager({
                     className="wfm-action"
                     disabled={action.pending}
                     onClick={() => register(repo)}
-                    title={`Track ${repo.current} as a workflow`}
+                    title={`Track ${repo.current} as a workspace branch`}
                   >
-                    Register {repo.current}
+                    Register workspace
                   </button>
                 )}
                 <span className="wfm-base">
@@ -418,7 +474,10 @@ function WorkflowManager({
   return (
     <div className="wfm" style={{ display: active ? 'block' : 'none' }}>
       <div className="wfm-title">
-        Workflows
+        Workspaces
+        <span className="wfm-subtitle">
+          Isolated Git workspaces; your agent dispatcher owns tasks.
+        </span>
         {action.label && <span className="wfm-busy">{action.label}</span>}
       </div>
       {body()}
@@ -432,6 +491,10 @@ function WorkflowManager({
       {demoting && (
         <StopWorkflowDialog
           entry={demoting.entry}
+          agents={(() => {
+            const dir = openDir(demoting.repo, demoting.entry)
+            return dir ? activityFor(dir).agents : []
+          })()}
           onCancel={() => setDemoting(null)}
           onConfirm={demote}
         />

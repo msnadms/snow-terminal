@@ -38,8 +38,8 @@ export function isRegistered(workflows: WorkflowEntry[]): boolean {
 }
 
 export function launchLabel(entry: WorkflowEntry): string {
-  if (usable(entry) || entry.current) return 'Open'
-  return 'Launch'
+  if (usable(entry) || entry.current) return 'Open workspace'
+  return 'Create workspace'
 }
 
 export function stateLabel(entry: WorkflowEntry): string {

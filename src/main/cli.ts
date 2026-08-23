@@ -59,7 +59,7 @@ function runArgs(argv: string[], cwd: string, retainResult = false): Preset | nu
   }
 
   if (args[0] === 'hooks') {
-    const result = runHooks(args[1])
+    const result = runHooks(args[1], args[2])
     if (retainResult) startupHooks = result
     broadcast('hooks:changed', result)
     return null

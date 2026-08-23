@@ -4,6 +4,12 @@ import os from 'os'
 import path from 'path'
 import { broadcast, collapseHome, configDir } from './config'
 import { log } from './log'
+import {
+  activeWorkflowStashProtection,
+  setWorkflowStashProtection,
+  workflowStashProtections,
+  type WorkflowStashProtection
+} from './snowconfig'
 
 export interface HooksResult {
   ok: boolean
@@ -16,6 +22,7 @@ export interface HooksState {
   /** Whether Claude Code is on this machine at all; nothing is worth offering when it is not. */
   available: boolean
   installed: boolean
+  stashProtection: WorkflowStashProtection
   settings: string
   error: string | null
 }
@@ -31,6 +38,7 @@ interface HookGroup {
 }
 
 const marker = 'snow-agent-hook'
+const helperMarker = 'snow-workspace-stash'
 const scriptName = `${marker}.mjs`
 const hookEvents = [
   'SessionStart',
@@ -52,6 +60,10 @@ function scriptFile(): string {
 
 function shimFile(): string {
   return path.join(hooksDir(), process.platform === 'win32' ? `${marker}.cmd` : marker)
+}
+
+function helperShimFile(): string {
+  return path.join(hooksDir(), process.platform === 'win32' ? `${helperMarker}.cmd` : helperMarker)
 }
 
 /**
@@ -129,8 +141,9 @@ function writeIfChanged(file: string, contents: string): boolean {
 function writeRuntime(): void {
   fs.mkdirSync(hooksDir(), { recursive: true })
   writeIfChanged(scriptFile(), fs.readFileSync(sourceScript(), 'utf8'))
-  if (writeIfChanged(shimFile(), shim()) && process.platform !== 'win32')
-    fs.chmodSync(shimFile(), 0o755)
+  for (const file of [shimFile(), helperShimFile()]) {
+    if (writeIfChanged(file, shim()) && process.platform !== 'win32') fs.chmodSync(file, 0o755)
+  }
 }
 
 function readSettings(): { settings: Record<string, unknown>; error: string | null } {
@@ -188,7 +201,12 @@ function failure(verb: string, error: string, detail = ''): HooksResult {
   return { ok: false, message: `Could not ${verb} snow's Claude Code hooks`, detail, error }
 }
 
-function install(): HooksResult {
+function install(protection?: WorkflowStashProtection): HooksResult {
+  if (protection) {
+    const configured = setWorkflowStashProtection(protection)
+    if (configured.error)
+      return failure('install', 'Could not save shared-stash protection', configured.error)
+  }
   try {
     writeRuntime()
   } catch (err) {
@@ -230,9 +248,11 @@ function install(): HooksResult {
       'snow now reads live session status from Claude Code instead of inferring it from terminal output.',
       '',
       `Hook: ${collapseHome(shimFile())}`,
+      `Marked-stash restore helper: ${collapseHome(helperShimFile())} restore`,
       `Settings: ${collapseHome(settingsFile())}`,
       '',
       'Claude sessions that are already running keep their old settings until they restart.',
+      `Shared-stash protection: ${activeWorkflowStashProtection()} (change with: snow hooks protection warn|deny|off)`,
       'Take them out again with: snow hooks remove'
     ].join('\n'),
     error: null
@@ -283,21 +303,50 @@ export function hooksState(): HooksState {
   const available = fs.existsSync(claudeDir())
   const settings = collapseHome(settingsFile())
   const { settings: parsed, error } = readSettings()
-  if (error) return { available, installed: false, settings, error }
-  return { available, installed: withoutSnow(parsed.hooks).removed > 0, settings, error: null }
+  const stashProtection = activeWorkflowStashProtection()
+  if (error) return { available, installed: false, settings, stashProtection, error }
+  return {
+    available,
+    installed: withoutSnow(parsed.hooks).removed > 0,
+    settings,
+    stashProtection,
+    error: null
+  }
 }
 
-export function runHooks(action: string): HooksResult {
+export function runHooks(action: string, protection?: string): HooksResult {
+  const mode = workflowStashProtections.find((candidate) => candidate === protection)
+  if (protection && !mode)
+    return failure(
+      'set shared-stash protection',
+      `Unknown protection mode: ${protection}`,
+      'Use one of: warn, deny, off'
+    )
   const result =
     action === 'install'
-      ? install()
+      ? install(mode)
       : action === 'remove'
         ? remove()
-        : failure(
-            'run',
-            `Unknown command: snow hooks ${action}`,
-            'Use one of:\n  snow hooks install\n  snow hooks remove'
-          )
+        : action === 'protection' && mode
+          ? (() => {
+              const configured = setWorkflowStashProtection(mode)
+              return configured.error
+                ? failure('set shared-stash protection', configured.error)
+                : {
+                    ok: true,
+                    message: `Shared-stash protection set to ${mode}`,
+                    detail:
+                      mode === 'off'
+                        ? 'Claude Code will not warn about unqualified git stash commands in snow workspaces.'
+                        : `Claude Code will ${mode === 'deny' ? 'block' : 'warn about'} unqualified git stash commands in snow workspaces.`,
+                    error: null
+                  }
+            })()
+          : failure(
+              'run',
+              `Unknown command: snow hooks ${action}`,
+              'Use one of:\n  snow hooks install [warn|deny|off]\n  snow hooks remove\n  snow hooks protection <warn|deny|off>'
+            )
   log(result.error ? 'error' : 'info', 'hooks', result.message, { action, error: result.error })
   return result
 }
@@ -357,8 +406,8 @@ export function refreshHooks(): void {
 
 export function registerHooksHandlers(): void {
   ipcMain.handle('hooks:state', (): HooksState => hooksState())
-  ipcMain.handle('hooks:run', (_event, action: string): HooksResult => {
-    const result = runHooks(String(action ?? ''))
+  ipcMain.handle('hooks:run', (_event, action: string, protection?: string): HooksResult => {
+    const result = runHooks(String(action ?? ''), protection)
     broadcast('hooks:changed', result)
     return result
   })

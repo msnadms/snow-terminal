@@ -28,8 +28,10 @@ export interface Layout {
 }
 
 export type CommitAgent = 'claude' | 'codex'
+export type WorkflowStashProtection = 'warn' | 'deny' | 'off'
 
 export const commitAgents: CommitAgent[] = ['claude', 'codex']
+export const workflowStashProtections: WorkflowStashProtection[] = ['deny', 'warn', 'off']
 
 export interface SnowConfig {
   presets: Preset[]
@@ -40,6 +42,7 @@ export interface SnowConfig {
   theme?: string
   tourSeen?: boolean
   hooksPrompted?: boolean
+  workflowStashProtection?: WorkflowStashProtection
   keybinds?: Record<string, string>
   layout?: Layout
 }
@@ -125,6 +128,14 @@ function validateCommitAgent(raw: unknown, key: string): CommitAgent | null {
   return commitAgents.find((agent) => agent === value) ?? null
 }
 
+function validateWorkflowStashProtection(
+  raw: unknown,
+  key: string
+): WorkflowStashProtection | null {
+  const value = validatePresentString(raw, key)?.toLowerCase()
+  return workflowStashProtections.find((protection) => protection === value) ?? null
+}
+
 function validateBooleanField(raw: unknown, key: string): boolean | null {
   if (!raw || typeof raw !== 'object') return null
   const value = (raw as Record<string, unknown>)[key]
@@ -173,6 +184,7 @@ interface RawConfig {
   theme: string | null
   tourSeen: boolean | null
   hooksPrompted: boolean | null
+  workflowStashProtection: WorkflowStashProtection | null
   keybinds: Record<string, string> | null
   layout: Layout | null
   error: string | null
@@ -191,6 +203,7 @@ function rawConfig(): RawConfig {
       theme: validateStringField(raw, 'theme'),
       tourSeen: validateBooleanField(raw, 'tourSeen'),
       hooksPrompted: validateBooleanField(raw, 'hooksPrompted'),
+      workflowStashProtection: validateWorkflowStashProtection(raw, 'workflowStashProtection'),
       keybinds: validateKeybinds(raw, 'keybinds'),
       layout: validateLayout(raw, 'layout'),
       error: null
@@ -207,6 +220,7 @@ function rawConfig(): RawConfig {
         theme: null,
         tourSeen: null,
         hooksPrompted: null,
+        workflowStashProtection: null,
         keybinds: null,
         layout: null,
         error: null
@@ -220,6 +234,7 @@ function rawConfig(): RawConfig {
       theme: null,
       tourSeen: null,
       hooksPrompted: null,
+      workflowStashProtection: null,
       keybinds: null,
       layout: null,
       error: e.message
@@ -238,6 +253,7 @@ function readSnowconfig(): SnowconfigResult {
     theme,
     tourSeen,
     hooksPrompted,
+    workflowStashProtection,
     keybinds,
     layout,
     error
@@ -252,6 +268,7 @@ function readSnowconfig(): SnowconfigResult {
       ...(theme ? { theme } : {}),
       ...(tourSeen !== null ? { tourSeen } : {}),
       ...(hooksPrompted !== null ? { hooksPrompted } : {}),
+      ...(workflowStashProtection ? { workflowStashProtection } : {}),
       ...(keybinds ? { keybinds } : {}),
       ...(layout ? { layout } : {})
     },
@@ -268,6 +285,10 @@ export function activeCommitAgent(): CommitAgent {
   return rawConfig().commitAgent ?? 'claude'
 }
 
+export function activeWorkflowStashProtection(): WorkflowStashProtection {
+  return rawConfig().workflowStashProtection ?? 'deny'
+}
+
 function writeConfig(next: Omit<RawConfig, 'error'>): SnowconfigResult {
   const file = snowconfigPath()
   try {
@@ -280,6 +301,7 @@ function writeConfig(next: Omit<RawConfig, 'error'>): SnowconfigResult {
     if (next.theme) data.theme = next.theme
     if (next.tourSeen !== null) data.tourSeen = next.tourSeen
     if (next.hooksPrompted !== null) data.hooksPrompted = next.hooksPrompted
+    if (next.workflowStashProtection) data.workflowStashProtection = next.workflowStashProtection
     if (next.keybinds) data.keybinds = next.keybinds
     if (next.layout) data.layout = next.layout
     fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`)
@@ -299,6 +321,7 @@ function mutateConfig(mutate: (cfg: Omit<RawConfig, 'error'>) => boolean): Snowc
     theme,
     tourSeen,
     hooksPrompted,
+    workflowStashProtection,
     keybinds,
     layout,
     error
@@ -313,6 +336,7 @@ function mutateConfig(mutate: (cfg: Omit<RawConfig, 'error'>) => boolean): Snowc
     theme,
     tourSeen,
     hooksPrompted,
+    workflowStashProtection,
     keybinds,
     layout
   }
@@ -323,6 +347,13 @@ function mutateConfig(mutate: (cfg: Omit<RawConfig, 'error'>) => boolean): Snowc
 export function setActiveTheme(name: string): SnowconfigResult {
   return mutateConfig((cfg) => {
     cfg.theme = name || null
+    return true
+  })
+}
+
+export function setWorkflowStashProtection(protection: WorkflowStashProtection): SnowconfigResult {
+  return mutateConfig((cfg) => {
+    cfg.workflowStashProtection = protection
     return true
   })
 }
@@ -548,6 +579,13 @@ export function registerSnowconfigHandlers(): void {
       cfg.hooksPrompted = true
       return true
     })
+  )
+  ipcMain.handle(
+    'snowconfig:setWorkflowStashProtection',
+    (_e, protection: WorkflowStashProtection): SnowconfigResult => {
+      const value = workflowStashProtections.find((candidate) => candidate === protection)
+      return value ? setWorkflowStashProtection(value) : readSnowconfig()
+    }
   )
   ipcMain.handle('snowconfig:setLayout', (_e, patch: Partial<Layout>): SnowconfigResult =>
     mutateConfig((cfg) => {
