@@ -82,6 +82,45 @@ export function reviewTitle(entry: WorkflowEntry, review: Review): string {
   return lines.join('\n')
 }
 
+export interface InboxSignal {
+  tier: number
+  label: string
+  slug: string
+}
+
+/**
+ * One ordering for the whole screen, most blocking to the operator first. The evaluation order is
+ * deliberately not the sort order: an agent still working suppresses "ready to review", because a
+ * tree being edited is not a tree to review - but a branch that IS ready outranks one that is
+ * merely working, since fan-out runs itself and fan-in is what waits on a human.
+ */
+export function inboxSignal(
+  entry: WorkflowEntry,
+  agents: { waiting: number; working: number }
+): InboxSignal {
+  if (agents.waiting > 0)
+    return {
+      tier: 4,
+      label: agents.waiting === 1 ? 'needs input' : `${agents.waiting} need input`,
+      slug: 'input'
+    }
+  if (agents.working > 0)
+    return {
+      tier: 2,
+      label: agents.working === 1 ? 'working' : `${agents.working} working`,
+      slug: 'working'
+    }
+  if (entry.review && (entry.review.changed > 0 || (entry.review.ahead ?? 0) > 0))
+    return { tier: 3, label: 'ready to review', slug: 'review' }
+  if (entry.worktree && !usable(entry)) return { tier: 1, label: '', slug: '' }
+  return { tier: 0, label: '', slug: '' }
+}
+
+/** The rows worth a glance: an agent is blocked, or there is work to fan back in. */
+export function needsOperator(signal: InboxSignal): boolean {
+  return signal.tier >= 3
+}
+
 export function staleTitle(entry: WorkflowEntry): string {
   return entry.worktreeExists
     ? `${entry.branch}'s worktree directory is left over - prune, then delete it by hand`

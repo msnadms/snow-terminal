@@ -2,13 +2,16 @@ import { ipcMain, WebContents } from 'electron'
 import { spawn, IPty } from 'node-pty'
 import os from 'os'
 import path from 'path'
+import { randomUUID } from 'crypto'
 import { shellSpec } from './shellIntegration'
 import { log } from './log'
+import { removeAgentsForTerminals } from './agents'
 
 interface PtySession {
   pty: IPty
   webContents: WebContents
   cwd: string
+  agentTerminal: string
 }
 
 const sessions = new Map<number, PtySession>()
@@ -102,6 +105,9 @@ export function registerPtyHandlers(): void {
       sessions.get(id)?.pty.kill()
 
       const spec = shellSpec()
+      // Per spawn, not per id: a respawn of the same pane must not inherit the token whose records
+      // the outgoing pty's own exit is about to delete.
+      const agentTerminal = randomUUID()
       let pty: IPty
       try {
         pty = spawn(spec.file, spec.args, {
@@ -109,7 +115,7 @@ export function registerPtyHandlers(): void {
           cols: cols || 80,
           rows: rows || 24,
           cwd: cwd || os.homedir(),
-          env: spec.env
+          env: { ...spec.env, SNOW_AGENT_TERMINAL: agentTerminal }
         })
       } catch (error) {
         log('error', 'pty', 'spawn failed', { id, cwd: cwd || os.homedir(), error })
@@ -165,10 +171,11 @@ export function registerPtyHandlers(): void {
         flush()
         log('info', 'pty', 'exit', { id, pid: pty.pid, exitCode })
         safeSend('pty:exit', { id, exitCode })
+        removeAgentsForTerminals(new Set([agentTerminal]))
         if (sessions.get(id)?.pty === pty) sessions.delete(id)
       })
 
-      sessions.set(id, { pty, webContents, cwd: cwd || os.homedir() })
+      sessions.set(id, { pty, webContents, cwd: cwd || os.homedir(), agentTerminal })
 
       if (!destroyHooked.has(webContents)) {
         destroyHooked.add(webContents)
@@ -199,8 +206,13 @@ export function registerPtyHandlers(): void {
 }
 
 export function disposeAllPty(): void {
-  for (const { pty } of sessions.values()) {
+  // `will-quit` beats every asynchronous exit event, so this is the one teardown that has to sweep
+  // the records itself - one pass for every pane rather than one per pane.
+  const terminals = new Set<string>()
+  for (const { pty, agentTerminal } of sessions.values()) {
     pty.kill()
+    terminals.add(agentTerminal)
   }
+  removeAgentsForTerminals(terminals)
   sessions.clear()
 }

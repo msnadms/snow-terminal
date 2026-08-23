@@ -54,7 +54,7 @@ const steps: Step[] = [
   },
   {
     title: 'Workspace manager',
-    body: 'Lists every registered workspace across every repo. Open one in its own git worktree, or open them all with their matching preset startup commands. Start an additional agent explicitly; its dispatcher remains responsible for tasks.',
+    body: 'Lists every registered workspace across every repo. Open one in its own git worktree, or open them all with their matching preset startup commands. Open another terminal split when you need a second agent; its dispatcher remains responsible for tasks.',
     selectors: ['.tab-workflows']
   }
 ]

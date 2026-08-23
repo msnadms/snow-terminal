@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import FailureDialog from './FailureDialog'
 import RemoveWorkflowDialog from './RemoveWorkflowDialog'
 import StopWorkflowDialog from './StopWorkflowDialog'
-import { isInside, normalizePath, type Failure } from '@renderer/format'
+import { type Failure } from '@renderer/format'
 import { useGitAction } from '@renderer/useGitAction'
 import { useLatestRun } from '@renderer/useLatestRun'
-import type { AgentSession } from '@renderer/useAgents'
+import { liveAgentsIn, type AgentSession } from '@renderer/useAgents'
 import {
   inScope,
   isRegistered,
@@ -152,10 +152,7 @@ function WorkflowSelect({
 
   const agentsFor = (entry: WorkflowEntry): AgentSession[] => {
     if (!entry.worktree) return []
-    const root = normalizePath(entry.worktree)
-    return agentSessions.filter(
-      (session) => session.cwd && isInside(normalizePath(session.cwd), root)
-    )
+    return liveAgentsIn(agentSessions, entry.worktree)
   }
 
   const prune = (): void => {
@@ -169,7 +166,11 @@ function WorkflowSelect({
     if (!name || action.pending) return
     setNewName('')
     setOpen(false)
-    action.run(() => window.api.workflow.create(cwd, name), 'Creating…')
+    action.run(async () => {
+      const result = await window.api.workflow.create(cwd, name)
+      if (result.worktree) onOpenWorktree?.(result.worktree)
+      return result
+    }, 'Creating…')
   }
 
   const register = (): void => {

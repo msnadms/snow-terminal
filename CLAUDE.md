@@ -680,24 +680,32 @@ events Claude Code emits.
 
 The channel is a **directory of files, not an IPC socket**: the hook runs as a short-lived child of
 the user's `claude` process, which has no way to talk to a running snow. So the hook writes
-`~/.config/snow/agents/<session_id>.json` (`{ sessionId, parentSessionId?, cwd, state, detail, task?, result?, agent, updated }`) and
+`~/.config/snow/agents/<session_id>.json` (`{ sessionId, terminal?, cwd, state, detail, agent, updated }`) and
 `src/main/agents.ts` reads and watches that directory — snow only ever reads it, and nothing but the
-hook writes it.
+hook writes it. Snow only removes records when their terminal exits or they become stale.
 
 This is deliberately an **observation contract**, not an agent-control API. Other dispatchers may
-write the same optional fields, using their own `agent` name and stable session IDs; Snow groups the
-records by workspace for the human operator, but it never creates tasks, chooses a next agent, or
-turns a stopped session into a completed task.
+write the same record, using their own `agent` name and stable session IDs; Snow groups the records
+by workspace for the human operator, but it never creates tasks, chooses a next agent, or turns a
+stopped session into a completed task.
 
-| Event              | State                                                    |
-| ------------------ | -------------------------------------------------------- |
-| `SessionStart`     | `idle` — an agent is alive in this cwd                   |
-| `UserPromptSubmit` | `busy`                                                   |
-| `PreToolUse`       | `busy`, plus a `detail` string built from the tool call  |
-| `Notification`     | `attention` — Claude is waiting on the user              |
-| `SubagentStop`     | `busy` — a dispatched agent finished, the parent has not |
-| `Stop`             | `idle` (not emitted for a user interrupt)                |
-| `SessionEnd`       | the record is deleted                                    |
+The record carries **only what a hook can actually assert**. Earlier versions also declared
+`parentSessionId`, `task`, and `result`, which read like a dispatch tree and a task ledger — but
+Claude Code's payloads carry no such fields, so all three were written empty on every event and
+rendered into a tooltip that was always blank. A schema that promises orchestration data nothing
+populates is worse than a narrow one: it invites consumers that silently show nothing. Anything of
+that shape belongs to whatever dispatches the agents, which knows the task graph, the retries, and
+why a session stopped — none of which is visible from a hook.
+
+| Event              | State                                                                      |
+| ------------------ | -------------------------------------------------------------------------- |
+| `SessionStart`     | `idle` — an agent is alive in this cwd                                     |
+| `UserPromptSubmit` | `busy`                                                                     |
+| `PreToolUse`       | `busy`, plus a `detail` string built from the tool call                    |
+| `Notification`     | `attention` only for permission, idle, elicitation, or agent-input prompts |
+| `SubagentStop`     | `busy` — a dispatched agent finished, the parent has not                   |
+| `Stop`             | `idle` (not emitted for a user interrupt)                                  |
+| `SessionEnd`       | the record is deleted                                                      |
 
 `resources/hooks/snow-agent-hook.mjs` is the whole hook. It **exits 0 unconditionally, prints
 nothing, and carries its own 5 s watchdog**, because a hook that fails, hangs, or writes to stdout
@@ -705,9 +713,15 @@ degrades the user's Claude session and a status badge is not worth that. Records
 temp file and renamed, so a reader never sees a half-written one; the `session_id` is sanitized
 before it becomes a filename, since it arrives as external input.
 
-`readAgents()` drops records older than 12 h **and deletes their files**: a session killed at the
-terminal never fires `SessionEnd`, so nothing else would ever clean up after it. A malformed file is
-skipped rather than deleted, matching how `snowignore.ts` degrades.
+`readAgents()` expires records **per state** and deletes their files: 30 min for `busy` and `idle`,
+12 h for `attention`. A record is self-healing — every hook event rewrites it — so retiring one early
+costs at most a missing badge until that session's next event, while retiring one late invents a
+fleet of agents that finished hours ago. `attention` is the exception in both directions, because it
+is the one state where nothing further happens until a human acts: no event will arrive to refresh
+it, and it is the signal most worth keeping. Snow also gives every PTY a unique inherited terminal
+token; when that PTY exits, `pty.ts` removes just the records carrying its token. That cleans up a Claude session when its tab closes even though a forced terminal kill never
+fires `SessionEnd`, without touching agents in another tab or launched outside Snow. A malformed file
+is skipped rather than deleted, matching how `snowignore.ts` degrades.
 
 **The heuristic stays as the floor, not the ceiling.** `App` keeps `statuses` (per tab, from the PTY
 byte burst) and adds `agentDirs` (per normalized cwd, from `agents:get` + `agents:changed`); a
@@ -716,6 +730,14 @@ bottom shell, an `npm run dev` split, a Codex pane, a Claude session with no hoo
 Deleting it would regress every non-Claude pane to no status at all. The merge also folds in agent
 directories with **no tab**, which is what lets the workflow manager show a worktree someone is
 running `claude` in from outside snow.
+
+**`idle` never counts as a live agent in a rollup.** `liveAgentsIn` (`useAgents.ts`) is what both
+`WorkflowManager` and `WorkflowSelect` count through, and it drops `idle`; `App` likewise folds an
+agent directory with **no tab** into `sessionDirStatuses` only while that agent is working or
+waiting. `idle` means "alive but between turns", which is indistinguishable from a session killed at
+its terminal without firing `SessionEnd` — so counting it rendered three finished sessions as
+`3 agents · waiting` on a worktree where nothing was running. A tab's **own** dot still shows `idle`,
+because there the pane is visibly alive and the terminal token reaps the record when it closes.
 
 Where two agents share a directory the **loudest state wins, not the newest**: they are one row on
 screen, and an agent waiting on a permission prompt is the thing worth surfacing even while its
@@ -727,7 +749,7 @@ this channel existed.
 
 The other half of the hook channel. Because `refs/stash` is repo-wide (see _Parked work_), a
 `git stash pop` an agent runs in a promoted worktree can consume a **different** workspace's parked
-changes. `snow-agent-hook.mjs` can answer `PreToolUse` on `Bash` with a `permissionDecision: "deny"`,
+changes. `snow-agent-hook.mjs` can answer `PreToolUse` on `Bash` or `PowerShell` with a `permissionDecision: "deny"`,
 and it needs no extra `settings.json` entry — the installed `PreToolUse` group already matches every
 tool, so the guard is a branch in the script rather than a second hook.
 
@@ -740,8 +762,8 @@ operators and tokenized with quotes honoured, so
 `cd src && git stash pop` is caught while `echo "git stash pop"` is not, and git's own value-taking
 global flags (`-C`, `-c`, …) are skipped to find the subcommand.
 
-`workflowStashProtection` in `.snowconfig` selects `deny` (the default), `warn`, or `off`. Warn adds
-an activity warning without changing the agent command; deny blocks it; off leaves it alone. Change
+`workflowStashProtection` in `.snowconfig` selects `deny` (the default), `warn`, or `off`. Warn asks
+for confirmation and gives Claude the warning text; deny blocks it; off leaves it alone. Change
 it with `snow hooks protection <warn|deny|off>` or while installing with
 `snow hooks install <warn|deny|off>`.
 
@@ -945,9 +967,11 @@ and the config's `hooksPrompted`. `hooks:run` is the same `runHooks` the verb ca
 the same `hooks:changed`, so the result lands in `App`'s shared notice dialog by the path that
 already existed rather than being reported twice.
 
-The answer is recorded whichever button is pressed, including when the install fails — the flag
-means "asked", and the failure dialog names what to fix and the verb to retry with. Snow asks once
-and then gets out of the way.
+Declining records the answer immediately — the flag means "asked", so `snow hooks remove` later does
+not bring the offer back. A **failed** install is the one case that does not record it: the offer is
+the only surface that names the feature, so consuming it on an install that did not happen would
+hide it for good. The failure dialog names what to fix, and the prompt is still there to retry.
+Otherwise snow asks once and then gets out of the way.
 
 Like `snow theme`, the shim detaches and cannot print, so the result goes to `snow.log` and is
 broadcast as `hooks:changed` for the window to render. Unlike a theme install, **success is not
@@ -1134,14 +1158,12 @@ unregistered is never silently popped, which is what makes the "your parked chan
 stash" line in the unregister dialog true. `switchBranch()` composes the two around an arbitrary
 checkout closure, which is why every switch path shares the exact same semantics.
 
-`workflow:create` routes through `switchBranch` too — branching from the remote's default rather
-than an existing ref is just what its closure does:
-`checkout -b <name> --no-track <remote>/<default>`. **`--no-track` is load-bearing**: without it the
-branch tracks `origin/<default>`, and `git:sync` would take its `status.tracking` path and push
-a feature branch at the default branch's upstream. `restoreOnEnter` is a no-op on the way in, since
-the new name is not registered until `addRecord` runs after the checkout — except when the registry
-still holds an entry for a branch of that name that was since deleted, where re-creating it recovers
-the parked stash that `WorkflowSelect` was already showing as a missing-branch row.
+`workflow:create` creates the new branch in its own linked worktree rather than switching the active
+checkout: `worktree add -b <name> --no-track <directory> <remote>/<default>`. **`--no-track` is
+load-bearing**: without it the branch tracks `origin/<default>`, and `git:sync` would take its
+`status.tracking` path and push a feature branch at the default branch's upstream. It registers the
+new worktree after Git has created it, so the current workspace and any uncommitted work in it remain
+untouched.
 
 `switchBranch` is the only park entry point `git.ts` exports; `parkOnLeave`, `restoreOnEnter`,
 `rollbackPark`, `parkPlan`, and `registryFor` are module-private so no caller can take half the
@@ -1263,8 +1285,10 @@ says what to do, since the path alone reads as unrelated to the workflow that pr
 **Launch** is the screen's verb, and it resolves per row: a usable worktree opens (or focuses) its
 tab, the branch checked out in the main worktree opens a tab on the repo root, and a park-mode
 workflow is **promoted first** — `git worktree add`, then the tab. Launching is the one place that
-creates a worktree implicitly, because "run these three branches at once" has no other meaning in
-park mode. A launched tab inherits the preset whose `cwd` lives inside that repo (shortest match, so
+promotes a **parked** workflow implicitly, because "run these three branches at once" has no other
+meaning in park mode. (Creating a workspace also makes a worktree, but explicitly: `workflow:create`
+cuts the branch straight into one via `worktree add -b`, so it shares `occupiedWorktree`'s
+empty-directory refusal with promote rather than re-deriving it.) A launched tab inherits the preset whose `cwd` lives inside that repo (shortest match, so
 a preset on the root wins), which is what carries `startupCommand` and `presetName` over so the tab
 keeps its command buttons; `openWorktree` takes that repo as an optional second argument and falls
 back to inheriting from the active tab when it is absent, since a launch from the manager has no

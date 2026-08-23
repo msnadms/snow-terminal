@@ -8,11 +8,22 @@ const stateByEvent = {
   UserPromptSubmit: 'busy',
   PreToolUse: 'busy',
   SubagentStop: 'busy',
-  Notification: 'attention',
   Stop: 'idle'
 }
 
+// Claude emits both user-blocking notifications and routine status notices such as auth success.
+// Only the former should make a workspace look like it needs operator attention.
+const attentionNotifications = new Set([
+  'permission_prompt',
+  'idle_prompt',
+  'elicitation_dialog',
+  'elicitation_url_dialog',
+  'agent_needs_input'
+])
+
 const markerPrefix = 'snow-wf:'
+const assignmentPrefix = /^[A-Za-z_][A-Za-z0-9_]*=/
+const shellWrappers = new Set(['sh', 'bash', 'zsh'])
 const safeStashSubcommands = new Set(['list', 'show'])
 const stashProtectionModes = new Set(['warn', 'deny', 'off'])
 const stashLockName = 'snow-stash.lock'
@@ -62,6 +73,12 @@ function detailFor(event) {
   const tool = clip(event.tool_name, 40) || 'Tool'
   const target = toolTarget(event.tool_input)
   return target ? `${tool} ${target}` : tool
+}
+
+function stateFor(event) {
+  if (event.hook_event_name === 'Notification')
+    return attentionNotifications.has(event.notification_type) ? 'attention' : null
+  return stateByEvent[event.hook_event_name] ?? null
 }
 
 function sessionFile(dir, sessionId) {
@@ -120,15 +137,49 @@ function tokenize(segment) {
   return tokens
 }
 
+function commandAt(tokens, start = 0) {
+  let i = start
+  while (i < tokens.length && assignmentPrefix.test(tokens[i])) i += 1
+  const name = path
+    .basename(tokens[i] ?? '')
+    .replace(/\.exe$/i, '')
+    .toLowerCase()
+  return { index: i, name }
+}
+
 function gitArgs(tokens) {
-  let i = 0
-  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i += 1
-  const name = path.basename(tokens[i] ?? '').replace(/\.exe$/i, '')
-  if (name.toLowerCase() !== 'git') return null
-  i += 1
+  const { index, name } = commandAt(tokens)
+  if (name !== 'git') return null
+  let i = index + 1
   while (i < tokens.length) {
     if (!tokens[i].startsWith('-')) return tokens.slice(i)
     i += gitValueFlags.has(tokens[i]) ? 2 : 1
+  }
+  return null
+}
+
+/**
+ * A direct `git` command is the common case. Recognize the two lightweight wrappers agents use
+ * as well, without interpreting an arbitrary string such as `rg stash` as a shell wrapper that
+ * might write the shared stash.
+ */
+function wrappedGitArgs(tokens) {
+  const direct = gitArgs(tokens)
+  if (direct) return direct
+
+  const { index, name } = commandAt(tokens)
+  if (name === 'env' || name === 'command') {
+    let i = index + 1
+    while (i < tokens.length && (tokens[i].startsWith('-') || assignmentPrefix.test(tokens[i])))
+      i += 1
+    return gitArgs(tokens.slice(i))
+  }
+  if (shellWrappers.has(name)) {
+    // Shells accept bundled short flags, e.g. `bash -lc "git stash pop"`.
+    const flag = tokens.findIndex(
+      (token, i) => i > index && (token === '-c' || /^-[^-]*c/.test(token))
+    )
+    return flag < 0 ? null : wrappedGitArgs(tokenize(tokens[flag + 1] ?? ''))
   }
   return null
 }
@@ -142,10 +193,9 @@ function gitArgs(tokens) {
 function takesSharedStash(command) {
   for (const segment of command.split(/&&|\|\||[;\n|]/)) {
     if (!segment.includes('stash')) continue
-    const args = gitArgs(tokenize(segment))
-    // Shell wrappers (for example `sh -c`, `env`, or a function) cannot be proven read-only from
-    // the outer command. Deny them rather than letting a wrapper evade workspace protection.
-    if (!args || args[0] !== 'stash') return true
+    const args = wrappedGitArgs(tokenize(segment))
+    // A mention of "stash" is not itself a stash operation: agents need to search and discuss it.
+    if (!args || args[0] !== 'stash') continue
     const rest = args.slice(1)
     const subcommand = rest.find((arg) => !arg.startsWith('-'))
     if (!subcommand || !safeStashSubcommands.has(subcommand)) return true
@@ -333,7 +383,8 @@ function stashProtection() {
 }
 
 function stashRefusal(event) {
-  if (event.tool_name !== 'Bash') return null
+  // Keyed on the shape rather than a tool name: Bash and PowerShell are two of them today, and
+  // anything else that hands a shell string to the same worktree needs the same guard.
   const command = event.tool_input?.command
   const cwd = event.cwd
   if (typeof command !== 'string' || typeof cwd !== 'string' || !cwd) return null
@@ -352,14 +403,15 @@ function stashRefusal(event) {
   ].join('\n')
 }
 
-function deny(reason) {
+function decide(permissionDecision, reason) {
   fs.writeSync(
     1,
     JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: reason
+        permissionDecision,
+        permissionDecisionReason: reason,
+        ...(permissionDecision === 'ask' ? { additionalContext: reason } : {})
       }
     })
   )
@@ -388,7 +440,7 @@ async function main() {
     return
   }
 
-  const state = stateByEvent[event.hook_event_name]
+  const state = stateFor(event)
   if (!state) return
 
   const refusal = event.hook_event_name === 'PreToolUse' ? stashRefusal(event) : null
@@ -401,11 +453,12 @@ async function main() {
   fs.mkdirSync(dir, { recursive: true })
   writeRecord(file, {
     sessionId: event.session_id,
-    parentSessionId: typeof event.parent_session_id === 'string' ? event.parent_session_id : '',
+    ...(typeof process.env.SNOW_AGENT_TERMINAL === 'string'
+      ? { terminal: process.env.SNOW_AGENT_TERMINAL }
+      : {}),
     cwd: typeof event.cwd === 'string' ? event.cwd : '',
     state,
     detail,
-    task: typeof event.task_description === 'string' ? clip(event.task_description, 160) : '',
     agent: 'claude',
     updated: Date.now()
   })
@@ -413,7 +466,7 @@ async function main() {
   // Anything that throws on the way here leaves the command allowed: a registry snow cannot read
   // must never block the user's git.
   if (event.hook_event_name !== 'PreToolUse') return
-  if (refusal && protection === 'deny') deny(refusal)
+  if (protection !== 'off') decide(protection === 'deny' ? 'deny' : 'ask', refusal)
 }
 
 // A hook that fails or hangs degrades the session it is attached to, and a status badge is not

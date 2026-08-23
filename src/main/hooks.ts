@@ -314,6 +314,12 @@ export function hooksState(): HooksState {
   }
 }
 
+const protectionDetail: Record<WorkflowStashProtection, string> = {
+  off: 'Claude Code will not warn about unqualified git stash commands in snow workspaces.',
+  deny: 'Claude Code will block unqualified git stash commands in snow workspaces.',
+  warn: 'Claude Code will ask before running an unqualified git stash command in a snow workspace.'
+}
+
 export function runHooks(action: string, protection?: string): HooksResult {
   const mode = workflowStashProtections.find((candidate) => candidate === protection)
   if (protection && !mode)
@@ -335,10 +341,7 @@ export function runHooks(action: string, protection?: string): HooksResult {
                 : {
                     ok: true,
                     message: `Shared-stash protection set to ${mode}`,
-                    detail:
-                      mode === 'off'
-                        ? 'Claude Code will not warn about unqualified git stash commands in snow workspaces.'
-                        : `Claude Code will ${mode === 'deny' ? 'block' : 'warn about'} unqualified git stash commands in snow workspaces.`,
+                    detail: protectionDetail[mode],
                     error: null
                   }
             })()

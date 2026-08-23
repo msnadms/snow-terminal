@@ -9,8 +9,14 @@ import { useGitAction } from '@renderer/useGitAction'
 import { useGitColors } from '@renderer/useGitColors'
 import { useLatestRun } from '@renderer/useLatestRun'
 import { useUsage } from '@renderer/useUsage'
-import type { AgentSession } from '@renderer/useAgents'
 import {
+  agentSummary,
+  liveAgentsIn,
+  type AgentSession,
+  type AgentSummary
+} from '@renderer/useAgents'
+import {
+  inboxSignal,
   inScope,
   isRegistered,
   launchLabel,
@@ -23,6 +29,8 @@ import {
   stateLabel,
   stateSlug,
   usable,
+  needsOperator,
+  type InboxSignal,
   type WorkflowEntry,
   type WorkflowRepo,
   type WorkflowResult
@@ -30,11 +38,24 @@ import {
 
 type Overview = Awaited<ReturnType<typeof window.api.workflow.overview>>
 type Targeted = { repo: WorkflowRepo; entry: WorkflowEntry }
+type Activity = {
+  status?: SessionStatus
+  title?: string
+  agents: AgentSession[]
+  summary: AgentSummary
+}
+type WorkflowRow = {
+  entry: WorkflowEntry
+  activity: Activity
+  cost: number
+  dir: string | undefined
+  order: number
+  signal: InboxSignal
+}
 
 interface WorkflowManagerProps {
   active: boolean
   onLaunch: (dir: string, repo: string) => void
-  onStartAgent: (dir: string, repo: string) => void
   onOpenDiff: (cwd: string, branch: string) => void
   onCloseWorktree?: (dir: string) => void
   sessionStatuses: Record<string, SessionStatus>
@@ -58,7 +79,6 @@ function indent(text: string): string {
 function WorkflowManager({
   active,
   onLaunch,
-  onStartAgent,
   onOpenDiff,
   onCloseWorktree,
   sessionStatuses,
@@ -91,56 +111,73 @@ function WorkflowManager({
     const root = directoryKey(dir)
     return costDirs.reduce((sum, [key, cost]) => (isInside(key, root) ? sum + cost : sum), 0)
   }
-  const activityFor = (
-    dir: string
-  ): { status?: SessionStatus; title?: string; label?: string; agents: AgentSession[] } => {
+  const activityFor = (dir: string): Activity => {
     const root = normalizePath(dir)
     const rank: Record<SessionStatus, number> = { attention: 2, busy: 1, idle: 0 }
-    const agents = agentSessions.filter(
-      (session) => session.cwd && isInside(normalizePath(session.cwd), root)
-    )
+    const agents = liveAgentsIn(agentSessions, dir)
     let tabSelected: { path: string; status: SessionStatus } | null = null
     for (const [path, status] of Object.entries(sessionStatuses)) {
       if (!isInside(path, root)) continue
       if (!tabSelected || rank[status] > rank[tabSelected.status]) tabSelected = { path, status }
     }
-    let selected: { path: string; status: SessionStatus } | null = null
-    for (const session of agents) {
-      const path = normalizePath(session.cwd)
-      const status = session.state
-      if (!isInside(path, root)) continue
-      if (!selected || rank[status] > rank[selected.status]) selected = { path, status }
+    const tabTitle = tabSelected ? sessionTitles[tabSelected.path] : undefined
+    const summary = agentSummary(agents)
+    if (!agents.length) {
+      if (!tabSelected) return { agents, summary }
+      const status = tabSelected.status
+      return { status, title: status === 'idle' ? undefined : tabTitle, agents, summary }
     }
-    if (agents.length) {
-      const waiting = agents.filter((session) => session.state === 'attention').length
-      const working = agents.filter((session) => session.state === 'busy').length
-      const label = [
-        `${agents.length} agent${agents.length === 1 ? '' : 's'}`,
-        waiting ? `${waiting} needs input` : working ? `${working} working` : 'waiting'
-      ].join(' · ')
-      const detail = agents
-        .map((session) => {
-          const state = session.state === 'attention' ? 'needs input' : session.state
-          const context = [
-            session.task || session.detail,
-            session.result && `result: ${session.result}`
-          ]
-            .filter(Boolean)
-            .join(' · ')
-          return `${session.agent} · ${state} · ${context || 'no activity detail'}`
-        })
-        .join('\n')
-      const title = tabSelected ? sessionTitles[tabSelected.path] : undefined
-      return { status: selected?.status, title: title || detail, label, agents }
+
+    const detail = agents
+      .map((session) => session.detail)
+      .filter(Boolean)
+      .join('\n')
+    return {
+      status: summary.waiting ? 'attention' : 'busy',
+      title: tabTitle || detail,
+      agents,
+      summary
     }
-    return tabSelected
-      ? { status: tabSelected.status, title: sessionTitles[tabSelected.path], agents }
-      : { agents }
   }
   const overviewRef = useRef<Overview | null>(null)
+  const watchedDirsRef = useRef(new Map<string, string>())
   useEffect(() => {
     overviewRef.current = overview
   }, [overview])
+
+  /**
+   * The manager summarizes worktrees that may not have an open shell, Git panel, or diff view of
+   * their own. Watch those directories here so an agent's ordinary file writes refresh the review
+   * count instead of leaving the overview stuck on its last Git snapshot.
+   */
+  useEffect(() => {
+    const wanted = new Map<string, string>()
+    for (const repo of overview?.repos ?? []) {
+      for (const entry of repo.workflows) {
+        const dir = openDir(repo, entry)
+        if (!dir) continue
+        const normalized = normalizePath(dir)
+        const key = navigator.platform.startsWith('Win') ? normalized.toLowerCase() : normalized
+        wanted.set(key, dir)
+      }
+    }
+
+    for (const [key, dir] of watchedDirsRef.current) {
+      if (!wanted.has(key)) window.api.git.unwatch(dir)
+    }
+    for (const [key, dir] of wanted) {
+      if (!watchedDirsRef.current.has(key)) void window.api.git.watch(dir)
+    }
+    watchedDirsRef.current = wanted
+  }, [overview])
+
+  useEffect(
+    () => () => {
+      for (const dir of watchedDirsRef.current.values()) window.api.git.unwatch(dir)
+      watchedDirsRef.current.clear()
+    },
+    []
+  )
 
   const action = useGitAction<WorkflowResult>({
     onFailure: setFailure,
@@ -227,7 +264,11 @@ function WorkflowManager({
     const name = (drafts[repo.repo] ?? '').trim()
     if (!name || action.pending) return
     setDrafts((prev) => ({ ...prev, [repo.repo]: '' }))
-    action.run(() => window.api.workflow.create(repo.repo, name), 'Creating…')
+    action.run(async () => {
+      const result = await window.api.workflow.create(repo.repo, name)
+      if (result.worktree) onLaunch(result.worktree, repo.repo)
+      return result
+    }, 'Creating…')
   }
 
   const register = (repo: WorkflowRepo): void => {
@@ -284,6 +325,29 @@ function WorkflowManager({
       <>
         {overview.repos.map((repo) => {
           const registered = isRegistered(repo.workflows)
+          const rows: WorkflowRow[] = repo.workflows
+            .map((entry, order) => {
+              const dir = openDir(repo, entry)
+              const activity: Activity = dir
+                ? activityFor(dir)
+                : { agents: [], summary: { waiting: 0, working: 0, names: [] } }
+              const cost = dir ? costFor(dir) : 0
+              return {
+                entry,
+                activity,
+                cost,
+                dir,
+                order,
+                signal: inboxSignal(entry, activity.summary)
+              }
+            })
+            .sort(
+              (left, right) =>
+                right.signal.tier - left.signal.tier ||
+                right.cost - left.cost ||
+                left.order - right.order
+            )
+          const needYou = rows.filter((row) => needsOperator(row.signal)).length
           return (
             <section
               className="wfm-repo"
@@ -295,6 +359,14 @@ function WorkflowManager({
                 <span className="wfm-repo-path" title={repo.repo}>
                   {repo.repo}
                 </span>
+                {needYou > 0 && (
+                  <span
+                    className="wfm-repo-inbox"
+                    title={`${needYou} workspace${needYou === 1 ? '' : 's'} need your attention`}
+                  >
+                    {needYou} need{needYou === 1 ? 's' : ''} you
+                  </span>
+                )}
                 <button
                   className="wfm-launch-all"
                   disabled={action.pending || repo.workflows.length === 0 || repo.unreachable}
@@ -312,12 +384,9 @@ function WorkflowManager({
               )}
               {repo.error && <div className="wfm-note">{repo.error}</div>}
               <div className="wfm-rows">
-                {repo.workflows.map((entry) => {
+                {rows.map(({ entry, activity, cost, dir, signal }) => {
                   const state = stateLabel(entry)
-                  const dir = openDir(repo, entry)
-                  const activity = dir ? activityFor(dir) : { agents: [] }
                   const status = activity.status
-                  const cost = dir ? costFor(dir) : 0
                   const title = activity.title
                   return (
                     <div className="wfm-row" key={entry.branch}>
@@ -332,28 +401,14 @@ function WorkflowManager({
                           <span className={`wfm-state wfm-state-${stateSlug(state)}`}>{state}</span>
                         )}
                       </span>
-                      <span
-                        className={`wfm-branch${entry.exists ? '' : ' wfm-branch-missing'}`}
-                        title={entry.worktree ?? parkedTitle(entry)}
-                      >
-                        {entry.branch}
-                      </span>
-                      {title && (
-                        <span className="wfm-activity" title={title}>
-                          {title}
-                        </span>
-                      )}
-                      {activity.label && (
-                        <span className="wfm-agent-count" title={activity.title}>
-                          {activity.label}
-                        </span>
-                      )}
-                      {!!cost && (
+                      {signal.label && (
                         <span
-                          className="wfm-cost"
-                          title="Estimated agent spend in this directory since snow started"
+                          className={`wfm-inbox wfm-inbox-${signal.slug}`}
+                          title={activity.title || signal.label}
                         >
-                          {formatCost(cost)}
+                          {signal.label}
+                          {activity.summary.names.length > 1 &&
+                            ` (${activity.summary.names.join(', ')})`}
                         </span>
                       )}
                       {entry.review && (
@@ -365,6 +420,25 @@ function WorkflowManager({
                         >
                           {reviewBadge(entry.review)}
                         </button>
+                      )}
+                      <span
+                        className={`wfm-branch${entry.exists ? '' : ' wfm-branch-missing'}`}
+                        title={entry.worktree ?? parkedTitle(entry)}
+                      >
+                        {entry.branch}
+                      </span>
+                      {title && (
+                        <span className="wfm-activity" title={title}>
+                          {title}
+                        </span>
+                      )}
+                      {!!cost && (
+                        <span
+                          className="wfm-cost"
+                          title="Estimated agent spend in this directory since snow started"
+                        >
+                          {formatCost(cost)}
+                        </span>
                       )}
                       {entry.parked && (
                         <span className="wfm-parked" title={parkedTitle(entry)}>
@@ -384,18 +458,8 @@ function WorkflowManager({
                         >
                           ▸ {launchLabel(entry)}
                         </button>
-                        {dir && entry.exists && (
-                          <button
-                            className="wfm-action"
-                            disabled={action.pending}
-                            onClick={() => onStartAgent(dir, repo.repo)}
-                            title="Open a new agent pane. snow does not assign tasks or manage the agent."
-                          >
-                            Start agent
-                          </button>
-                        )}
                         <span className="wfm-action-slot">
-                          {usable(entry) && (
+                          {usable(entry) ? (
                             <button
                               className="wfm-action wfm-action-icon"
                               disabled={action.pending}
@@ -404,8 +468,7 @@ function WorkflowManager({
                             >
                               󰏤
                             </button>
-                          )}
-                          {entry.worktree && !usable(entry) && (
+                          ) : entry.worktree ? (
                             <button
                               className="wfm-action wfm-action-icon"
                               disabled={action.pending || repo.unreachable}
@@ -414,7 +477,7 @@ function WorkflowManager({
                             >
                               ⟳
                             </button>
-                          )}
+                          ) : null}
                         </span>
                         <button
                           className="wfm-action wfm-action-icon wfm-action-remove"

@@ -34,9 +34,15 @@ function HooksPrompt({ prompted }: HooksPromptProps): React.JSX.Element | null {
   const answer = async (install: boolean): Promise<void> => {
     if (busy) return
     setBusy(true)
-    if (install) await window.api.hooks.run('install')
-    await window.api.snowconfig.setHooksPrompted()
-    setBusy(false)
+    try {
+      if (install) {
+        const result = await window.api.hooks.run('install')
+        if (!result.ok) return
+      }
+      await window.api.snowconfig.setHooksPrompted()
+    } finally {
+      setBusy(false)
+    }
   }
 
   if (!state || state.error || !state.available) return null

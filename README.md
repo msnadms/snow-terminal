@@ -116,8 +116,9 @@ edit:
 - `snow.log` - a rolling log of main-process and IPC activity.
 
 When Claude Code activity hooks are installed, `.snowconfig` can set
-`workflowStashProtection` to `deny` (default), `warn`, or `off` for ambiguous
-`git stash` commands inside a Snow worktree. Change it from Home or with
+`workflowStashProtection` to `deny` (default), `warn`, or `off` for raw
+`git stash` commands inside a Snow worktree. `warn` asks for confirmation;
+change it with
 `snow hooks protection <warn|deny|off>`.
 
 In deny mode, agents can inspect stashes but cannot run raw restore or write

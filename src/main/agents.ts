@@ -8,12 +8,10 @@ export type AgentState = 'busy' | 'attention' | 'idle'
 
 export interface AgentSession {
   sessionId: string
-  parentSessionId?: string
+  terminal?: string
   cwd: string
   state: AgentState
   detail: string
-  task?: string
-  result?: string
   agent: string
   updated: number
 }
@@ -23,7 +21,18 @@ export interface AgentsResult {
   error: string | null
 }
 
-const staleMs = 12 * 60 * 60 * 1000
+/**
+ * A record is self-healing: every hook event rewrites it, so expiring one early costs at most a
+ * missing badge until the session's next event. Expiring one late is the worse error - it invents
+ * a fleet of agents that finished hours ago. `attention` is the exception in both directions,
+ * because it is the one state where nothing further happens until a human acts, so no event will
+ * arrive to refresh it and a short window would retire the signal most worth surfacing.
+ */
+const staleMs: Record<AgentState, number> = {
+  attention: 12 * 60 * 60 * 1000,
+  busy: 30 * 60 * 1000,
+  idle: 30 * 60 * 1000
+}
 const debounceMs = 150
 const states: AgentState[] = ['busy', 'attention', 'idle']
 
@@ -45,38 +54,63 @@ function parseSession(full: string): AgentSession | null {
   if (typeof o.updated !== 'number' || !Number.isFinite(o.updated)) return null
   return {
     sessionId: o.sessionId,
-    ...(typeof o.parentSessionId === 'string' && o.parentSessionId
-      ? { parentSessionId: o.parentSessionId }
-      : {}),
+    ...(typeof o.terminal === 'string' && o.terminal ? { terminal: o.terminal } : {}),
     cwd: o.cwd,
     state: o.state as AgentState,
     detail: typeof o.detail === 'string' ? o.detail : '',
-    ...(typeof o.task === 'string' && o.task ? { task: o.task } : {}),
-    ...(typeof o.result === 'string' && o.result ? { result: o.result } : {}),
-    agent: typeof o.agent === 'string' ? o.agent : 'claude',
+    agent: typeof o.agent === 'string' ? o.agent : '',
     updated: o.updated
+  }
+}
+
+function listRecords(dir: string): { names: string[]; error: NodeJS.ErrnoException | null } {
+  try {
+    return { names: fs.readdirSync(dir).filter((name) => name.endsWith('.json')), error: null }
+  } catch (err) {
+    return { names: [], error: err as NodeJS.ErrnoException }
+  }
+}
+
+/**
+ * Claude's SessionEnd hook is skipped when Snow kills its terminal. The hook inherits a unique
+ * terminal token, so remove only the records that belonged to those terminals and leave agents in
+ * other tabs (or started outside Snow) alone. Like the other config modules, this only writes -
+ * the directory watcher is what broadcasts, so closing a window of panes is one reload.
+ */
+export function removeAgentsForTerminals(terminals: ReadonlySet<string>): void {
+  if (!terminals.size) return
+  const dir = agentsDir()
+  const { names, error } = listRecords(dir)
+  if (error) {
+    if (error.code !== 'ENOENT') log('warn', 'agents', 'cleanup failed', { error: String(error) })
+    return
+  }
+
+  for (const name of names) {
+    const full = path.join(dir, name)
+    const terminal = parseSession(full)?.terminal
+    if (!terminal || !terminals.has(terminal)) continue
+    try {
+      fs.rmSync(full, { force: true })
+    } catch (err) {
+      log('warn', 'agents', 'cleanup failed', { file: full, error: String(err) })
+    }
   }
 }
 
 export function readAgents(): AgentsResult {
   const dir = agentsDir()
-  let names: string[]
-  try {
-    names = fs.readdirSync(dir)
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException
-    return { sessions: [], error: e.code === 'ENOENT' ? null : e.message }
-  }
+  const { names, error } = listRecords(dir)
+  if (error) return { sessions: [], error: error.code === 'ENOENT' ? null : error.message }
 
-  const cutoff = Date.now() - staleMs
+  const now = Date.now()
   const sessions: AgentSession[] = []
   for (const name of names) {
-    if (!name.endsWith('.json')) continue
     const full = path.join(dir, name)
     const session = parseSession(full)
     if (!session) continue
     // A session killed at the terminal never fires SessionEnd, so nothing else deletes its file.
-    if (session.updated < cutoff) {
+    if (session.updated < now - staleMs[session.state]) {
       fs.rmSync(full, { force: true })
       continue
     }

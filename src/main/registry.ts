@@ -93,18 +93,22 @@ export function branchesFor(
   return { parkable, owner, error }
 }
 
-export function addRecord(repo: string, branch: string): string | null {
+export function addRecord(repo: string, branch: string, worktree?: string): string | null {
   const { records, error } = readRecords()
   if (error) return error
+  const target = worktree ? collapseHome(worktree) : undefined
   const index = records.findIndex((r) => r.branch === branch && samePath(expandHome(r.repo), repo))
   if (index !== -1) {
     const existing = records[index]
-    if (!existing.worktree) return null
+    if (existing.worktree === target) return null
     const next = [...records]
-    next[index] = { repo: existing.repo, branch: existing.branch }
+    next[index] = target
+      ? { repo: existing.repo, branch: existing.branch, worktree: target }
+      : { repo: existing.repo, branch: existing.branch }
     return writeRecords(next)
   }
-  return writeRecords([...records, { repo: collapseHome(repo), branch }])
+  const created = { repo: collapseHome(repo), branch }
+  return writeRecords([...records, target ? { ...created, worktree: target } : created])
 }
 
 export function setWorktree(repo: string, branch: string, worktree: string | null): string | null {

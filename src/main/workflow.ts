@@ -96,6 +96,32 @@ function worktreeDirectory(repo: string, branch: string): string {
   return path.join(worktreeContainer(repo), `${safeBranch}${suffix}`)
 }
 
+/**
+ * `git worktree add` happily checks out into an existing *empty* directory - only a non-empty one
+ * is actually a conflict (e.g. a previous `remove` that unregistered the worktree but couldn't
+ * delete a locked file). An empty leftover is common: `remove` deletes its own directory tree but
+ * can still leave an empty parent behind on Windows.
+ */
+async function occupiedWorktree(
+  destination: string,
+  branch: string,
+  verb: 'create' | 'open'
+): Promise<WorkflowResult | null> {
+  const remaining = await fs.promises
+    .readdir(destination)
+    .catch((error) => (error.code === 'ENOENT' ? [] : Promise.reject(error)))
+  if (!remaining.length) return null
+  return {
+    ok: false,
+    error: `${branch}'s worktree directory already has files in it`,
+    detail: [
+      collapseHome(destination),
+      '',
+      `snow will not check ${branch} out over it. Move or delete that directory, then ${verb} the workspace again.`
+    ].join('\n')
+  }
+}
+
 function recordFor(records: WorkflowRecord[], branch: string): WorkflowRecord | undefined {
   return records.find((record) => record.branch === branch)
 }
@@ -135,7 +161,7 @@ async function aheadOf(directory: string, bases: string[]): Promise<number | nul
 }
 
 /**
- * `status.ahead` counts against the branch's upstream, which `workflow:create` deliberately does not
+ * `status.ahead` counts against the branch's upstream, which workspace creation deliberately does not
  * set (`--no-track`), so review distance is measured against the default branch instead - the remote
  * ref first, then the local one for a repo with no remote.
  */
@@ -340,24 +366,31 @@ export function registerWorkflowHandlers(): void {
           return { ok: false, error: errorText(error), detail: errorDetail(error) }
         }
 
+        const destination = worktreeDirectory(repo, name)
+        const blocked = await occupiedWorktree(destination, name, 'create')
+        if (blocked) return blocked
+
         const target = await defaultBranch(cwd)
         const base = target ? `${target.remote}/${target.branch}` : 'HEAD'
 
-        const result = await switchBranch(cwd, name, (g) =>
-          g.raw(['checkout', '-b', name, '--no-track', base])
-        )
-        if (!result.ok) return result
+        try {
+          // Creating the branch as part of `worktree add` keeps the current checkout exactly where
+          // it is while giving the new workspace an isolated working directory.
+          await gitFor(cwd).raw(['worktree', 'add', '-b', name, '--no-track', destination, base])
+        } catch (error) {
+          return { ok: false, error: errorText(error), detail: errorDetail(error) }
+        }
 
-        const failed = addRecord(repo, name)
+        const failed = addRecord(repo, name, destination)
         if (failed)
           return {
-            ...result,
             ok: false,
-            error: `Switched to ${name}, but could not register it in ${workflowsPath()}`,
-            detail: failed
+            error: `Created ${name}'s workspace, but could not register it in ${workflowsPath()}`,
+            detail: failed,
+            worktree: destination
           }
 
-        return result
+        return { ok: true, branch: name, worktree: destination }
       }).catch((error) => ({ ok: false, error: errorText(error), detail: errorDetail(error) }))
     }
   )
@@ -398,25 +431,9 @@ export function registerWorkflowHandlers(): void {
             detail: collapseHome(active)
           }
 
-        // `git worktree add` happily checks out into an existing *empty* directory - only a
-        // non-empty one is actually a conflict (e.g. a previous `remove` that unregistered the
-        // worktree but couldn't delete a locked file). An empty leftover is common: `remove`
-        // deletes its own directory tree but can still leave an empty parent behind on Windows.
         const destination = worktreeDirectory(repo, name)
-        const remaining = await fs.promises
-          .readdir(destination)
-          .catch((error) => (error.code === 'ENOENT' ? [] : Promise.reject(error)))
-        if (remaining.length > 0) {
-          return {
-            ok: false,
-            error: `${name}'s worktree directory already has files in it`,
-            detail: [
-              collapseHome(destination),
-              '',
-              `snow will not check ${name} out over it. Move or delete that directory, then open the workspace again.`
-            ].join('\n')
-          }
-        }
+        const blocked = await occupiedWorktree(destination, name, 'open')
+        if (blocked) return blocked
 
         let created = false
         try {

@@ -287,6 +287,9 @@ function App(): React.JSX.Element {
   /**
    * A hook-reported state always beats the PTY byte heuristic, which stays as the floor for panes
    * no agent reports - a bottom shell, an `npm run dev` split, a session with no hooks installed.
+   * A directory with no tab is folded in only while its agent is working or waiting: an `idle`
+   * record there is as likely to be a session killed without a SessionEnd as a live one, and
+   * nothing on screen distinguishes the two.
    */
   const { sessionDirStatuses, sessionDirTitles, tabStatuses } = useMemo(() => {
     const sessionDirStatuses: Record<string, SessionStatus> = {}
@@ -300,12 +303,13 @@ function App(): React.JSX.Element {
       if (status) tabStatuses[tab.id] = status
       if (!dir) continue
       if (status) sessionDirStatuses[normalizePath(dir)] = status
-      const title = agent?.detail || titles[tab.id]
+      const title = titles[tab.id]
       if (title) sessionDirTitles[normalizePath(dir)] = title
     }
     for (const [dir, agent] of Object.entries(agentDirs)) {
+      if (agent.state === 'idle') continue
       sessionDirStatuses[dir] = agent.state
-      if (agent.detail) sessionDirTitles[dir] = agent.detail
+      if (agent.detail && !sessionDirTitles[dir]) sessionDirTitles[dir] = agent.detail
     }
     return { sessionDirStatuses, sessionDirTitles, tabStatuses }
   }, [tabs, tabCwd, statuses, titles, agentDirs])
@@ -726,46 +730,6 @@ function App(): React.JSX.Element {
     [presets]
   )
 
-  const startWorkspaceAgent = useCallback(
-    (worktree: string, repo: string): void => {
-      const current = tabsRef.current.find((tab) => tab.id === activeIdRef.current)
-      const inherited = inheritedPreset(presets, repo, current, undefined)
-      const command = inherited?.startupCommand ?? startupCommand ?? 'claude'
-      const existing = tabsRef.current.find(
-        (tab) =>
-          tab.kind === 'shell' &&
-          normalizePath(tab.cwd ?? cwdsRef.current[tab.id] ?? '') === normalizePath(worktree)
-      )
-      if (existing?.kind === 'shell') {
-        setPanes((prev) => ({
-          ...prev,
-          [existing.id]: [
-            ...(prev[existing.id] ?? []),
-            { id: nextTerminalId(), cwd: worktree, startupCommand: command }
-          ]
-        }))
-        setActiveId(existing.id)
-        return
-      }
-
-      const id = nextIdRef.current++
-      setTabs((prev) => [
-        ...prev,
-        { kind: 'shell', id, cwd: worktree, startupCommand: '', workspace: true }
-      ])
-      setCwds((prev) => ({ ...prev, [id]: worktree }))
-      setPanes((prev) => ({
-        ...prev,
-        [id]: [
-          { id: nextTerminalId() },
-          { id: nextTerminalId(), cwd: worktree, startupCommand: command }
-        ]
-      }))
-      setActiveId(id)
-    },
-    [presets, startupCommand]
-  )
-
   const closeWorktree = useCallback(
     (worktree: string): void => {
       const tab = tabsRef.current.find(
@@ -892,7 +856,6 @@ function App(): React.JSX.Element {
             <WorkflowManager
               active={activeId === 'workflows'}
               onLaunch={openWorktree}
-              onStartAgent={startWorkspaceAgent}
               onOpenDiff={openDiff}
               onCloseWorktree={closeWorktree}
               sessionStatuses={sessionDirStatuses}
