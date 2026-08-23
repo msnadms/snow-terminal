@@ -6,8 +6,8 @@ import path from 'path'
 import { simpleGit, SimpleGit, SimpleGitOptions, StatusResult } from 'simple-git'
 import { filterPaths } from './snowignore'
 import { activeCommitAgent, CommitAgent } from './snowconfig'
-import { branchesFor, workflowsPath } from './registry'
-import { collapseHome, samePath } from './config'
+import { branchesFor, readRecords, workflowsPath } from './registry'
+import { collapseHome, expandHome, samePath } from './config'
 import { isExternalUrl } from './external'
 
 export interface GitCommit {
@@ -514,12 +514,10 @@ export async function worktreeRoot(cwd?: string): Promise<string | null> {
 
 /**
  * The root of the primary worktree, shared by every linked worktree. A git dir equal to the common
- * dir means this *is* the primary worktree, so its own top level is the answer - which is the only
- * form that survives `--separate-git-dir`, where the git dir sits nowhere near its worktree and
- * `dirname` of it names an unrelated directory. Only a linked worktree needs the derivation, and
- * there the common dir is the primary worktree's `.git`. Git emits native-looking relative paths in
- * the primary worktree but absolute forward-slash paths in linked worktrees on Windows, so the
- * result is normalized before it is used as a registry or lock identity.
+ * dir means this *is* the primary worktree, so its own top level is the answer. For a linked
+ * worktree, ask Git for the first worktree instead of deriving it from the common dir: that dir is
+ * normally the primary `.git`, but can live anywhere when the repository uses
+ * `--separate-git-dir`.
  */
 export async function mainWorktreeRoot(cwd?: string): Promise<string | null> {
   try {
@@ -537,7 +535,37 @@ export async function mainWorktreeRoot(cwd?: string): Promise<string | null> {
       const top = (await git.revparse(['--show-toplevel'])).trim()
       if (top) return path.resolve(top)
     }
-    return path.resolve(path.dirname(absolute(common)))
+    const worktrees = await git.raw(['worktree', 'list', '--porcelain'])
+    const primary = worktrees
+      .split(/\r?\n/)
+      .find((line) => line.startsWith('worktree '))
+      ?.slice('worktree '.length)
+      .trim()
+    if (primary && fs.existsSync(path.join(primary, '.git'))) return path.resolve(primary)
+
+    // Git does not retain a reverse pointer from a separate Git directory to the primary worktree:
+    // `worktree list` labels that directory as the primary worktree. Snow does retain the primary
+    // path for a registered workflow, so use that path after proving that both locations share the
+    // same common Git dir.
+    const { records, error } = readRecords()
+    if (!error) {
+      for (const record of records) {
+        const candidate = expandHome(record.repo)
+        try {
+          const candidateCommon = await gitFor(candidate).revparse(['--git-common-dir'])
+          if (!samePath(absolute(candidateCommon), absolute(common))) continue
+          const root = await worktreeRoot(candidate)
+          if (root) return root
+        } catch {
+          // A moved or deleted registered repository cannot identify this worktree.
+        }
+      }
+    }
+
+    // There is no primary-worktree location to recover until Snow has a registry entry for it.
+    // The current linked tree is still a usable Git working directory and the least surprising
+    // fallback for ordinary Git views.
+    return worktreeRoot(cwd)
   } catch {
     return null
   }

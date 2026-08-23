@@ -69,22 +69,32 @@ function WorkflowManager({
   const latestRun = useLatestRun()
   const lanes = useGitColors()?.lanes
   const usage = useUsage()
-  /**
-   * Cost is recorded against each agent session's own cwd, which is often a subdirectory of the
-   * worktree it belongs to, so a row sums its whole subtree rather than looking one key up. Paths
-   * arrive here from git (forward slashes) and from the registry (platform separators), and reach
-   * only as far as a case-insensitive match, which is what Windows means by the same directory.
-   */
+  const directoryKey = (dir: string): string => {
+    const normalized = normalizePath(dir)
+    return navigator.platform.startsWith('Win') ? normalized.toLowerCase() : normalized
+  }
+
+  /** Cost is recorded against each agent session's own cwd, so a row sums its whole subtree. */
   const costDirs = useMemo(
     () =>
       Object.entries(usage?.byDirectory ?? {}).map(
-        ([dir, cost]) => [normalizePath(dir).toLowerCase(), cost] as const
+        ([dir, cost]) => [directoryKey(dir), cost] as const
       ),
     [usage]
   )
   const costFor = (dir: string): number => {
-    const root = normalizePath(dir).toLowerCase()
+    const root = directoryKey(dir)
     return costDirs.reduce((sum, [key, cost]) => (isInside(key, root) ? sum + cost : sum), 0)
+  }
+  const activityFor = (dir: string): { status?: SessionStatus; title?: string } => {
+    const root = normalizePath(dir)
+    const rank: Record<SessionStatus, number> = { attention: 2, busy: 1, idle: 0 }
+    let selected: { path: string; status: SessionStatus } | null = null
+    for (const [path, status] of Object.entries(sessionStatuses)) {
+      if (!isInside(path, root)) continue
+      if (!selected || rank[status] > rank[selected.status]) selected = { path, status }
+    }
+    return selected ? { status: selected.status, title: sessionTitles[selected.path] } : {}
   }
   const overviewRef = useRef<Overview | null>(null)
   useEffect(() => {
@@ -264,9 +274,10 @@ function WorkflowManager({
                 {repo.workflows.map((entry) => {
                   const state = stateLabel(entry)
                   const dir = openDir(repo, entry)
-                  const status = dir ? sessionStatuses[normalizePath(dir)] : undefined
+                  const activity = dir ? activityFor(dir) : {}
+                  const status = activity.status
                   const cost = dir ? costFor(dir) : 0
-                  const title = dir ? sessionTitles[normalizePath(dir)] : undefined
+                  const title = activity.title
                   return (
                     <div className="wfm-row" key={entry.branch}>
                       <span className="wfm-row-status">
