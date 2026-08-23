@@ -1160,6 +1160,31 @@ listed are **exactly** the registry's, never presets or discovery: a repo appear
 a workflow in it, which keeps the screen's contents equal to what parking and restoring actually
 act on.
 
+**Fan-out is one click; fan-in is the bottleneck**, so the manager reports _review_ state next to
+registry state. `workflow:overview` and `workflow:list` both take a `detail` flag, which adds a
+`review` — changed files, staged files, and commits ahead of the default branch — to every entry
+that has a working tree to report on: its own worktree when promoted, the repo root when the branch
+is the one checked out there, and nothing at all for a parked branch (which has no tree, and whose
+parked count already says what there is). The flag exists because the numbers cost a `git status`
+plus a `rev-list` per entry; the manager passes `true`, `WorkflowSelect`'s dropdown does not, so
+opening the dropdown is as cheap as it was.
+
+It is a **flag on `describeWorkflows`, not a second handler**, for the reason that function exists at
+all: `workflow:list` and `workflow:overview` share one enrichment path so a row cannot read
+differently in the two places, and a parallel review handler would be exactly that drift.
+
+Distance is measured against the **default branch, not the upstream**. `status.ahead` counts against
+the branch's tracking ref, which `workflow:create` deliberately does not set (`--no-track`, see
+above), so it reads 0 for precisely the branches this screen is about. `aheadOf` tries
+`<remote>/<default>` first and the local default branch second, and reports `null` rather than 0 when
+neither resolves. A failed `status` drops `review` entirely instead of reporting zeros, since "no
+changes" and "could not look" are not the same row.
+
+The badge is a **button**: clicking it opens that worktree's `WorkingDiffView` through the same
+`openDiff` the git panel uses, which is why `App` now reads `tabsRef` there and wraps it in
+`useCallback` — `WorkflowManager` is memoized, and an unstable callback would defeat that. It is
+disabled, not hidden, when there is nothing changed to open.
+
 `worktreeDirectory` replaces the characters a path cannot carry, which collapses distinct branches
 onto one directory — `feature/login` and `feature-login` both want `feature-login`. It appends a
 seven-character SHA-1 of the original name **only when sanitizing actually changed something**, so

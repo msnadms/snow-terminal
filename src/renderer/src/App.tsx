@@ -486,8 +486,8 @@ function App(): React.JSX.Element {
     setActiveId(id)
   }, [])
 
-  const openDiff = (cwd: string, branch: string, file?: string): void => {
-    const existing = tabs.find((t) => t.kind === 'diff' && t.cwd === cwd)
+  const openDiff = useCallback((cwd: string, branch: string, file?: string): void => {
+    const existing = tabsRef.current.find((t) => t.kind === 'diff' && t.cwd === cwd)
     if (existing) {
       setTabs((prev) =>
         prev.map((t) =>
@@ -502,7 +502,7 @@ function App(): React.JSX.Element {
     const id = nextIdRef.current++
     setTabs((prev) => [...prev, { kind: 'diff', id, cwd, branch, focus: file, focusKey: 0 }])
     setActiveId(id)
-  }
+  }, [])
 
   const openBrowser = useCallback((url = 'https://www.google.com'): void => {
     const id = nextIdRef.current++
@@ -829,6 +829,7 @@ function App(): React.JSX.Element {
             <WorkflowManager
               active={activeId === 'workflows'}
               onLaunch={openWorktree}
+              onOpenDiff={openDiff}
               onCloseWorktree={closeWorktree}
               sessionStatuses={sessionDirStatuses}
               sessionTitles={sessionDirTitles}

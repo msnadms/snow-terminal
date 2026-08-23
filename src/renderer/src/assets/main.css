@@ -752,6 +752,31 @@ body {
   color: var(--ui-accent, #89b4fa);
 }
 
+.wfm-review {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  height: 18px;
+  font: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ui-muted-text, #a6adc8);
+  background: transparent;
+  border: 1px solid var(--ui-border, #313244);
+  border-radius: 4px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.wfm-review:hover:not(:disabled) {
+  color: var(--ui-accent, #a6dcf0);
+  border-color: var(--ui-border-hover, #45475a);
+}
+
+.wfm-review:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .wfm-parked {
   flex: 0 0 auto;
   color: var(--ui-muted-text, #a6adc8);

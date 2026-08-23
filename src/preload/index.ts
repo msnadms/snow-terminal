@@ -190,8 +190,10 @@ const git = {
 }
 
 const workflow = {
-  list: (cwd?: string): Promise<WorkflowList> => ipcRenderer.invoke('workflow:list', cwd),
-  overview: (): Promise<WorkflowOverview> => ipcRenderer.invoke('workflow:overview'),
+  list: (cwd?: string, detail?: boolean): Promise<WorkflowList> =>
+    ipcRenderer.invoke('workflow:list', cwd, detail),
+  overview: (detail?: boolean): Promise<WorkflowOverview> =>
+    ipcRenderer.invoke('workflow:overview', detail),
   register: (cwd: string | undefined, branch?: string): Promise<WorkflowResult> =>
     ipcRenderer.invoke('workflow:register', cwd, branch),
   unregister: (cwd: string | undefined, branch: string): Promise<WorkflowResult> =>

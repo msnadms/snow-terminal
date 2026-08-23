@@ -368,7 +368,7 @@ function parseNumstat(raw: string): GitCommitFile[] {
   return files
 }
 
-function isStaged(index: string): boolean {
+export function isStaged(index: string): boolean {
   return index !== ' ' && index !== '?' && index !== '!'
 }
 

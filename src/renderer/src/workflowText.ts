@@ -60,6 +60,28 @@ export function parkedBadge(parked: NonNullable<WorkflowEntry['parked']>): strin
   return `● ${parked.files ?? '?'}${parked.count > 1 ? ` ×${parked.count}` : ''}`
 }
 
+type Review = NonNullable<WorkflowEntry['review']>
+
+/** `3 ~ 1 + ↑2`: changed files, staged files, commits ahead of the default branch. */
+export function reviewBadge(review: Review): string {
+  const parts = [`${review.changed} ~`]
+  if (review.staged > 0) parts.push(`${review.staged} +`)
+  if (review.ahead) parts.push(`↑${review.ahead}`)
+  return parts.join(' ')
+}
+
+export function reviewTitle(entry: WorkflowEntry, review: Review): string {
+  const lines = [
+    `${review.changed} changed file${review.changed === 1 ? '' : 's'}${
+      review.staged > 0 ? `, ${review.staged} staged` : ''
+    }`
+  ]
+  if (review.ahead !== null)
+    lines.push(`${review.ahead} commit${review.ahead === 1 ? '' : 's'} ahead of the default branch`)
+  if (review.changed > 0) lines.push('', `Open ${entry.branch}'s working diff`)
+  return lines.join('\n')
+}
+
 export function staleTitle(entry: WorkflowEntry): string {
   return entry.worktreeExists
     ? `${entry.branch}'s worktree directory is left over - prune, then delete it by hand`

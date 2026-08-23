@@ -7,6 +7,7 @@ import {
   errorDetail,
   errorText,
   gitFor,
+  isStaged,
   markerPrefix,
   newestStash,
   parkedFiles,
@@ -38,6 +39,13 @@ export interface WorkflowParked {
   count: number
 }
 
+/** Review state for a workflow that has a working tree to report on, from `detail` reads only. */
+export interface WorkflowReview {
+  changed: number
+  staged: number
+  ahead: number | null
+}
+
 export interface WorkflowEntry {
   branch: string
   current: boolean
@@ -46,6 +54,7 @@ export interface WorkflowEntry {
   worktree?: string
   worktreeExists?: boolean
   worktreeLinked?: boolean
+  review?: WorkflowReview
 }
 
 export interface WorkflowList {
@@ -111,11 +120,43 @@ function missingEntry({ branch, worktree }: WorkflowRecord): WorkflowEntry {
   }
 }
 
+async function aheadOf(directory: string, bases: string[]): Promise<number | null> {
+  for (const base of bases) {
+    try {
+      const raw = await gitFor(directory).raw(['rev-list', '--count', `${base}..HEAD`])
+      const value = Number(raw.trim())
+      if (Number.isFinite(value)) return value
+    } catch {
+      continue
+    }
+  }
+  return null
+}
+
+/**
+ * `status.ahead` counts against the branch's upstream, which `workflow:create` deliberately does not
+ * set (`--no-track`), so review distance is measured against the default branch instead - the remote
+ * ref first, then the local one for a repo with no remote.
+ */
+async function reviewOf(directory: string, bases: string[]): Promise<WorkflowReview | null> {
+  try {
+    const status = await gitFor(directory).status()
+    return {
+      changed: status.files.length,
+      staged: status.files.filter((file) => isStaged(file.index)).length,
+      ahead: await aheadOf(directory, bases)
+    }
+  } catch {
+    return null
+  }
+}
+
 async function describeWorkflows(
   cwd: string | undefined,
   repo: string | null,
   records: WorkflowRecord[],
-  error: string | null
+  error: string | null,
+  detail = false
 ): Promise<WorkflowList> {
   const [summary, entries, target, checkedOut] = await Promise.all([
     gitFor(cwd)
@@ -128,6 +169,7 @@ async function describeWorkflows(
   if (!summary) return emptyList(error, repo)
 
   const current = summary.current || null
+  const bases = target ? [`${target.remote}/${target.branch}`, target.branch] : []
   const workflows = await Promise.all(
     records.map(async ({ branch, worktree }): Promise<WorkflowEntry> => {
       const entry = newestStash(entries, branch)
@@ -142,6 +184,12 @@ async function describeWorkflows(
       const worktreeLinked = absoluteWorktree
         ? !!linked && samePath(linked, absoluteWorktree)
         : undefined
+      const reviewDir =
+        absoluteWorktree && worktreeExists && worktreeLinked !== false
+          ? absoluteWorktree
+          : branch === current
+            ? (repo ?? cwd ?? null)
+            : null
       return {
         branch,
         current: branch === current,
@@ -155,7 +203,8 @@ async function describeWorkflows(
           : null,
         worktree: absoluteWorktree,
         worktreeExists,
-        worktreeLinked
+        worktreeLinked,
+        review: detail && reviewDir ? ((await reviewOf(reviewDir, bases)) ?? undefined) : undefined
       }
     })
   )
@@ -163,13 +212,17 @@ async function describeWorkflows(
   return { repo, current, defaultBranch: target?.branch ?? null, workflows, error }
 }
 
-async function describeRepo(repo: string, records: WorkflowRecord[]): Promise<WorkflowRepo> {
+async function describeRepo(
+  repo: string,
+  records: WorkflowRecord[],
+  detail: boolean
+): Promise<WorkflowRepo> {
   const root = await mainWorktreeRoot(repo)
   if (root)
     return {
       name: path.basename(root),
       unreachable: false,
-      ...(await describeWorkflows(root, root, filterByRepo(records, root), null)),
+      ...(await describeWorkflows(root, root, filterByRepo(records, root), null, detail)),
       repo: root
     }
 
@@ -183,26 +236,34 @@ async function describeRepo(repo: string, records: WorkflowRecord[]): Promise<Wo
 }
 
 export function registerWorkflowHandlers(): void {
-  ipcMain.handle('workflow:list', async (_event, cwd?: string): Promise<WorkflowList> => {
-    const repo = await mainWorktreeRoot(cwd)
-    if (!repo) return emptyList()
-    const { records, error } = recordsFor(repo)
-    return describeWorkflows(cwd, repo, records, error)
-  })
-
-  ipcMain.handle('workflow:overview', async (): Promise<WorkflowOverview> => {
-    const { records, error } = readRecords()
-    if (error) return { repos: [], error }
-
-    const roots: string[] = []
-    for (const record of records) {
-      const absolute = expandHome(record.repo)
-      if (!roots.some((known) => samePath(known, absolute))) roots.push(absolute)
+  ipcMain.handle(
+    'workflow:list',
+    async (_event, cwd?: string, detail?: boolean): Promise<WorkflowList> => {
+      const repo = await mainWorktreeRoot(cwd)
+      if (!repo) return emptyList()
+      const { records, error } = recordsFor(repo)
+      return describeWorkflows(cwd, repo, records, error, detail === true)
     }
+  )
 
-    const repos = await Promise.all(roots.map((root) => describeRepo(root, records)))
-    return { repos: repos.sort((a, b) => a.name.localeCompare(b.name)), error: null }
-  })
+  ipcMain.handle(
+    'workflow:overview',
+    async (_event, detail?: boolean): Promise<WorkflowOverview> => {
+      const { records, error } = readRecords()
+      if (error) return { repos: [], error }
+
+      const roots: string[] = []
+      for (const record of records) {
+        const absolute = expandHome(record.repo)
+        if (!roots.some((known) => samePath(known, absolute))) roots.push(absolute)
+      }
+
+      const repos = await Promise.all(
+        roots.map((root) => describeRepo(root, records, detail === true))
+      )
+      return { repos: repos.sort((a, b) => a.name.localeCompare(b.name)), error: null }
+    }
+  )
 
   ipcMain.handle(
     'workflow:register',

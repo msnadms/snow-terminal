@@ -15,6 +15,8 @@ import {
   parkedBadge,
   parkedTitle,
   repoScope,
+  reviewBadge,
+  reviewTitle,
   staleTitle,
   stateLabel,
   stateSlug,
@@ -30,6 +32,7 @@ type Targeted = { repo: WorkflowRepo; entry: WorkflowEntry }
 interface WorkflowManagerProps {
   active: boolean
   onLaunch: (dir: string, repo: string) => void
+  onOpenDiff: (cwd: string, branch: string) => void
   onCloseWorktree?: (dir: string) => void
   sessionStatuses: Record<string, SessionStatus>
   sessionTitles: Record<string, string>
@@ -51,6 +54,7 @@ function indent(text: string): string {
 function WorkflowManager({
   active,
   onLaunch,
+  onOpenDiff,
   onCloseWorktree,
   sessionStatuses,
   sessionTitles
@@ -76,7 +80,7 @@ function WorkflowManager({
   useEffect(() => {
     const load = async (): Promise<void> => {
       const isCurrent = latestRun()
-      const result = await window.api.workflow.overview()
+      const result = await window.api.workflow.overview(true)
       if (!isCurrent()) return
       setOverview(result)
     }
@@ -266,6 +270,16 @@ function WorkflowManager({
                         <span className="wfm-activity" title={title}>
                           {title}
                         </span>
+                      )}
+                      {entry.review && (
+                        <button
+                          className="wfm-review"
+                          disabled={entry.review.changed === 0 || !dir}
+                          onClick={() => dir && onOpenDiff(dir, entry.branch)}
+                          title={reviewTitle(entry, entry.review)}
+                        >
+                          {reviewBadge(entry.review)}
+                        </button>
                       )}
                       {entry.parked && (
                         <span className="wfm-parked" title={parkedTitle(entry)}>
