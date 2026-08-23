@@ -713,6 +713,28 @@ neighbour keeps working. The tab-strip badges and the manager rows then improve 
 their own, because both already read those directory-keyed maps — the display end was built before
 this channel existed.
 
+#### Blocking shared-stash commands
+
+The other half of the hook channel. Because `refs/stash` is repo-wide (see _Parked work_), a
+`git stash pop` an agent runs in a promoted worktree can consume a **different** workflow's parked
+changes. `snow-agent-hook.mjs` answers `PreToolUse` on `Bash` with a `permissionDecision: "deny"`,
+and it needs no extra `settings.json` entry — the installed `PreToolUse` group already matches every
+tool, so the guard is a branch in the script rather than a second hook.
+
+It is a **blocklist**: everything but `git stash list` and `git stash show` is refused, unless the
+command names an entry explicitly (`stash@{…}`) or carries snow's own `snow-wf:` marker. Push is
+refused along with pop, because an unmarked stash pushed from one worktree lands in the list every
+other worktree reads. The command is split on shell operators and tokenized with quotes honoured, so
+`cd src && git stash pop` is caught while `echo "git stash pop"` is not, and git's own value-taking
+global flags (`-C`, `-c`, …) are skipped to find the subcommand.
+
+Two things bound the blast radius. The scope is the **registered worktrees**, read out of
+`.snowworkflows` by the hook process itself — it cannot talk to a running snow, and the file is plain
+JSON in a known location — so a repo without parallel sessions is untouched. And every failure
+**fails open**: an unreadable or malformed registry, a command it cannot parse, anything that throws,
+all leave the command allowed. A guard that blocks the user's git because snow could not read its own
+config would be worse than the hazard it prevents.
+
 ### Usage cost
 
 `src/main/usage.ts` estimates spend **since snow started** (`sessionStart`) by reading each CLI's own
@@ -1027,6 +1049,14 @@ of git outside snow and is recoverable by hand. Entries are read back with
 shift on every push and drop, so they are always re-listed immediately before an apply and never
 cached. When a branch has more than one marker stash (a previous pop conflicted and git kept it),
 the newest wins and the rest stay listed as parked — lossless.
+
+**`refs/stash` is shared by every worktree of a repository**, while `HEAD` and `index` are
+per-worktree. A stash pushed in one promoted workflow's worktree therefore appears in every other
+worktree's `git stash list`, and `stash@{0}` means "whatever was pushed last _anywhere_ in this
+repo". Snow's own machinery is safe against this by construction — it matches `snow-wf:<branch>`
+markers and re-lists immediately before every apply, never addressing by cached index — but a bare
+`git stash pop` typed by an agent is not, which is what the hook in _Agent status_ refuses (see
+_Blocking shared-stash commands_ below).
 
 `parkOnLeave()` is the single gate: it parks with `git stash push -u` (untracked included, so nothing
 leaks between branches; `.gitignore`d paths are still skipped) **only when the current branch is
