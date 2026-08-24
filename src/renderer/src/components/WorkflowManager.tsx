@@ -3,18 +3,12 @@ import FailureDialog from './FailureDialog'
 import RemoveWorkflowDialog from './RemoveWorkflowDialog'
 import StopWorkflowDialog from './StopWorkflowDialog'
 import type { SessionStatus } from '../App'
-import { failureOf, formatCost, isInside, normalizePath, type Failure } from '@renderer/format'
+import { failureOf, formatCost, normalizePath, type Failure } from '@renderer/format'
 import { repoColor } from '@renderer/repoColor'
 import { useGitAction } from '@renderer/useGitAction'
 import { useGitColors } from '@renderer/useGitColors'
-import { useLatestRun } from '@renderer/useLatestRun'
 import { useUsage } from '@renderer/useUsage'
-import {
-  agentSummary,
-  liveAgentsIn,
-  type AgentSession,
-  type AgentSummary
-} from '@renderer/useAgents'
+import { agentSummary, type AgentSession, type AgentSummary } from '@renderer/useAgents'
 import {
   inboxSignal,
   inScope,
@@ -52,15 +46,32 @@ type WorkflowRow = {
   order: number
   signal: InboxSignal
 }
+type OpenSession = {
+  id: number
+  dir?: string
+  label: string
+  status?: SessionStatus
+  title?: string
+  terminalIds: number[]
+}
+type SessionRow = {
+  session: OpenSession
+  activity: Activity
+  cost: number
+  signal: InboxSignal
+}
 
 interface WorkflowManagerProps {
   active: boolean
   onLaunch: (dir: string, repo: string) => void
+  onSelectSession: (id: number) => void
+  onCloseSession: (id: number) => void
   onOpenDiff: (cwd: string, branch: string) => void
   onCloseWorktree?: (dir: string) => void
   sessionStatuses: Record<string, SessionStatus>
   sessionTitles: Record<string, string>
   agentSessions: AgentSession[]
+  openSessions: OpenSession[]
 }
 
 function openDir(repo: WorkflowRepo, entry: WorkflowEntry): string | undefined {
@@ -69,10 +80,42 @@ function openDir(repo: WorkflowRepo, entry: WorkflowEntry): string | undefined {
   return undefined
 }
 
+function directoryKey(dir: string): string {
+  const normalized = normalizePath(dir)
+  return navigator.platform.startsWith('Win') ? normalized.toLowerCase() : normalized
+}
+
+const emptyActivity: Activity = {
+  agents: [],
+  summary: { waiting: 0, working: 0, names: [] }
+}
+
 function signalTitle(signal: InboxSignal, activity: Activity): string {
   const names = activity.summary.names
   const who = names.length > 1 ? `${signal.label} (${names.join(', ')})` : signal.label
   return activity.title ? `${who}\n${activity.title}` : who
+}
+
+function activitySignal(activity: Activity): InboxSignal {
+  const { waiting, working } = activity.summary
+  if (waiting > 0) {
+    return {
+      tier: 4,
+      label: `${waiting === 1 ? 'needs input' : `${waiting} need input`}${
+        working > 0 ? ` · ${working} working` : ''
+      }`,
+      slug: 'input'
+    }
+  }
+  if (working > 0 || activity.status === 'busy') {
+    return {
+      tier: 2,
+      label: working > 1 ? `${working} working` : 'working',
+      slug: 'working'
+    }
+  }
+  if (activity.status === 'attention') return { tier: 3, label: 'finished', slug: 'finished' }
+  return { tier: 0, label: '', slug: '' }
 }
 
 function indent(text: string): string {
@@ -85,11 +128,14 @@ function indent(text: string): string {
 function WorkflowManager({
   active,
   onLaunch,
+  onSelectSession,
+  onCloseSession,
   onOpenDiff,
   onCloseWorktree,
   sessionStatuses,
   sessionTitles,
-  agentSessions
+  agentSessions,
+  openSessions
 }: WorkflowManagerProps): React.JSX.Element {
   const [overview, setOverview] = useState<Overview | null>(null)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
@@ -97,54 +143,8 @@ function WorkflowManager({
   const [demoting, setDemoting] = useState<Targeted | null>(null)
   const [failure, setFailure] = useState<Failure | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
-  const latestRun = useLatestRun()
   const lanes = useGitColors()?.lanes
   const usage = useUsage()
-  const directoryKey = (dir: string): string => {
-    const normalized = normalizePath(dir)
-    return navigator.platform.startsWith('Win') ? normalized.toLowerCase() : normalized
-  }
-
-  /** Cost is recorded against each agent session's own cwd, so a row sums its whole subtree. */
-  const costDirs = useMemo(
-    () =>
-      Object.entries(usage?.byDirectory ?? {}).map(
-        ([dir, cost]) => [directoryKey(dir), cost] as const
-      ),
-    [usage]
-  )
-  const costFor = (dir: string): number => {
-    const root = directoryKey(dir)
-    return costDirs.reduce((sum, [key, cost]) => (isInside(key, root) ? sum + cost : sum), 0)
-  }
-  const activityFor = (dir: string): Activity => {
-    const root = normalizePath(dir)
-    const rank: Record<SessionStatus, number> = { attention: 2, busy: 1, idle: 0 }
-    const agents = liveAgentsIn(agentSessions, dir)
-    let tabSelected: { path: string; status: SessionStatus } | null = null
-    for (const [path, status] of Object.entries(sessionStatuses)) {
-      if (!isInside(path, root)) continue
-      if (!tabSelected || rank[status] > rank[tabSelected.status]) tabSelected = { path, status }
-    }
-    const tabTitle = tabSelected ? sessionTitles[tabSelected.path] : undefined
-    const summary = agentSummary(agents)
-    if (!agents.length) {
-      if (!tabSelected) return { agents, summary }
-      const status = tabSelected.status
-      return { status, title: status === 'idle' ? undefined : tabTitle, agents, summary }
-    }
-
-    const detail = agents
-      .map((session) => session.detail)
-      .filter(Boolean)
-      .join('\n')
-    return {
-      status: summary.waiting ? 'attention' : 'busy',
-      title: tabTitle || detail,
-      agents,
-      summary
-    }
-  }
   const overviewRef = useRef<Overview | null>(null)
   const watchedDirsRef = useRef(new Map<string, string>())
   useEffect(() => {
@@ -207,29 +207,220 @@ function WorkflowManager({
   useEffect(() => {
     if (!active) return
 
+    let stopped = false
+    let running = false
+    let queued = false
+    let timer: ReturnType<typeof setTimeout> | null = null
     const load = async (): Promise<void> => {
-      const isCurrent = latestRun()
-      const result = await window.api.workflow.overview(true)
-      if (!isCurrent()) return
-      setOverview(result)
+      if (running) {
+        queued = true
+        return
+      }
+      running = true
+      try {
+        do {
+          queued = false
+          const result = await window.api.workflow.overview(true)
+          if (stopped) return
+          setOverview(result)
+        } while (queued)
+      } finally {
+        running = false
+      }
     }
 
-    load()
+    const scheduleLoad = (): void => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        void load()
+      }, 100)
+    }
+
+    void load()
     // A repo's linked worktrees live outside its root but share its stash, so they count as in
     // scope too - without them a commit in a parallel session never refreshes this screen.
     const offGit = window.api.git.onChanged((changedCwd) => {
       const hit = overviewRef.current?.repos.some((repo) =>
         inScope(changedCwd, repoScope(repo.repo, repo.workflows))
       )
-      if (hit) load()
+      if (hit) scheduleLoad()
     })
-    const offWorkflow = window.api.workflow.onChanged(() => load())
+    const offWorkflow = window.api.workflow.onChanged(scheduleLoad)
 
     return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
       offGit()
       offWorkflow()
     }
-  }, [active, refreshKey, latestRun])
+  }, [active, refreshKey])
+
+  const workflowDirectories = useMemo(
+    () =>
+      new Set(
+        (overview?.repos ?? []).flatMap((repo) =>
+          repo.workflows.flatMap((entry) => {
+            const dir = openDir(repo, entry)
+            return dir ? [directoryKey(dir)] : []
+          })
+        )
+      ),
+    [overview]
+  )
+  const nonaffiliatedSessions = useMemo(
+    () =>
+      openSessions.filter((session) => {
+        if (!session.dir) return true
+        const dir = directoryKey(session.dir)
+        for (const workflowDir of workflowDirectories) {
+          if (dir === workflowDir || dir.startsWith(`${workflowDir}/`)) return false
+        }
+        return true
+      }),
+    [openSessions, workflowDirectories]
+  )
+
+  /**
+   * Index every status, agent, and cost sample into its owning workspace in one pass. Walking a
+   * sample's ancestors preserves subtree accounting without rescanning the whole sample set for
+   * every rendered row.
+   */
+  const indexedRows = useMemo(() => {
+    type Indexed = {
+      agents: AgentSession[]
+      tabSelected: { path: string; status: SessionStatus } | null
+      cost: number
+    }
+    const indexed = new Map<string, Indexed>()
+    if (!active) return new Map<string, { activity: Activity; cost: number }>()
+    for (const repo of overview?.repos ?? []) {
+      for (const entry of repo.workflows) {
+        const dir = openDir(repo, entry)
+        if (dir) indexed.set(directoryKey(dir), { agents: [], tabSelected: null, cost: 0 })
+      }
+    }
+    for (const session of nonaffiliatedSessions) {
+      if (session.dir && !indexed.has(directoryKey(session.dir))) {
+        indexed.set(directoryKey(session.dir), { agents: [], tabSelected: null, cost: 0 })
+      }
+    }
+
+    const visitOwners = (raw: string, visit: (row: Indexed) => void): void => {
+      let key = directoryKey(raw)
+      while (key) {
+        const row = indexed.get(key)
+        if (row) visit(row)
+        const slash = key.lastIndexOf('/')
+        if (slash < 0) break
+        const parent = key.slice(0, slash)
+        if (!parent || parent === key) break
+        key = parent
+      }
+    }
+
+    for (const session of agentSessions) {
+      if (session.state === 'idle' || !session.cwd) continue
+      visitOwners(session.cwd, (row) => row.agents.push(session))
+    }
+
+    const rank: Record<SessionStatus, number> = { attention: 2, busy: 1, idle: 0 }
+    for (const [path, status] of Object.entries(sessionStatuses)) {
+      visitOwners(path, (row) => {
+        if (!row.tabSelected || rank[status] > rank[row.tabSelected.status]) {
+          row.tabSelected = { path, status }
+        }
+      })
+    }
+
+    for (const [path, cost] of Object.entries(usage?.byDirectory ?? {})) {
+      visitOwners(path, (row) => {
+        row.cost += cost
+      })
+    }
+
+    const result = new Map<string, { activity: Activity; cost: number }>()
+    for (const [key, row] of indexed) {
+      const summary = agentSummary(row.agents)
+      const tabTitle = row.tabSelected ? sessionTitles[row.tabSelected.path] : undefined
+      let activity: Activity
+      if (!row.agents.length) {
+        activity = row.tabSelected
+          ? {
+              status: row.tabSelected.status,
+              title: row.tabSelected.status === 'idle' ? undefined : tabTitle,
+              agents: row.agents,
+              summary
+            }
+          : { agents: row.agents, summary }
+      } else {
+        const detail = row.agents
+          .map((session) => session.detail)
+          .filter(Boolean)
+          .join('\n')
+        activity = {
+          status: summary.waiting ? 'attention' : 'busy',
+          title: tabTitle || detail,
+          agents: row.agents,
+          summary
+        }
+      }
+      result.set(key, { activity, cost: row.cost })
+    }
+    return result
+  }, [
+    active,
+    overview,
+    agentSessions,
+    sessionStatuses,
+    sessionTitles,
+    usage,
+    nonaffiliatedSessions
+  ])
+
+  const indexedFor = (dir: string): { activity: Activity; cost: number } =>
+    indexedRows.get(directoryKey(dir)) ?? { activity: emptyActivity, cost: 0 }
+
+  const sessionRows = useMemo<SessionRow[]>(() => {
+    const agentsByTerminal = new Map<number, AgentSession[]>()
+    for (const agent of agentSessions) {
+      if (agent.state === 'idle' || agent.terminalId == null) continue
+      const current = agentsByTerminal.get(agent.terminalId) ?? []
+      current.push(agent)
+      agentsByTerminal.set(agent.terminalId, current)
+    }
+
+    return nonaffiliatedSessions
+      .map((session): SessionRow => {
+        const agents = session.terminalIds.flatMap(
+          (terminalId) => agentsByTerminal.get(terminalId) ?? []
+        )
+        const summary = agentSummary(agents)
+        const status = summary.waiting ? 'attention' : summary.working ? 'busy' : session.status
+        const detail = agents
+          .map((agent) => agent.detail)
+          .filter(Boolean)
+          .join('\n')
+        const activity: Activity = {
+          status,
+          title: status === 'idle' ? undefined : session.title || detail || undefined,
+          agents,
+          summary
+        }
+        return {
+          session,
+          activity,
+          cost: session.dir ? (indexedRows.get(directoryKey(session.dir))?.cost ?? 0) : 0,
+          signal: activitySignal(activity)
+        }
+      })
+      .sort(
+        (left, right) =>
+          right.signal.tier - left.signal.tier ||
+          right.cost - left.cost ||
+          left.session.id - right.session.id
+      )
+  }, [agentSessions, nonaffiliatedSessions, indexedRows])
 
   const launchOne = async (repo: WorkflowRepo, entry: WorkflowEntry): Promise<Failure | null> => {
     if (usable(entry) && entry.worktree) {
@@ -324,36 +515,134 @@ function WorkflowManager({
     }, 'Removing workspace…')
   }
 
+  const nonaffiliatedSection = (): React.JSX.Element => {
+    const needYou = sessionRows.filter((row) => needsOperator(row.signal)).length
+    return (
+      <section className="wfm-repo wfm-nonaffiliated">
+        <div className="wfm-repo-header">
+          <span className="wfm-repo-name">Nonaffiliated</span>
+          <span className="wfm-repo-path">Open sessions outside a workspace</span>
+          {needYou > 0 && (
+            <span
+              className="wfm-repo-inbox"
+              title={`${needYou} session${needYou === 1 ? '' : 's'} need your attention`}
+            >
+              {needYou} need{needYou === 1 ? 's' : ''} you
+            </span>
+          )}
+        </div>
+        {sessionRows.length === 0 ? (
+          <div className="wfm-note wfm-note-muted">No open sessions outside a workspace.</div>
+        ) : (
+          <div className="wfm-rows">
+            {sessionRows.map(({ session, activity, cost, signal }) => (
+              <div className="wfm-row" key={session.id}>
+                <span className="wfm-row-status">
+                  {activity.status && activity.status !== 'idle' && (
+                    <span
+                      className={`tab-status tab-status-${activity.status}`}
+                      title={
+                        activity.status === 'busy'
+                          ? 'Busy'
+                          : activity.summary.waiting > 0
+                            ? 'Ready for input'
+                            : 'Finished'
+                      }
+                    />
+                  )}
+                  {signal.label && (
+                    <span
+                      className={`wfm-inbox wfm-inbox-${signal.slug}`}
+                      title={signalTitle(signal, activity)}
+                    >
+                      {signal.label}
+                    </span>
+                  )}
+                </span>
+                <span className="wfm-branch" title={session.dir}>
+                  {session.label}
+                </span>
+                <span className="wfm-session-path" title={session.dir}>
+                  {session.dir ?? 'Starting shell…'}
+                </span>
+                {activity.title && (
+                  <span className="wfm-activity" title={activity.title}>
+                    {activity.title}
+                  </span>
+                )}
+                {!!cost && (
+                  <span
+                    className="wfm-cost"
+                    title="Estimated agent spend in this directory since snow started"
+                  >
+                    {formatCost(cost)}
+                  </span>
+                )}
+                <span className="wfm-row-actions">
+                  <button
+                    className="wfm-action wfm-action-launch"
+                    onClick={() => onSelectSession(session.id)}
+                    title={`Open ${session.label}`}
+                  >
+                    ▸ Open session
+                  </button>
+                  <button
+                    className="wfm-action wfm-action-icon wfm-action-remove"
+                    onClick={() => onCloseSession(session.id)}
+                    title={`Close ${session.label}`}
+                  >
+                    ✕
+                  </button>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    )
+  }
+
   const body = (): React.JSX.Element => {
-    if (!overview) return <div className="wfm-empty">Loading…</div>
+    if (!overview)
+      return (
+        <>
+          {nonaffiliatedSection()}
+          <div className="wfm-empty">Loading…</div>
+        </>
+      )
     if (overview.error)
       return (
-        <div className="wfm-empty">
-          Could not read your workspaces.
-          {'\n'}
-          {overview.error}
-        </div>
+        <>
+          {nonaffiliatedSection()}
+          <div className="wfm-empty">
+            Could not read your workspaces.
+            {'\n'}
+            {overview.error}
+          </div>
+        </>
       )
     if (overview.repos.length === 0)
       return (
-        <div className="wfm-empty">
-          No workspaces registered yet.
-          {'\n'}
-          Register a branch from the workspace dropdown in the action bar, and it shows up here.
-        </div>
+        <>
+          {nonaffiliatedSection()}
+          <div className="wfm-empty">
+            No workspaces registered yet.
+            {'\n'}
+            Register a branch from the workspace dropdown in the action bar, and it shows up here.
+          </div>
+        </>
       )
 
     return (
       <>
+        {nonaffiliatedSection()}
         {overview.repos.map((repo) => {
           const registered = isRegistered(repo.workflows)
           const rows: WorkflowRow[] = repo.workflows
             .map((entry, order) => {
               const dir = openDir(repo, entry)
-              const activity: Activity = dir
-                ? activityFor(dir)
-                : { agents: [], summary: { waiting: 0, working: 0, names: [] } }
-              const cost = dir ? costFor(dir) : 0
+              const indexed = dir ? indexedFor(dir) : { activity: emptyActivity, cost: 0 }
+              const { activity, cost } = indexed
               return {
                 entry,
                 activity,
@@ -586,7 +875,7 @@ function WorkflowManager({
           entry={demoting.entry}
           agents={(() => {
             const dir = openDir(demoting.repo, demoting.entry)
-            return dir ? activityFor(dir).agents : []
+            return dir ? indexedFor(dir).activity.agents : []
           })()}
           onCancel={() => setDemoting(null)}
           onConfirm={demote}

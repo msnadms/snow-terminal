@@ -54,9 +54,14 @@ try {
     format: 'esm',
     alias: { '@renderer': path.join(root, 'src/renderer/src') }
   })
-  const { agentDirsOf, tabStatusIn, visibleAgentSessions, workflowSessionsOf } = await import(
-    pathToFileURL(bundle).href
-  )
+  const {
+    agentDirsOf,
+    tabStatusFrom,
+    tabStatusIn,
+    terminalAgentsOf,
+    visibleAgentSessions,
+    workflowSessionsOf
+  } = await import(pathToFileURL(bundle).href)
 
   // `readAgents` adds the PTY id by resolving the hook token against its live terminal registry.
   const parentTerminalId = 101
@@ -68,6 +73,9 @@ try {
   // exact same cwd must not inherit the first tab's agent, while the directory rollup still sees it.
   assert.equal(tabStatusIn(sessions, interrupted, [parentTerminalId], {}), 'busy')
   assert.equal(tabStatusIn(sessions, interrupted, [202], {}), undefined)
+  const terminalAgents = terminalAgentsOf(sessions, interrupted)
+  assert.equal(tabStatusFrom(terminalAgents, [parentTerminalId], {}), 'busy')
+  assert.equal(tabStatusFrom(terminalAgents, [202], {}), undefined)
   assert.equal(dirs[child.replaceAll('\\', '/')].state, 'busy')
 
   // Interrupting one of two sessions in the same directory suppresses only that terminal. The

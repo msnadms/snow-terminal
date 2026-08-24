@@ -24,7 +24,8 @@ import type { ThemeInstallResult } from '../../main/themeInstall'
 import type { HooksResult } from '../../main/hooks'
 import {
   agentDirsOf,
-  tabStatusIn,
+  tabStatusFrom,
+  terminalAgentsOf,
   visibleAgentSessions,
   workflowSessionsOf,
   type SessionStatus
@@ -48,7 +49,6 @@ type Tab =
       cwd?: string
       startupCommand?: string
       presetName?: string
-      workspace?: boolean
       bottomTerminalId: number
     }
   | { kind: 'commit'; id: number; cwd: string; hash: string }
@@ -304,6 +304,10 @@ function App(): React.JSX.Element {
   const agentDirs = useMemo(() => {
     return agentDirsOf(statusAgentSessions, {})
   }, [statusAgentSessions])
+  const terminalAgents = useMemo(
+    () => terminalAgentsOf(statusAgentSessions, {}),
+    [statusAgentSessions]
+  )
 
   /**
    * A hook-reported state always beats the PTY byte heuristic, which stays as the floor for panes
@@ -339,9 +343,8 @@ function App(): React.JSX.Element {
       const dir = tabCwd(tab)
       const sessionPanes = panes[tab.id] ?? []
       const sessionTerminals = terminalStatuses[tab.id] ?? {}
-      const status = tabStatusIn(
-        statusAgentSessions,
-        {},
+      const status = tabStatusFrom(
+        terminalAgents,
         [tab.bottomTerminalId, ...sessionPanes.map((pane) => pane.id)],
         sessionTerminals
       )
@@ -364,7 +367,7 @@ function App(): React.JSX.Element {
       if (agent.detail && !sessionDirTitles[dir]) sessionDirTitles[dir] = agent.detail
     }
     return { sessionDirStatuses, sessionDirTitles, tabStatuses }
-  }, [tabs, tabCwd, panes, terminalStatuses, titles, statusAgentSessions, agentDirs])
+  }, [tabs, tabCwd, panes, terminalStatuses, titles, agentDirs, terminalAgents])
 
   const [roots, setRoots] = useState<Record<string, string | null>>({})
   const [rootsEpoch, setRootsEpoch] = useState(0)
@@ -468,6 +471,25 @@ function App(): React.JSX.Element {
     }
     return result
   }, [tabs, cwds, browserTitles])
+
+  const openSessions = useMemo(
+    () =>
+      tabs.flatMap((tab) => {
+        if (tab.kind !== 'shell') return []
+        const sessionPanes = panes[tab.id] ?? []
+        return [
+          {
+            id: tab.id,
+            dir: tabCwd(tab),
+            label: labels[tab.id] ?? `Session ${tab.id}`,
+            status: tabStatuses[tab.id],
+            title: titles[tab.id],
+            terminalIds: [tab.bottomTerminalId, ...sessionPanes.map((pane) => pane.id)]
+          }
+        ]
+      }),
+    [tabs, panes, tabCwd, labels, tabStatuses, titles]
+  )
 
   const addSession = useCallback(
     (preset?: Preset): void => {
@@ -776,7 +798,6 @@ function App(): React.JSX.Element {
           cwd: worktree,
           startupCommand: inherited?.startupCommand,
           presetName: inherited?.name,
-          workspace: true,
           bottomTerminalId: nextTerminalId()
         }
       ])
@@ -935,11 +956,14 @@ function App(): React.JSX.Element {
             <WorkflowManager
               active={activeId === 'workflows'}
               onLaunch={openWorktree}
+              onSelectSession={setActiveId}
+              onCloseSession={closeSession}
               onOpenDiff={openDiff}
               onCloseWorktree={closeWorktree}
               sessionStatuses={sessionDirStatuses}
               sessionTitles={sessionDirTitles}
               agentSessions={workflowAgentSessions}
+              openSessions={openSessions}
             />
             {mountedTabs.map((tab) => {
               if (tab.kind === 'commit')

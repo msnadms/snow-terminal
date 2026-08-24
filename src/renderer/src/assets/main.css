@@ -631,6 +631,10 @@ body {
   border-radius: 5px;
 }
 
+.wfm-nonaffiliated {
+  --wfm-repo: var(--ui-muted-text, #a6adc8);
+}
+
 .wfm-repo-header {
   display: flex;
   align-items: baseline;
@@ -683,6 +687,10 @@ body {
   white-space: pre-line;
 }
 
+.wfm-note-muted {
+  color: var(--ui-faint-text, #6c7086);
+}
+
 .wfm-rows {
   display: flex;
   flex-direction: column;
@@ -724,6 +732,16 @@ body {
 .wfm-branch-missing {
   color: var(--ui-placeholder, #5d6f8f);
   text-decoration: line-through;
+}
+
+.wfm-session-path {
+  flex: 0 1 280px;
+  min-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ui-faint-text, #6c7086);
+  font-size: 11px;
 }
 
 .wfm-activity {

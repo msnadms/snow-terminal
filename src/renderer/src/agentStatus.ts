@@ -110,21 +110,34 @@ export function tabStatusIn(
   terminalIds: number[],
   terminalStatuses: Record<number, SessionStatus>
 ): SessionStatus | undefined {
-  const ownedTerminals = new Set(terminalIds)
-  const agents = new Map<number, AgentDir>()
+  return tabStatusFrom(
+    terminalAgentsOf(sessions, interruptedTerminals),
+    terminalIds,
+    terminalStatuses
+  )
+}
 
+/** Index the best hook report for each terminal once before resolving multiple tabs. */
+export function terminalAgentsOf(
+  sessions: StatusSession[],
+  interruptedTerminals: Record<number, number>
+): Map<number, AgentDir> {
+  const agents = new Map<number, AgentDir>()
   for (const session of sessions) {
-    if (
-      session.terminalId == null ||
-      !ownedTerminals.has(session.terminalId) ||
-      !visible(session, interruptedTerminals)
-    )
-      continue
+    if (session.terminalId == null || !visible(session, interruptedTerminals)) continue
     const candidate = statusOf(session)
     const current = agents.get(session.terminalId)
     if (better(candidate, current)) agents.set(session.terminalId, candidate)
   }
+  return agents
+}
 
+/** Resolve a tab from a pre-indexed terminal map. */
+export function tabStatusFrom(
+  agents: ReadonlyMap<number, AgentDir>,
+  terminalIds: number[],
+  terminalStatuses: Record<number, SessionStatus>
+): SessionStatus | undefined {
   let result: AgentDir | undefined
   for (const terminalId of terminalIds) {
     const agent = agents.get(terminalId)
