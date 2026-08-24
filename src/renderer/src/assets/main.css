@@ -616,12 +616,6 @@ body {
   font-size: 11px;
 }
 
-.wfm-subtitle {
-  color: var(--ui-faint-text, #6c7086);
-  font-size: 11px;
-  font-weight: normal;
-}
-
 .wfm-empty {
   padding: 8px 2px;
   color: var(--ui-muted-text, #a6adc8);
@@ -710,13 +704,16 @@ body {
 
 .wfm-row-status {
   display: flex;
-  flex: 0 0 auto;
+  flex: 0 0 132px;
   align-items: center;
   gap: 6px;
-  min-width: 82px;
+  overflow: hidden;
 }
 
-.wfm-branch {
+/* The compound selector is what outranks the `flex: 0 0 auto` the badge rule below shares with
+   `.wfm-repo-inbox`, which sits outside the fixed-width status column and must not shrink. */
+.wfm-branch,
+.wfm-row-status .wfm-inbox {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -771,10 +768,6 @@ body {
   flex: 0 0 auto;
   color: var(--ui-muted-text, #a6adc8);
   font-size: 11px;
-}
-
-.wfm-state-live {
-  color: var(--ui-success, #a6e3a1);
 }
 
 .wfm-state-stale,

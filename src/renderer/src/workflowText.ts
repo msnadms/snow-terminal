@@ -43,7 +43,7 @@ export function launchLabel(entry: WorkflowEntry): string {
 }
 
 export function stateLabel(entry: WorkflowEntry): string {
-  if (usable(entry)) return 'live'
+  if (usable(entry)) return ''
   if (entry.worktree) return 'stale'
   if (!entry.exists) return 'missing'
   if (entry.current) return 'checked out'

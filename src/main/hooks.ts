@@ -46,6 +46,7 @@ const hookEvents = [
   'PreToolUse',
   'Notification',
   'Stop',
+  'StopFailure',
   'SubagentStop',
   'SessionEnd'
 ]
@@ -163,6 +164,27 @@ function isSnowHandler(handler: HookHandler): boolean {
   return typeof handler?.command === 'string' && handler.command.includes(marker)
 }
 
+function snowGroup(event: string, command: string): HookGroup {
+  return {
+    ...(event === 'PreToolUse' ? { matcher: '*' } : {}),
+    hooks: [{ type: 'command', command }]
+  }
+}
+
+/**
+ * The whole of what being installed means, expressed once: snow's own entries out, exactly one
+ * group per supported event back in. `install` and `repairSettings` both reconcile to this, so
+ * repair cannot drift into a weaker second installer - an event added to `hookEvents`, a changed
+ * `PreToolUse` matcher, or a duplicated handler is fixed by the same pass either way.
+ */
+function withSnowHooks(raw: unknown, command: string): Record<string, HookGroup[]> {
+  const { hooks } = withoutSnow(raw)
+  for (const event of hookEvents) {
+    hooks[event] = [...(hooks[event] ?? []), snowGroup(event, command)]
+  }
+  return hooks
+}
+
 /**
  * Snow's own entries come out; everything else in the user's hooks block - including groups that
  * merely shared an event with snow's - goes back untouched.
@@ -221,15 +243,7 @@ function install(protection?: WorkflowStashProtection): HooksResult {
       `${error}\n\nFix or move that file, then run: snow hooks install`
     )
 
-  const { hooks } = withoutSnow(settings.hooks)
-  const command = shimCommand()
-  for (const event of hookEvents) {
-    const group: HookGroup = {
-      ...(event === 'PreToolUse' ? { matcher: '*' } : {}),
-      hooks: [{ type: 'command', command }]
-    }
-    hooks[event] = [...(hooks[event] ?? []), group]
-  }
+  const hooks = withSnowHooks(settings.hooks, shimCommand())
 
   try {
     writeSettings({ ...settings, hooks })
@@ -354,39 +368,40 @@ export function runHooks(action: string, protection?: string): HooksResult {
   return result
 }
 
+function isInstalled(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object') return false
+  return Object.values(raw as Record<string, unknown>).some(
+    (groups) =>
+      Array.isArray(groups) &&
+      (groups as HookGroup[]).some(
+        (group) => group && Array.isArray(group.hooks) && group.hooks.some(isSnowHandler)
+      )
+  )
+}
+
 /**
- * Repairs the command string in an already-installed entry. This is maintenance of something the
- * user asked for, not an install: it runs only when the shim is already on disk, and it rewrites
- * nothing but snow's own handlers. It exists because the shim path is the half of the install that
- * settings.json holds, so a shim refresh alone cannot fix an entry written by an older snow.
+ * Reconciles an already-installed hooks block back to what `install` would write. This is
+ * maintenance of something the user asked for, not an install: it runs only when the shim is
+ * already on disk, and `snow hooks remove` deliberately leaves that shim behind, so an entry in
+ * settings.json is what has to prove the user still wants them. It exists because that entry is
+ * the half of the install a shim refresh cannot reach - a stale command path written by an older
+ * snow, or an event this version added, is only fixable from here.
  */
 function repairSettings(): void {
-  const command = shimCommand()
   const { settings, error } = readSettings()
   if (error) {
     log('warn', 'hooks', 'settings unreadable, left alone', { error })
     return
   }
+  if (!isInstalled(settings.hooks)) return
 
-  const hooks = settings.hooks
-  if (!hooks || typeof hooks !== 'object') return
-  let stale = 0
-  for (const groups of Object.values(hooks as Record<string, unknown>)) {
-    if (!Array.isArray(groups)) continue
-    for (const group of groups as HookGroup[]) {
-      if (!group || !Array.isArray(group.hooks)) continue
-      for (const handler of group.hooks) {
-        if (!isSnowHandler(handler) || handler.command === command) continue
-        handler.command = command
-        stale += 1
-      }
-    }
-  }
-  if (stale === 0) return
+  const command = shimCommand()
+  const hooks = withSnowHooks(settings.hooks, command)
+  if (JSON.stringify(hooks) === JSON.stringify(settings.hooks)) return
 
   try {
-    writeSettings(settings)
-    log('info', 'hooks', 'hook command repaired', { entries: stale, command })
+    writeSettings({ ...settings, hooks })
+    log('info', 'hooks', 'hook settings repaired', { command })
   } catch (err) {
     log('warn', 'hooks', 'repair failed', { error: (err as Error).message })
   }

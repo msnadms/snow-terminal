@@ -75,7 +75,7 @@ event on **stdin**, and are matched per event type. The events this plan uses:
 | `SessionStart`     | an agent is alive in this cwd                                                          |
 | `UserPromptSubmit` | → `busy`                                                                               |
 | `PreToolUse`       | → `busy`, plus a detail string from the tool name                                      |
-| `Notification`     | → **`attention`** (Claude is waiting on the user — the state the heuristic cannot see) |
+| `Notification`     | → **`attention`** when Claude is blocked on the user; delayed idle reminders stay `idle` |
 | `Stop`             | → `idle`                                                                               |
 | `SubagentStop`     | a dispatched agent finished; use for a subagent count                                  |
 | `SessionEnd`       | drop the record                                                                        |

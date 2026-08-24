@@ -69,6 +69,12 @@ function openDir(repo: WorkflowRepo, entry: WorkflowEntry): string | undefined {
   return undefined
 }
 
+function signalTitle(signal: InboxSignal, activity: Activity): string {
+  const names = activity.summary.names
+  const who = names.length > 1 ? `${signal.label} (${names.join(', ')})` : signal.label
+  return activity.title ? `${who}\n${activity.title}` : who
+}
+
 function indent(text: string): string {
   return text
     .split('\n')
@@ -149,10 +155,17 @@ function WorkflowManager({
    * The manager summarizes worktrees that may not have an open shell, Git panel, or diff view of
    * their own. Watch those directories here so an agent's ordinary file writes refresh the review
    * count instead of leaving the overview stuck on its last Git snapshot.
+   *
+   * Only while the screen is showing. These watchers cover directories nothing else in the app has
+   * open, so leaving them attached means several agents writing files in parallel worktrees each
+   * broadcast `git:changed` on their own debounce, and every one of those re-runs the detailed
+   * overview below - the exact fan-out this screen exists to survive, paid for a hidden tab.
    */
   useEffect(() => {
+    // Hidden, nothing is wanted, so the unwatch pass below tears every watcher down.
+    const repos = active ? (overview?.repos ?? []) : []
     const wanted = new Map<string, string>()
-    for (const repo of overview?.repos ?? []) {
+    for (const repo of repos) {
       for (const entry of repo.workflows) {
         const dir = openDir(repo, entry)
         if (!dir) continue
@@ -169,7 +182,7 @@ function WorkflowManager({
       if (!watchedDirsRef.current.has(key)) void window.api.git.watch(dir)
     }
     watchedDirsRef.current = wanted
-  }, [overview])
+  }, [overview, active])
 
   useEffect(
     () => () => {
@@ -184,7 +197,16 @@ function WorkflowManager({
     onSettled: () => setRefreshKey((key) => key + 1)
   })
 
+  /**
+   * A detailed overview is a `git status` and a `rev-list` per workspace on top of the four fixed
+   * reads per repo, so it is only worth paying for while someone is looking at it. Re-subscribing
+   * on activation reloads as a side effect, which is what keeps a screen that was hidden through a
+   * burst of agent activity from coming back stale. The last overview stays rendered meanwhile, so
+   * reopening the tab shows the previous rows rather than "Loading…" while the reload lands.
+   */
   useEffect(() => {
+    if (!active) return
+
     const load = async (): Promise<void> => {
       const isCurrent = latestRun()
       const result = await window.api.workflow.overview(true)
@@ -207,7 +229,7 @@ function WorkflowManager({
       offGit()
       offWorkflow()
     }
-  }, [refreshKey, latestRun])
+  }, [active, refreshKey, latestRun])
 
   const launchOne = async (repo: WorkflowRepo, entry: WorkflowEntry): Promise<Failure | null> => {
     if (usable(entry) && entry.worktree) {
@@ -397,20 +419,27 @@ function WorkflowManager({
                             title={status === 'busy' ? 'Busy' : 'Ready for input'}
                           />
                         )}
-                        {state && (
-                          <span className={`wfm-state wfm-state-${stateSlug(state)}`}>{state}</span>
+                        {signal.label ? (
+                          <span
+                            className={`wfm-inbox wfm-inbox-${signal.slug}`}
+                            title={signalTitle(signal, activity)}
+                          >
+                            {signal.label}
+                          </span>
+                        ) : (
+                          state && (
+                            <span className={`wfm-state wfm-state-${stateSlug(state)}`}>
+                              {state}
+                            </span>
+                          )
                         )}
                       </span>
-                      {signal.label && (
-                        <span
-                          className={`wfm-inbox wfm-inbox-${signal.slug}`}
-                          title={activity.title || signal.label}
-                        >
-                          {signal.label}
-                          {activity.summary.names.length > 1 &&
-                            ` (${activity.summary.names.join(', ')})`}
-                        </span>
-                      )}
+                      <span
+                        className={`wfm-branch${entry.exists ? '' : ' wfm-branch-missing'}`}
+                        title={entry.worktree ?? parkedTitle(entry)}
+                      >
+                        {entry.branch}
+                      </span>
                       {entry.review && (
                         <button
                           className="wfm-review"
@@ -421,12 +450,6 @@ function WorkflowManager({
                           {reviewBadge(entry.review)}
                         </button>
                       )}
-                      <span
-                        className={`wfm-branch${entry.exists ? '' : ' wfm-branch-missing'}`}
-                        title={entry.worktree ?? parkedTitle(entry)}
-                      >
-                        {entry.branch}
-                      </span>
                       {title && (
                         <span className="wfm-activity" title={title}>
                           {title}
@@ -538,9 +561,6 @@ function WorkflowManager({
     <div className="wfm" style={{ display: active ? 'block' : 'none' }}>
       <div className="wfm-title">
         Workspaces
-        <span className="wfm-subtitle">
-          Isolated Git workspaces; your agent dispatcher owns tasks.
-        </span>
         {action.label && <span className="wfm-busy">{action.label}</span>}
       </div>
       {body()}

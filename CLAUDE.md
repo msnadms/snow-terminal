@@ -680,7 +680,8 @@ events Claude Code emits.
 
 The channel is a **directory of files, not an IPC socket**: the hook runs as a short-lived child of
 the user's `claude` process, which has no way to talk to a running snow. So the hook writes
-`~/.config/snow/agents/<session_id>.json` (`{ sessionId, terminal?, cwd, state, detail, agent, updated }`) and
+`~/.config/snow/agents/<session_id>.json`
+(`{ sessionId, terminal?, cwd, state, detail, promptId?, agent, updated }`) and
 `src/main/agents.ts` reads and watches that directory — snow only ever reads it, and nothing but the
 hook writes it. Snow only removes records when their terminal exits or they become stale.
 
@@ -697,15 +698,32 @@ populates is worse than a narrow one: it invites consumers that silently show no
 that shape belongs to whatever dispatches the agents, which knows the task graph, the retries, and
 why a session stopped — none of which is visible from a hook.
 
-| Event              | State                                                                      |
-| ------------------ | -------------------------------------------------------------------------- |
-| `SessionStart`     | `idle` — an agent is alive in this cwd                                     |
-| `UserPromptSubmit` | `busy`                                                                     |
-| `PreToolUse`       | `busy`, plus a `detail` string built from the tool call                    |
-| `Notification`     | `attention` only for permission, idle, elicitation, or agent-input prompts |
-| `SubagentStop`     | `busy` — a dispatched agent finished, the parent has not                   |
-| `Stop`             | `idle` (not emitted for a user interrupt)                                  |
-| `SessionEnd`       | the record is deleted                                                      |
+| Event              | State                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------- |
+| `SessionStart`     | `idle` — an agent is alive in this cwd                                                      |
+| `UserPromptSubmit` | `busy`                                                                                      |
+| `PreToolUse`       | `busy`, plus a `detail` string built from the tool call                                     |
+| `Notification`     | `attention` for permission, elicitation, or agent-input prompts; idle reminders stay `idle` |
+| `SubagentStop`     | `busy`                                                                                      |
+| `Stop`             | `idle` (not emitted for a user interrupt)                                                   |
+| `StopFailure`      | `idle` — an API failure ends the turn without emitting `Stop`                               |
+| `SessionEnd`       | the record is deleted                                                                       |
+
+Claude's away-recap generator runs an internal prompt/fork a few minutes after `Stop`. It retains
+the completed turn's `prompt_id`, so any of its late events can rewrite `idle` back to `busy` even
+though the agent has finished. The hook carries the latest `promptId` in its record and guards **the
+transition, not the event names**: any event that would raise an already-`idle` record to `busy` is
+ignored when it carries that record's `promptId`. Writing it as a property of the table's output
+rather than as a branch for the two events that first showed the bug is what covers the recap's
+`PreToolUse` calls too, and means a future `busy` event inherits the guard by construction. Real
+user, SDK, scheduled, and loop prompts receive a new correlation ID and still become `busy`.
+
+The `Notification` classification is an **allowlist over a field another product owns**, so it is
+the one place the hook fails _loud_ rather than open: a notification carrying no `notification_type`
+at all is read as `attention`. A type Claude Code did report but this list does not name is a notice
+it has already classified as something else, and is believed. The asymmetry is the point —
+`attention` is the one state no later event refreshes, so misreading a renamed field as routine
+would retire the whole signal fleet-wide with nothing on screen to say the channel had degraded.
 
 `resources/hooks/snow-agent-hook.mjs` is the whole hook. It **exits 0 unconditionally, prints
 nothing, and carries its own 5 s watchdog**, because a hook that fails, hangs, or writes to stdout
@@ -718,10 +736,32 @@ before it becomes a filename, since it arrives as external input.
 costs at most a missing badge until that session's next event, while retiring one late invents a
 fleet of agents that finished hours ago. `attention` is the exception in both directions, because it
 is the one state where nothing further happens until a human acts: no event will arrive to refresh
-it, and it is the signal most worth keeping. Snow also gives every PTY a unique inherited terminal
-token; when that PTY exits, `pty.ts` removes just the records carrying its token. That cleans up a Claude session when its tab closes even though a forced terminal kill never
-fires `SessionEnd`, without touching agents in another tab or launched outside Snow. A malformed file
-is skipped rather than deleted, matching how `snowignore.ts` degrades.
+it, and it is the signal most worth keeping. A malformed file is skipped rather than deleted,
+matching how `snowignore.ts` degrades.
+
+Snow also gives every PTY a unique inherited terminal token, and **one map in `agents.ts` is the
+whole of what those tokens mean**: `live` holds, per token, the moment that terminal last became an
+agent's. A record carrying a token is valid only while its token is live and only if it is newer
+than that moment; `readAgents()` applies that in the pass it already makes and deletes the rest.
+`pty.ts` therefore only ever states facts it owns — `retainTerminal` on spawn, `releaseTerminal`
+when the PTY dies, and `retireTerminal` when the terminal outlives the agent inside it.
+
+Expressing it as one invariant rather than a sweep per teardown path is what makes the awkward
+cases fall out instead of being enumerated. Killing only the foreground `claude` process leaves its
+PTY alive, so neither `SessionEnd` nor the exit path runs: `pty.ts` retires the token on the
+renderer's Ctrl+C/Escape decision and on every shell-prompt OSC 7 after the initial one, which is
+proof the foreground command exited. Terminal replacement, pane teardown, and worktree teardown
+release synchronously rather than depending on node-pty's asynchronous exit callback. And startup
+needs no special case at all — nothing is retained yet, so every token from a previous run is
+orphaned by the same rule, which is correct because no Snow-owned PTY can survive its main process.
+The hook recreates the record if a later event proves the agent is still active, so an early
+interrupt signal self-corrects. Tokenless records belong to Claude sessions launched elsewhere and
+are never touched.
+
+The map is also what keeps this off the hot paths: retiring is one write on a path as frequent as a
+keystroke, where sweeping the directory meant a synchronous `readdir` plus a parse of every record.
+A retire or release only broadcasts when the last read actually reported that token, so a bottom
+shell — which has a token but never an agent — costs nothing on either count.
 
 **The heuristic stays as the floor, not the ceiling.** `App` keeps `statuses` (per tab, from the PTY
 byte burst) and adds `agentDirs` (per normalized cwd, from `agents:get` + `agents:changed`); a
@@ -753,26 +793,56 @@ changes. `snow-agent-hook.mjs` can answer `PreToolUse` on `Bash` or `PowerShell`
 and it needs no extra `settings.json` entry — the installed `PreToolUse` group already matches every
 tool, so the guard is a branch in the script rather than a second hook.
 
-In deny mode it is a **blocklist**: everything but `git stash list` and `git stash show` is refused,
-including explicit stash selectors. Push is
-refused too, so agents cannot create look-alike marker stashes. The installed
-`snow-workspace-stash restore` helper is the only permitted restore path: it resolves the marker for
-the workspace that owns the current cwd and restores it with `--index`. The command is split on shell
-operators and tokenized with quotes honoured, so
-`cd src && git stash pop` is caught while `echo "git stash pop"` is not, and git's own value-taking
-global flags (`-C`, `-c`, …) are skipped to find the subcommand.
+**Only the consuming half is refused.** `pop`, `apply`, `drop`, `clear`, `branch`, `create`, and
+`store` are blocked, including explicit stash selectors; `list` and `show` are read-only and pass.
+**Creating a stash passes** — a bare `git stash`, `git stash push`, `git stash save` — because it
+only ever appends to the list and cannot consume anyone's parked work, and snow re-lists under the
+shared lock before every apply so a shifted selector is not a hazard. Blocking it as well would take
+away an ordinary agent move ("stash this and try something else") and leave nothing in its place.
+The one thing push _is_ checked for is a message carrying the `snow-wf:` prefix, which snow would
+later restore as a workspace's parked work — and **any** argument mentioning it is enough to refuse.
+Parsing out whether it arrived via `-m`, `-m<msg>`, `--message=` or a bare `save` message would only
+re-derive the same answer while growing a flag parser that has to track `git stash push`; the
+over-blocked case is a pathspec named after the marker, which is not a real one. `--help`/`-h`
+passes, since documenting a command does not run it.
+
+The installed `snow-workspace-stash restore` helper is the only permitted restore path: it resolves
+the marker owned by the current directory and restores it with `--index`. The command is split on
+shell operators and tokenized with quotes honoured, so `cd src && git stash pop` is caught while
+`echo "git stash pop"` is not; git's own value-taking global flags (`-C`, `-c`, …) are skipped to
+find the subcommand; segments are also split on `(`/`)` and leading shell keywords (`do`, `then`,
+`if`, …) are skipped, so a subshell and a loop body are not free passes. A recognized
+**command wrapper** (`nohup`, `timeout`, `sudo`, `nice`, `xargs`, `env`, …) is followed by scanning
+forward for the `git` token rather than modelling each wrapper's own operands — gated on the wrapper
+being recognized, so `rg stash` is still just a search.
 
 `workflowStashProtection` in `.snowconfig` selects `deny` (the default), `warn`, or `off`. Warn asks
 for confirmation and gives Claude the warning text; deny blocks it; off leaves it alone. Change
 it with `snow hooks protection <warn|deny|off>` or while installing with
 `snow hooks install <warn|deny|off>`.
 
-Two things bound the blast radius. The scope is the **registered worktrees**, read out of
-`.snowworkflows` by the hook process itself — it cannot talk to a running snow, and the file is plain
-JSON in a known location — so a repo without parallel sessions is untouched. And every failure
-**fails open**: an unreadable or malformed registry, a command it cannot parse, anything that throws,
-all leave the command allowed. A guard that blocks the user's git because snow could not read its own
-config would be worse than the hazard it prevents.
+**The scope is every registered directory, not only the linked worktrees.** A registered worktree
+answers on its own — it owns exactly one branch. But a repository's **own checkout** is the other
+half, and is where park-mode markers are actually created: `parkOnLeave` runs in the pane that left
+the branch, which for a park-mode workflow is the main worktree. Guarding only linked worktrees
+therefore left the guard off in the one place the markers are minted, and left the restore helper
+with no answer there either ("not a registered snow workspace"). Both cases are covered by two
+functions over the same registry read, kept apart because they answer different questions at
+different costs. `guardedScope(cwd)` asks only whether anything snow parks is reachable from here,
+so the refusal path — which runs on every tool call mentioning "stash" — stays a pure path
+comparison with no git process. `ownedBranch(cwd)` asks _whose_ parked work it is, which a worktree
+match reads straight from the registry but a repo-root match can only answer with
+`git rev-parse --abbrev-ref HEAD`; only the explicit `restore` command pays for that. Splitting
+them rather than passing a flag is what keeps each return value meaning one thing — a repo-root
+match whose current branch is not registered (or a detached HEAD) restores nothing rather than
+guessing, and there is no mode in which the branch comes back null but the caller proceeds.
+
+Two things still bound the blast radius. The scope is read out of `.snowworkflows` by the hook
+process itself — it cannot talk to a running snow, and the file is plain JSON in a known location —
+so a repo with no registered workflows is untouched, as is an ad-hoc `git worktree add` nobody
+registered. And every failure **fails open**: an unreadable or malformed registry, a command it
+cannot parse, anything that throws, all leave the command allowed. A guard that blocks the user's git
+because snow could not read its own config would be worse than the hazard it prevents.
 
 ### Usage cost
 
@@ -946,12 +1016,20 @@ sufficient rather than merely usual: bash still unescapes `\$` and `\\` inside d
 directory beginning with `$` or a UNC home would hit. Git Bash runs a `.cmd` addressed this way
 without complaint, so the shim stays a `.cmd` for anything that does go through `cmd.exe`.
 
-`refreshHooks()` therefore **repairs** the command of an entry that is already there, not just the
-shim's contents. The shim path is the half of the install that lives in `settings.json`, so
-rewriting the shim alone cannot reach it and an entry written by an older snow would stay broken
-forever. That is maintenance of something the user asked for rather than an install: it is gated on
-the shim already existing, it rewrites only handlers carrying snow's marker, and every other key in
-the file is left byte-identical.
+`refreshHooks()` therefore **repairs** the `settings.json` entry that is already there, not just the
+shim's contents. The shim path is the half of the install that lives in that file, so rewriting the
+shim alone cannot reach it and an entry written by an older snow would stay broken forever. That is
+maintenance of something the user asked for rather than an install: it is gated on the shim already
+existing **and** on a snow-marked handler still being present, since `snow hooks remove`
+deliberately leaves the runtime files behind and the settings entry is what proves the user still
+wants them.
+
+`repairSettings` reconciles through the **same** `withSnowHooks` that `install` writes with, rather
+than patching in place. A repair that hand-rolled its own fixes would be a second, weaker installer
+— it could rewrite a stale command but not a changed `PreToolUse` matcher, not an event added to
+`hookEvents`, not a duplicated handler, and each of those would arrive later as another special
+case. Sharing the transformation makes "already installed" the only thing repair decides; the write
+is skipped when the result is identical, so a current install rewrites nothing.
 
 The shim prefers `node` on `PATH` and falls back to the app binary with `ELECTRON_RUN_AS_NODE=1`.
 Electron-as-node is the fallback rather than the default because it costs an extra ~60 ms of startup
@@ -1299,6 +1377,16 @@ never rolls back: promotions are serialized by `withRepoLock` anyway, and a bran
 (directory already there, branch checked out elsewhere) says nothing about the others. Failures are
 collected and reported **once**, as a single `FailureDialog` titled "Launched N of M workflows"
 listing each branch and its reason, rather than one dialog per branch.
+
+**The screen loads and watches only while it is showing.** `WorkflowManager` is mounted for the life
+of the app (like `HomePage`), so its `active` prop gates both the `workflow:overview(true)` load and
+the `git:watch` registrations it puts on worktrees nothing else has open. Those watchers are the
+expensive half: a detailed overview is a `git status` and a `rev-list` per workspace on top of the
+four fixed reads per repo, and leaving them attached means several agents writing files in parallel
+worktrees each broadcast `git:changed` on their own debounce, every one of which re-runs the whole
+overview — the exact fan-out this screen exists to survive, paid for a hidden tab. Re-subscribing on
+activation reloads as a side effect, so a screen hidden through a burst of agent activity cannot come
+back stale, and the previous rows stay rendered while that lands rather than flashing "Loading…".
 
 Every mutating action runs through the shared `useGitAction`, whose single `pending` disables every
 button on the screen — the same "one git action at a time" shape `WorkingDiffView` uses — and whose

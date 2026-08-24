@@ -72,30 +72,53 @@ function listRecords(dir: string): { names: string[]; error: NodeJS.ErrnoExcepti
 }
 
 /**
- * Claude's SessionEnd hook is skipped when Snow kills its terminal. The hook inherits a unique
- * terminal token, so remove only the records that belonged to those terminals and leave agents in
- * other tabs (or started outside Snow) alone. Like the other config modules, this only writes -
- * the directory watcher is what broadcasts, so closing a window of panes is one reload.
+ * A record carrying a terminal token is Snow's to account for, and this map is the whole of that
+ * accounting: the token is minted per spawn and inherited by the hook, so such a record is
+ * meaningful only while that PTY is alive and only from the moment the terminal last became the
+ * agent's. The value is that moment - a spawn sets it, an interruption or a returning shell prompt
+ * bumps it, and death drops the token. Every teardown path used to restate the rule by sweeping
+ * the directory itself, which is what let a path be forgotten (a phantom `busy` agent) and put a
+ * synchronous readdir of every record on the keystroke and shell-prompt paths; they are all one
+ * map write now, and `readAgents` applies the rule in the pass it already makes.
+ *
+ * A record with no token belongs to a Claude session started outside Snow and is never touched.
+ * At startup nothing is retained, so every token from a previous run is orphaned by the same rule
+ * rather than by a separate sweep - no Snow-owned PTY can outlive Snow's main process.
  */
-export function removeAgentsForTerminals(terminals: ReadonlySet<string>): void {
-  if (!terminals.size) return
-  const dir = agentsDir()
-  const { names, error } = listRecords(dir)
-  if (error) {
-    if (error.code !== 'ENOENT') log('warn', 'agents', 'cleanup failed', { error: String(error) })
-    return
-  }
+const live = new Map<string, number>()
 
-  for (const name of names) {
-    const full = path.join(dir, name)
-    const terminal = parseSession(full)?.terminal
-    if (!terminal || !terminals.has(terminal)) continue
-    try {
-      fs.rmSync(full, { force: true })
-    } catch (err) {
-      log('warn', 'agents', 'cleanup failed', { file: full, error: String(err) })
-    }
-  }
+/**
+ * The tokens the last read actually reported. A terminal with no agent in it - a bottom shell, an
+ * `npm run dev` split - is the common case, and both calls below run on paths as hot as a keypress,
+ * so a token that is not on screen retires silently: there is nothing for a renderer to redraw.
+ * A record written since that read has already announced itself through the directory watcher.
+ */
+const reported = new Set<string>()
+
+function announce(token: string): void {
+  if (reported.has(token)) scheduleBroadcast()
+}
+
+export function retainTerminal(token: string): void {
+  live.set(token, Date.now())
+}
+
+/** The terminal is still alive, but the agent that was running in it is not. */
+export function retireTerminal(token: string): void {
+  if (!live.has(token)) return
+  live.set(token, Date.now())
+  announce(token)
+}
+
+export function releaseTerminal(token: string): void {
+  if (!live.delete(token)) return
+  announce(token)
+}
+
+function orphaned(session: AgentSession): boolean {
+  if (!session.terminal) return false
+  const since = live.get(session.terminal)
+  return since === undefined || session.updated < since
 }
 
 export function readAgents(): AgentsResult {
@@ -105,15 +128,21 @@ export function readAgents(): AgentsResult {
 
   const now = Date.now()
   const sessions: AgentSession[] = []
+  reported.clear()
   for (const name of names) {
     const full = path.join(dir, name)
     const session = parseSession(full)
     if (!session) continue
     // A session killed at the terminal never fires SessionEnd, so nothing else deletes its file.
-    if (session.updated < now - staleMs[session.state]) {
-      fs.rmSync(full, { force: true })
+    if (orphaned(session) || session.updated < now - staleMs[session.state]) {
+      try {
+        fs.rmSync(full, { force: true })
+      } catch (err) {
+        log('warn', 'agents', 'cleanup failed', { file: full, error: String(err) })
+      }
       continue
     }
+    if (session.terminal) reported.add(session.terminal)
     sessions.push(session)
   }
   return { sessions, error: null }
@@ -122,17 +151,26 @@ export function readAgents(): AgentsResult {
 let watcher: fs.FSWatcher | null = null
 let timer: NodeJS.Timeout | null = null
 
+/**
+ * Retaining and releasing a token changes what `readAgents` reports without touching the directory,
+ * so the registry has to announce itself; the watcher cannot. Sharing one debounce is what keeps a
+ * window of panes closing at once - and the file deletions that pass then makes - to one reload.
+ */
+function scheduleBroadcast(): void {
+  if (timer) clearTimeout(timer)
+  timer = setTimeout(() => {
+    timer = null
+    broadcast('agents:changed', readAgents())
+  }, debounceMs)
+}
+
 function watchAgents(): void {
   const dir = agentsDir()
   try {
     fs.mkdirSync(dir, { recursive: true })
     const handle = fs.watch(dir, (_event, filename) => {
       if (filename && !filename.endsWith('.json')) return
-      if (timer) clearTimeout(timer)
-      timer = setTimeout(() => {
-        timer = null
-        broadcast('agents:changed', readAgents())
-      }, debounceMs)
+      scheduleBroadcast()
     })
     handle.on('error', () => handle.close())
     watcher = handle

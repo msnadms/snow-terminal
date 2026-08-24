@@ -5,23 +5,32 @@ import path from 'path'
 import { randomUUID } from 'crypto'
 import { shellSpec } from './shellIntegration'
 import { log } from './log'
-import { removeAgentsForTerminals } from './agents'
+import { releaseTerminal, retainTerminal, retireTerminal } from './agents'
 
 interface PtySession {
   pty: IPty
   webContents: WebContents
   cwd: string
   agentTerminal: string
+  promptReports: number
 }
 
 const sessions = new Map<number, PtySession>()
 const destroyHooked = new WeakSet<WebContents>()
 
+function killSession(id: number, session: PtySession): void {
+  try {
+    session.pty.kill()
+  } finally {
+    releaseTerminal(session.agentTerminal)
+    if (sessions.get(id)?.pty === session.pty) sessions.delete(id)
+  }
+}
+
 function disposePtyFor(wcId: number): void {
   for (const [id, session] of sessions) {
     if (session.webContents.id !== wcId) continue
-    session.pty.kill()
-    sessions.delete(id)
+    killSession(id, session)
   }
 }
 
@@ -47,9 +56,18 @@ function trackCwd(id: number, data: string): void {
   if (!session) return
   let match: RegExpExecArray | null
   let latest: string | null = null
+  let reports = 0
   osc7.lastIndex = 0
-  while ((match = osc7.exec(data))) latest = match[1]
+  while ((match = osc7.exec(data))) {
+    latest = match[1]
+    reports += 1
+  }
   if (!latest) return
+  // Snow's shell integration emits OSC 7 from the prompt. The first report belongs to the shell
+  // starting up; any later report means its foreground command (including Claude) has exited. A
+  // force-killed Claude cannot fire SessionEnd, so retire the record tied to this exact terminal.
+  session.promptReports += reports
+  if (session.promptReports > 1) retireTerminal(session.agentTerminal)
   try {
     const decoded = decodeURIComponent(latest)
     // A Windows report is `/C:/path`; POSIX reports are already absolute.
@@ -65,6 +83,7 @@ function trackCwd(id: number, data: string): void {
  */
 export async function closePtysInDirectory(directory: string): Promise<void> {
   const targets = [...sessions.values()].filter((session) => isInside(session.cwd, directory))
+  for (const session of targets) releaseTerminal(session.agentTerminal)
   await Promise.all(
     targets.map(
       (session) =>
@@ -102,12 +121,14 @@ export function registerPtyHandlers(): void {
         startupCommand
       }: { id: number; cols: number; rows: number; cwd?: string; startupCommand?: string }
     ) => {
-      sessions.get(id)?.pty.kill()
+      const existing = sessions.get(id)
+      if (existing) killSession(id, existing)
 
       const spec = shellSpec()
       // Per spawn, not per id: a respawn of the same pane must not inherit the token whose records
       // the outgoing pty's own exit is about to delete.
       const agentTerminal = randomUUID()
+      retainTerminal(agentTerminal)
       let pty: IPty
       try {
         pty = spawn(spec.file, spec.args, {
@@ -118,6 +139,7 @@ export function registerPtyHandlers(): void {
           env: { ...spec.env, SNOW_AGENT_TERMINAL: agentTerminal }
         })
       } catch (error) {
+        releaseTerminal(agentTerminal)
         log('error', 'pty', 'spawn failed', { id, cwd: cwd || os.homedir(), error })
         if (!event.sender.isDestroyed()) event.sender.send('pty:exit', { id, exitCode: 1 })
         return
@@ -171,11 +193,17 @@ export function registerPtyHandlers(): void {
         flush()
         log('info', 'pty', 'exit', { id, pid: pty.pid, exitCode })
         safeSend('pty:exit', { id, exitCode })
-        removeAgentsForTerminals(new Set([agentTerminal]))
+        releaseTerminal(agentTerminal)
         if (sessions.get(id)?.pty === pty) sessions.delete(id)
       })
 
-      sessions.set(id, { pty, webContents, cwd: cwd || os.homedir(), agentTerminal })
+      sessions.set(id, {
+        pty,
+        webContents,
+        cwd: cwd || os.homedir(),
+        agentTerminal,
+        promptReports: 0
+      })
 
       if (!destroyHooked.has(webContents)) {
         destroyHooked.add(webContents)
@@ -186,7 +214,12 @@ export function registerPtyHandlers(): void {
   )
 
   ipcMain.on('pty:write', (_event, { id, data }: { id: number; data: string }) => {
-    sessions.get(id)?.pty.write(data)
+    const session = sessions.get(id)
+    if (!session) return
+    // Ctrl+C and Escape are the two interruption keys the renderer recognizes. Persist the same
+    // decision here so a stale busy record cannot reappear after the renderer or app restarts.
+    if (data === '\u0003' || data === '\x1b') retireTerminal(session.agentTerminal)
+    session.pty.write(data)
   })
 
   ipcMain.on(
@@ -200,19 +233,17 @@ export function registerPtyHandlers(): void {
   )
 
   ipcMain.on('pty:kill', (_event, { id }: { id: number }) => {
-    sessions.get(id)?.pty.kill()
-    sessions.delete(id)
+    const session = sessions.get(id)
+    if (session) killSession(id, session)
   })
 }
 
 export function disposeAllPty(): void {
-  // `will-quit` beats every asynchronous exit event, so this is the one teardown that has to sweep
-  // the records itself - one pass for every pane rather than one per pane.
-  const terminals = new Set<string>()
+  // `will-quit` beats every asynchronous exit event, so releasing here rather than leaving it to
+  // `onExit` is what keeps the next launch from seeing this run's records as live.
   for (const { pty, agentTerminal } of sessions.values()) {
     pty.kill()
-    terminals.add(agentTerminal)
+    releaseTerminal(agentTerminal)
   }
-  removeAgentsForTerminals(terminals)
   sessions.clear()
 }
