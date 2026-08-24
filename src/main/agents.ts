@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron'
+import { randomUUID } from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import { broadcast, configDir } from './config'
@@ -9,6 +10,8 @@ export type AgentState = 'busy' | 'attention' | 'idle'
 export interface AgentSession {
   sessionId: string
   terminal?: string
+  terminalOwner?: string
+  terminalId?: number
   cwd: string
   state: AgentState
   detail: string
@@ -36,6 +39,9 @@ const staleMs: Record<AgentState, number> = {
 const debounceMs = 150
 const states: AgentState[] = ['busy', 'attention', 'idle']
 
+/** Distinguishes terminal bindings owned by concurrently running Snow main processes. */
+export const agentOwner = randomUUID()
+
 export function agentsDir(): string {
   return path.join(configDir(), 'agents')
 }
@@ -52,9 +58,18 @@ function parseSession(full: string): AgentSession | null {
   if (typeof o.sessionId !== 'string' || typeof o.cwd !== 'string') return null
   if (!states.includes(o.state as AgentState)) return null
   if (typeof o.updated !== 'number' || !Number.isFinite(o.updated)) return null
+  const binding =
+    typeof o.terminalBinding === 'string' && o.terminalBinding
+      ? o.terminalBinding
+      : typeof o.terminal === 'string' && o.terminal
+        ? o.terminal
+        : undefined
   return {
     sessionId: o.sessionId,
-    ...(typeof o.terminal === 'string' && o.terminal ? { terminal: o.terminal } : {}),
+    ...(binding ? { terminal: binding } : {}),
+    ...(typeof o.terminalOwner === 'string' && o.terminalOwner
+      ? { terminalOwner: o.terminalOwner }
+      : {}),
     cwd: o.cwd,
     state: o.state as AgentState,
     detail: typeof o.detail === 'string' ? o.detail : '',
@@ -75,17 +90,22 @@ function listRecords(dir: string): { names: string[]; error: NodeJS.ErrnoExcepti
  * A record carrying a terminal token is Snow's to account for, and this map is the whole of that
  * accounting: the token is minted per spawn and inherited by the hook, so such a record is
  * meaningful only while that PTY is alive and only from the moment the terminal last became the
- * agent's. The value is that moment - a spawn sets it, an interruption or a returning shell prompt
- * bumps it, and death drops the token. Every teardown path used to restate the rule by sweeping
- * the directory itself, which is what let a path be forgotten (a phantom `busy` agent) and put a
- * synchronous readdir of every record on the keystroke and shell-prompt paths; they are all one
- * map write now, and `readAgents` applies the rule in the pass it already makes.
+ * agent's. Each value carries the renderer's PTY id and that ownership moment - a spawn sets both,
+ * an interruption or a returning shell prompt bumps the moment, and death drops the token. Every
+ * teardown path used to restate the rule by sweeping the directory itself, which is what let a path
+ * be forgotten (a phantom `busy` agent) and put a synchronous readdir of every record on the
+ * keystroke and shell-prompt paths; they are all one map write now, and `readAgents` applies the
+ * rule in the pass it already makes. The id is the stable pane ownership id, deliberately distinct
+ * from the per-spawn transport id used to route PTY events.
  *
  * A record with no token belongs to a Claude session started outside Snow and is never touched.
- * At startup nothing is retained, so every token from a previous run is orphaned by the same rule
- * rather than by a separate sweep - no Snow-owned PTY can outlive Snow's main process.
+ * Owner ids keep concurrently running Snow processes from retiring one another's terminals. On a
+ * normal shutdown `disposeAgentWatcher` removes this process's records synchronously, since no
+ * Snow-owned PTY can outlive its main process.
  */
-const live = new Map<string, number>()
+type LiveTerminal = { id: number; since: number }
+
+const live = new Map<string, LiveTerminal>()
 
 /**
  * The tokens the last read actually reported. A terminal with no agent in it - a bottom shell, an
@@ -99,14 +119,15 @@ function announce(token: string): void {
   if (reported.has(token)) scheduleBroadcast()
 }
 
-export function retainTerminal(token: string): void {
-  live.set(token, Date.now())
+export function retainTerminal(token: string, id: number): void {
+  live.set(token, { id, since: Date.now() })
 }
 
 /** The terminal is still alive, but the agent that was running in it is not. */
 export function retireTerminal(token: string): void {
-  if (!live.has(token)) return
-  live.set(token, Date.now())
+  const terminal = live.get(token)
+  if (!terminal) return
+  live.set(token, { ...terminal, since: Date.now() })
   announce(token)
 }
 
@@ -117,8 +138,11 @@ export function releaseTerminal(token: string): void {
 
 function orphaned(session: AgentSession): boolean {
   if (!session.terminal) return false
-  const since = live.get(session.terminal)
-  return since === undefined || session.updated < since
+  // A binding owned by another running Snow is valid, but cannot claim one of this window's tabs.
+  // Treat it like an external session and leave cleanup to its owner (or ordinary staleness).
+  if (session.terminalOwner && session.terminalOwner !== agentOwner) return false
+  const terminal = live.get(session.terminal)
+  return terminal === undefined || session.updated < terminal.since
 }
 
 export function readAgents(): AgentsResult {
@@ -142,7 +166,14 @@ export function readAgents(): AgentsResult {
       }
       continue
     }
-    if (session.terminal) reported.add(session.terminal)
+    if (session.terminal) {
+      const owned = !session.terminalOwner || session.terminalOwner === agentOwner
+      if (owned) {
+        reported.add(session.terminal)
+        const terminal = live.get(session.terminal)
+        if (terminal) session.terminalId = terminal.id
+      }
+    }
     sessions.push(session)
   }
   return { sessions, error: null }
@@ -184,6 +215,28 @@ export function disposeAgentWatcher(): void {
   watcher = null
   if (timer) clearTimeout(timer)
   timer = null
+
+  // Releasing PTYs normally announces a debounced read, but will-quit tears this watcher down
+  // before that timer can fire. Remove only this process's records now; another Snow instance may
+  // be using the same agents directory and remains responsible for records carrying its owner id.
+  const dir = agentsDir()
+  const { names, error } = listRecords(dir)
+  if (error) {
+    if (error.code !== 'ENOENT') {
+      log('warn', 'agents', 'shutdown cleanup failed', { dir, error: error.message })
+    }
+    return
+  }
+  for (const name of names) {
+    const full = path.join(dir, name)
+    const session = parseSession(full)
+    if (session?.terminalOwner !== agentOwner) continue
+    try {
+      fs.rmSync(full, { force: true })
+    } catch (err) {
+      log('warn', 'agents', 'shutdown cleanup failed', { file: full, error: String(err) })
+    }
+  }
 }
 
 export function registerAgentHandlers(): void {

@@ -70,8 +70,15 @@ const onPtyExit = idDispatcher<{ id: number; exitCode: number }>('pty:exit')
 const onBrowserState = idDispatcher<BrowserState>('browser:state')
 
 const terminal = {
-  spawn: (id: number, cols: number, rows: number, cwd?: string, startupCommand?: string): void => {
-    ipcRenderer.send('pty:spawn', { id, cols, rows, cwd, startupCommand })
+  spawn: (
+    transportId: number,
+    cols: number,
+    rows: number,
+    cwd?: string,
+    startupCommand?: string,
+    ownerId?: number
+  ): void => {
+    ipcRenderer.send('pty:spawn', { id: transportId, cols, rows, cwd, startupCommand, ownerId })
   },
   write: (id: number, data: string): void => {
     ipcRenderer.send('pty:write', { id, data })

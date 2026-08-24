@@ -12,6 +12,10 @@ const stateByEvent = {
   StopFailure: 'idle'
 }
 
+// The events that mean the turn itself is over, rather than merely that the agent is not running
+// something this instant. Only an `idle` one of these wrote can silence a later busy event.
+const turnEndEvents = new Set(['Stop', 'StopFailure'])
+
 // Claude emits both user-blocking notifications and routine status notices such as auth success.
 // Only the former should make a workspace look like it needs operator attention.
 const attentionNotifications = new Set([
@@ -114,14 +118,34 @@ function stateFor(event, previous) {
     if (type === 'idle_prompt') return 'idle'
     return attentionNotifications.has(type) ? 'attention' : null
   }
+  // Auto-compaction restarts the session in the middle of a turn, so its SessionStart reports a
+  // context event rather than a lifecycle one: the agent was working before it and is working
+  // after it. Writing `idle` here is what the guard below would then read as a finished turn.
+  if (event.hook_event_name === 'SessionStart' && event.source === 'compact') return null
+  // AskUserQuestion is itself the point where Claude yields to the operator. Do not depend on a
+  // separate Notification arriving afterward: clients and Claude Code versions can omit or delay
+  // that notification, while PreToolUse already tells us unambiguously that input is required.
+  if (event.hook_event_name === 'PreToolUse' && event.tool_name === 'AskUserQuestion')
+    return 'attention'
   // Claude's away-recap generator runs an internal prompt/fork a few minutes after Stop, retaining
   // the completed turn's prompt_id. Letting any of its late events raise idle back to busy pins the
   // status until the next real turn, so the guard belongs to the transition rather than to the two
   // event names that first showed it: every busy-producing event inherits it, and a genuine prompt
   // is unaffected because it carries a new correlation id.
+  //
+  // It applies only to an idle the turn's *end* wrote (or an idle prompt that recovered a missed
+  // Stop). An `idle_prompt` after an attention notification can instead be emitted while a
+  // permission prompt sits unanswered; suppressing that prompt's remaining events would pin
+  // `idle` over an agent that resumed working.
   const next = stateByEvent[event.hook_event_name] ?? null
   const promptId = text(event.prompt_id)
-  if (next === 'busy' && previous?.state === 'idle' && promptId && previous.promptId === promptId)
+  if (
+    next === 'busy' &&
+    previous?.state === 'idle' &&
+    previous.turnEnded === true &&
+    promptId &&
+    previous.promptId === promptId
+  )
     return null
   return next
 }
@@ -576,17 +600,33 @@ async function main() {
   // Carried forward, because the events that end a turn do not all re-report the id the guard in
   // `stateFor` compares against.
   const promptId = text(event.prompt_id) ?? text(previous?.promptId)
+  const turnEnded =
+    turnEndEvents.has(event.hook_event_name) ||
+    (event.hook_event_name === 'Notification' &&
+      event.notification_type === 'idle_prompt' &&
+      ((previous?.turnEnded === true && promptId === text(previous.promptId)) ||
+        previous?.state === 'busy'))
 
   fs.mkdirSync(dir, { recursive: true })
+  const terminalBinding = text(process.env.SNOW_AGENT_BINDING)
+  const terminalOwner = text(process.env.SNOW_AGENT_OWNER)
+  const legacyTerminal = text(process.env.SNOW_AGENT_TERMINAL)
   writeRecord(file, {
     sessionId: event.session_id,
-    ...(typeof process.env.SNOW_AGENT_TERMINAL === 'string'
-      ? { terminal: process.env.SNOW_AGENT_TERMINAL }
-      : {}),
+    // New Snow instances use fields older releases do not recognize. An older app therefore reads
+    // this as an external session instead of deleting it because the binding is absent from that
+    // app's in-memory terminal registry. Keep the legacy field for terminals spawned by an older
+    // Snow release whose environment cannot provide the owner pair.
+    ...(terminalBinding && terminalOwner
+      ? { terminalBinding, terminalOwner }
+      : legacyTerminal
+        ? { terminal: legacyTerminal }
+        : {}),
     cwd: typeof event.cwd === 'string' ? event.cwd : '',
     state,
     detail,
     ...(promptId ? { promptId } : {}),
+    ...(turnEnded ? { turnEnded: true } : {}),
     agent: 'claude',
     updated: Date.now()
   })

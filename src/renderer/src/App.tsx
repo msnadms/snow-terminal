@@ -17,11 +17,20 @@ import type { Failure } from './format'
 import { nextTerminalId } from './terminalId'
 import { regroupTabs } from './tabGroups'
 import { useKeybinds, usePresetDigitKeybind } from './keybinds'
-import { useAgents } from './useAgents'
+import { useAgents, type AgentSession } from './useAgents'
 import { useCollapsiblePane } from './useCollapsiblePane'
 import { useSnowconfig, visiblePresetEntries, type Preset } from './useSnowconfig'
 import type { ThemeInstallResult } from '../../main/themeInstall'
 import type { HooksResult } from '../../main/hooks'
+import {
+  agentDirsOf,
+  tabStatusIn,
+  visibleAgentSessions,
+  workflowSessionsOf,
+  type SessionStatus
+} from './agentStatus'
+
+export type { SessionStatus } from './agentStatus'
 
 type ActiveId = number | 'home' | 'workflows'
 
@@ -32,8 +41,6 @@ export type Split = { kind: 'commit'; cwd: string; hash: string } | { kind: 'dif
 
 export type Pane = { id: number; cwd?: string; startupCommand?: string; presetName?: string }
 
-export type SessionStatus = 'busy' | 'attention' | 'idle'
-
 type Tab =
   | {
       kind: 'shell'
@@ -42,6 +49,7 @@ type Tab =
       startupCommand?: string
       presetName?: string
       workspace?: boolean
+      bottomTerminalId: number
     }
   | { kind: 'commit'; id: number; cwd: string; hash: string }
   | { kind: 'diff'; id: number; cwd: string; branch: string; focus?: string; focusKey: number }
@@ -102,9 +110,11 @@ function App(): React.JSX.Element {
   const [splits, setSplits] = useState<Record<number, Split>>({})
   const [running, setRunning] = useState<Record<string, number>>({})
   const [browserTitles, setBrowserTitles] = useState<Record<number, string>>({})
-  const [statuses, setStatuses] = useState<Record<number, SessionStatus>>({})
+  const [terminalStatuses, setTerminalStatuses] = useState<
+    Record<number, Record<number, SessionStatus>>
+  >({})
   const [titles, setTitles] = useState<Record<number, string>>({})
-  const [interruptedAgentDirs, setInterruptedAgentDirs] = useState<Record<string, number>>({})
+  const [interruptedTerminals, setInterruptedTerminals] = useState<Record<number, number>>({})
   const [frozen, setFrozen] = useState<{ entries: RepoEntry[] } | null>(null)
   const [tourDismissed, setTourDismissed] = useState(false)
   const nextIdRef = useRef(1)
@@ -260,6 +270,31 @@ function App(): React.JSX.Element {
   )
 
   const agentSessions = useAgents()
+  const statusAgentSessions = useMemo(
+    () => visibleAgentSessions(agentSessions, interruptedTerminals),
+    [agentSessions, interruptedTerminals]
+  )
+  const workflowAgentSessions = useMemo<AgentSession[]>(() => {
+    const terminals = tabs.flatMap((tab) => {
+      if (tab.kind !== 'shell') return []
+      const sessionPanes = panes[tab.id] ?? []
+      const sessionTerminals = terminalStatuses[tab.id] ?? {}
+      return [
+        ...sessionPanes.map((pane, index) => ({
+          terminalId: pane.id,
+          cwd: pane.cwd ?? tab.cwd,
+          state: sessionTerminals[pane.id],
+          detail: index === 0 ? titles[tab.id] : undefined
+        })),
+        {
+          terminalId: tab.bottomTerminalId,
+          cwd: tabCwd(tab),
+          state: sessionTerminals[tab.bottomTerminalId]
+        }
+      ]
+    })
+    return workflowSessionsOf(statusAgentSessions, terminals)
+  }, [statusAgentSessions, tabs, panes, terminalStatuses, titles, tabCwd])
 
   /**
    * Two agents in one directory are one row on screen, so the loudest state wins rather than the
@@ -267,22 +302,8 @@ function App(): React.JSX.Element {
    * neighbour keeps working.
    */
   const agentDirs = useMemo(() => {
-    const rank: Record<SessionStatus, number> = { attention: 2, busy: 1, idle: 0 }
-    const map: Record<string, { state: SessionStatus; detail: string; updated: number }> = {}
-    for (const session of agentSessions) {
-      if (!session.cwd) continue
-      const key = normalizePath(session.cwd)
-      if (session.updated <= (interruptedAgentDirs[key] ?? 0)) continue
-      const current = map[key]
-      const better =
-        !current ||
-        rank[session.state] > rank[current.state] ||
-        (rank[session.state] === rank[current.state] && session.updated > current.updated)
-      if (better)
-        map[key] = { state: session.state, detail: session.detail, updated: session.updated }
-    }
-    return map
-  }, [agentSessions, interruptedAgentDirs])
+    return agentDirsOf(statusAgentSessions, {})
+  }, [statusAgentSessions])
 
   /**
    * A hook-reported state always beats the PTY byte heuristic, which stays as the floor for panes
@@ -290,29 +311,60 @@ function App(): React.JSX.Element {
    * A directory with no tab is folded in only while its agent is working or waiting: an `idle`
    * record there is as likely to be a session killed without a SessionEnd as a live one, and
    * nothing on screen distinguishes the two.
+   *
+   * Tab dots are session-specific: only hook records bound to one of the tab's terminals can
+   * override its own byte heuristic. Directory identity is a separate workflow-manager rollup, so
+   * two tabs opened in the same folder retain independent dots while both contribute to that
+   * folder's aggregate activity.
    */
   const { sessionDirStatuses, sessionDirTitles, tabStatuses } = useMemo(() => {
     const sessionDirStatuses: Record<string, SessionStatus> = {}
     const sessionDirTitles: Record<string, string> = {}
     const tabStatuses: Record<number, SessionStatus> = {}
+    const rank: Record<SessionStatus, number> = { attention: 2, busy: 1, idle: 0 }
+    const addDirectoryStatus = (
+      dir: string | undefined,
+      status: SessionStatus | undefined,
+      title?: string
+    ): void => {
+      if (!dir || !status) return
+      const key = normalizePath(dir)
+      const current = sessionDirStatuses[key]
+      if (!current || rank[status] > rank[current]) sessionDirStatuses[key] = status
+      if (title && !sessionDirTitles[key]) sessionDirTitles[key] = title
+    }
+
     for (const tab of tabs) {
       if (tab.kind !== 'shell') continue
       const dir = tabCwd(tab)
-      const agent = dir ? agentDirs[normalizePath(dir)] : undefined
-      const status = agent?.state ?? statuses[tab.id]
+      const sessionPanes = panes[tab.id] ?? []
+      const sessionTerminals = terminalStatuses[tab.id] ?? {}
+      const status = tabStatusIn(
+        statusAgentSessions,
+        {},
+        [tab.bottomTerminalId, ...sessionPanes.map((pane) => pane.id)],
+        sessionTerminals
+      )
       if (status) tabStatuses[tab.id] = status
-      if (!dir) continue
-      if (status) sessionDirStatuses[normalizePath(dir)] = status
-      const title = titles[tab.id]
-      if (title) sessionDirTitles[normalizePath(dir)] = title
+
+      for (const [index, pane] of sessionPanes.entries()) {
+        addDirectoryStatus(
+          pane.cwd ?? tab.cwd,
+          sessionTerminals[pane.id],
+          index === 0 ? titles[tab.id] : undefined
+        )
+      }
+      addDirectoryStatus(dir, sessionTerminals[tab.bottomTerminalId])
     }
     for (const [dir, agent] of Object.entries(agentDirs)) {
-      if (agent.state === 'idle') continue
+      // An idle record is useful only where a visible terminal already establishes a live session.
+      if (agent.state === 'idle' && !(dir in sessionDirStatuses)) continue
+      // Hook state is authoritative for its directory; the byte heuristic is only its fallback.
       sessionDirStatuses[dir] = agent.state
       if (agent.detail && !sessionDirTitles[dir]) sessionDirTitles[dir] = agent.detail
     }
     return { sessionDirStatuses, sessionDirTitles, tabStatuses }
-  }, [tabs, tabCwd, statuses, titles, agentDirs])
+  }, [tabs, tabCwd, panes, terminalStatuses, titles, statusAgentSessions, agentDirs])
 
   const [roots, setRoots] = useState<Record<string, string | null>>({})
   const [rootsEpoch, setRootsEpoch] = useState(0)
@@ -423,7 +475,14 @@ function App(): React.JSX.Element {
       const cwd = preset?.cwd
       setTabs((prev) => [
         ...prev,
-        { kind: 'shell', id, cwd, startupCommand: preset?.startupCommand, presetName: preset?.name }
+        {
+          kind: 'shell',
+          id,
+          cwd,
+          startupCommand: preset?.startupCommand,
+          presetName: preset?.name,
+          bottomTerminalId: nextTerminalId()
+        }
       ])
       if (cwd) setCwds((prev) => ({ ...prev, [id]: cwd }))
       const splitPanes: Pane[] = (preset?.splits ?? [])
@@ -584,22 +643,19 @@ function App(): React.JSX.Element {
     setCwds((prev) => (prev[sessionId] === next ? prev : { ...prev, [sessionId]: next }))
   }, [])
 
-  const handleSessionStatus = useCallback((sessionId: number, status: SessionStatus): void => {
-    setStatuses((prev) => (prev[sessionId] === status ? prev : { ...prev, [sessionId]: status }))
-  }, [])
+  const handleSessionStatus = useCallback(
+    (sessionId: number, nextTerminalStatuses: Record<number, SessionStatus>): void => {
+      setTerminalStatuses((prev) => ({ ...prev, [sessionId]: nextTerminalStatuses }))
+    },
+    []
+  )
 
   const handleSessionTitle = useCallback((sessionId: number, title: string): void => {
     setTitles((prev) => (prev[sessionId] === title ? prev : { ...prev, [sessionId]: title }))
   }, [])
 
-  const handleSessionInterrupt = useCallback((sessionId: number, interruptedCwd?: string): void => {
-    const tab = tabsRef.current.find((candidate) => candidate.id === sessionId)
-    const cwd =
-      interruptedCwd ??
-      (tab?.kind === 'shell' ? (cwdsRef.current[sessionId] ?? tab.cwd) : undefined)
-    if (!cwd) return
-    const dir = normalizePath(cwd)
-    setInterruptedAgentDirs((prev) => ({ ...prev, [dir]: Date.now() }))
+  const handleSessionInterrupt = useCallback((_sessionId: number, terminalId: number): void => {
+    setInterruptedTerminals((prev) => ({ ...prev, [terminalId]: Date.now() }))
   }, [])
 
   const handleBottomLayout = useCallback((height: number, collapsed: boolean): void => {
@@ -688,7 +744,7 @@ function App(): React.JSX.Element {
     setPanes(dropKeys)
     setSplits(dropKeys)
     setBrowserTitles(dropKeys)
-    setStatuses(dropKeys)
+    setTerminalStatuses(dropKeys)
     setTitles(dropKeys)
   }, [])
 
@@ -720,7 +776,8 @@ function App(): React.JSX.Element {
           cwd: worktree,
           startupCommand: inherited?.startupCommand,
           presetName: inherited?.name,
-          workspace: true
+          workspace: true,
+          bottomTerminalId: nextTerminalId()
         }
       ])
       setCwds((prev) => ({ ...prev, [id]: worktree }))
@@ -755,6 +812,27 @@ function App(): React.JSX.Element {
       if (target === from) return prev
       const next = [...ordered]
       next.splice(target, 0, next.splice(from, 1)[0])
+      return next
+    })
+  }, [])
+
+  const reorderTabGroup = useCallback((from: number, count: number, to: number): void => {
+    setTabs((prev) => {
+      const ordered = regroupTabs(prev, (tab) => groupsRef.current[tab.id] ?? null)
+      if (
+        from < 0 ||
+        count < 1 ||
+        from + count > ordered.length ||
+        to < 0 ||
+        to > ordered.length ||
+        (to >= from && to <= from + count)
+      ) {
+        return prev
+      }
+      const next = [...ordered]
+      const moved = next.splice(from, count)
+      const target = to > from ? to - count : to
+      next.splice(target, 0, ...moved)
       return next
     })
   }, [])
@@ -815,7 +893,7 @@ function App(): React.JSX.Element {
         onOpenWorktree={openWorktree}
         onCloseWorktree={closeWorktree}
         onManageWorkflows={openWorkflows}
-        agentSessions={agentSessions}
+        agentSessions={workflowAgentSessions}
         keybinds={keybinds}
       />
       <div className="content">
@@ -830,6 +908,7 @@ function App(): React.JSX.Element {
             onCloseGroup={closeSessions}
             onAddGroup={addSession}
             onReorder={reorderTab}
+            onReorderGroup={reorderTabGroup}
             onAdd={addDefaultSession}
             onOpenBrowser={openBlankBrowser}
             onOpenWorkflows={openWorkflows}
@@ -860,7 +939,7 @@ function App(): React.JSX.Element {
               onCloseWorktree={closeWorktree}
               sessionStatuses={sessionDirStatuses}
               sessionTitles={sessionDirTitles}
-              agentSessions={agentSessions}
+              agentSessions={workflowAgentSessions}
             />
             {mountedTabs.map((tab) => {
               if (tab.kind === 'commit')
@@ -898,6 +977,7 @@ function App(): React.JSX.Element {
                 <Session
                   key={tab.id}
                   id={tab.id}
+                  bottomTerminalId={tab.bottomTerminalId}
                   active={activeId === tab.id}
                   cwd={tab.cwd}
                   panes={panes[tab.id] ?? []}

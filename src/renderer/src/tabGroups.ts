@@ -37,3 +37,18 @@ export function slotAllowed(groups: (string | null)[], from: number, slot: numbe
   }
   return slot >= groups.indexOf(group) && slot <= groups.lastIndexOf(group) + 1
 }
+
+/**
+ * Whether a contiguous group can be inserted at `slot` without splitting another group. Slots in
+ * the dragged range are all no-ops once that range is removed, so they are rejected as well.
+ */
+export function groupSlotAllowed(
+  groups: (string | null)[],
+  from: number,
+  count: number,
+  slot: number
+): boolean {
+  if (slot < 0 || slot > groups.length || (slot >= from && slot <= from + count)) return false
+  if (slot === 0 || slot === groups.length) return true
+  return groups[slot - 1] == null || groups[slot - 1] !== groups[slot]
+}

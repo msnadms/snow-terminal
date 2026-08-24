@@ -760,6 +760,12 @@ body {
   background: color-mix(in srgb, var(--ui-accent, #a6dcf0) 10%, transparent);
 }
 
+.wfm-inbox-finished {
+  color: var(--ui-success, #a6e3a1);
+  border-color: color-mix(in srgb, var(--ui-success, #a6e3a1) 45%, transparent);
+  background: color-mix(in srgb, var(--ui-success, #a6e3a1) 10%, transparent);
+}
+
 .wfm-inbox-working {
   color: var(--ui-faint-text, #6c7086);
 }
@@ -1171,7 +1177,7 @@ body {
   padding: 0;
   border: none;
   background: color-mix(in srgb, var(--tab-group) 30%, transparent);
-  cursor: pointer;
+  cursor: grab;
 }
 
 .tab-group-item-divider {
@@ -1195,7 +1201,12 @@ body {
   border: 1px solid color-mix(in srgb, var(--tab-group, var(--ui-border, #313244)) 45%, transparent);
   border-radius: 4px;
   background: color-mix(in srgb, var(--tab-group) 30%, transparent);
-  cursor: pointer;
+  cursor: grab;
+}
+
+.tab-group-toggle:active,
+.tab-group-collapsed:active {
+  cursor: grabbing;
 }
 
 .tab-group-divider {
@@ -1233,6 +1244,16 @@ body {
 
 .tab-drop-after::after {
   right: -3px;
+}
+
+.tab-group.tab-drop-before::before {
+  left: 0;
+  z-index: 1;
+}
+
+.tab-group.tab-drop-after::after {
+  right: 0;
+  z-index: 1;
 }
 
 .tab-label {

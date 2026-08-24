@@ -35,6 +35,7 @@ const BUSY_MS = 1000
 const QUIET_MS = 2500
 
 interface TerminalProps {
+  terminalId: number
   cwd?: string
   onCwd?: (cwd: string) => void
   onStatus?: (status: 'busy' | 'idle') => void
@@ -46,6 +47,7 @@ interface TerminalProps {
 }
 
 function Terminal({
+  terminalId,
   cwd,
   onCwd,
   onStatus,
@@ -90,6 +92,9 @@ function Terminal({
     const container = containerRef.current
     if (!container) return
 
+    // The pane id is stable so agent records can remain attached to their owning tab. IPC events
+    // need a fresh id for every PTY incarnation, though: data and exit from a killed process may
+    // already be queued when this effect respawns it.
     const id = nextTerminalId()
 
     const term = new XTerm({
@@ -130,7 +135,7 @@ function Terminal({
       return true
     })
 
-    window.api.terminal.spawn(id, term.cols, term.rows, cwd, startupCommand)
+    window.api.terminal.spawn(id, term.cols, term.rows, cwd, startupCommand, terminalId)
 
     const oscDisposable = term.parser.registerOscHandler(7, (payload) => {
       const next = parseOsc7(payload)
@@ -219,7 +224,7 @@ function Terminal({
       termRef.current = null
       idRef.current = null
     }
-  }, [cwd, startupCommand])
+  }, [terminalId, cwd, startupCommand])
 
   useEffect(() => {
     if (!active) return

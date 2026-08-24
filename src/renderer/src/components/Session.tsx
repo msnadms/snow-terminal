@@ -15,6 +15,7 @@ const BOTTOM_COLLAPSE = 40
 
 interface SessionProps {
   id: number
+  bottomTerminalId: number
   active: boolean
   cwd?: string
   panes: Pane[]
@@ -30,9 +31,9 @@ interface SessionProps {
   onCloseSplit: (sessionId: number) => void
   onOpenCommit: (cwd: string, hash: string) => void
   onCwd: (sessionId: number, cwd: string) => void
-  onStatus: (sessionId: number, status: SessionStatus) => void
+  onStatus: (sessionId: number, terminalStatuses: Record<number, SessionStatus>) => void
   onTitle: (sessionId: number, title: string) => void
-  onInterrupt: (sessionId: number, cwd?: string) => void
+  onInterrupt: (sessionId: number, terminalId: number) => void
 }
 
 function focusPane(container: Element | null | undefined): void {
@@ -41,6 +42,7 @@ function focusPane(container: Element | null | undefined): void {
 
 function Session({
   id,
+  bottomTerminalId,
   active,
   cwd,
   panes,
@@ -64,34 +66,51 @@ function Session({
   const mainRef = useRef<HTMLDivElement>(null)
   const lastTopRef = useRef(0)
 
-  const [paneStatuses, setPaneStatuses] = useState<Record<number, 'busy' | 'idle'>>({})
+  const [terminalStatuses, setTerminalStatuses] = useState<Record<number, SessionStatus>>({})
+  const [wasActive, setWasActive] = useState(active)
+  const terminalIds = useMemo(
+    () => [...panes.map((pane) => pane.id), bottomTerminalId],
+    [panes, bottomTerminalId]
+  )
   const paneStatusCbs = useMemo(() => {
     const map: Record<number, (s: 'busy' | 'idle') => void> = {}
-    for (const pane of panes) {
-      map[pane.id] = (s) =>
-        setPaneStatuses((prev) => (prev[pane.id] === s ? prev : { ...prev, [pane.id]: s }))
+    for (const terminalId of terminalIds) {
+      map[terminalId] = (reported) =>
+        setTerminalStatuses((prev) => {
+          const previous = prev[terminalId] ?? 'idle'
+          const next =
+            reported === 'busy' ? 'busy' : previous === 'busy' && !active ? 'attention' : 'idle'
+          return previous === next ? prev : { ...prev, [terminalId]: next }
+        })
     }
     return map
-  }, [panes])
+  }, [terminalIds, active])
 
-  const busy = panes.some((p) => paneStatuses[p.id] === 'busy')
-  const [attention, setAttention] = useState(false)
-  const [prevBusy, setPrevBusy] = useState(busy)
-  const [wasActive, setWasActive] = useState(active)
-
-  if (busy !== prevBusy) {
-    setPrevBusy(busy)
-    if (!busy && !active) setAttention(true)
-  }
   if (active !== wasActive) {
     setWasActive(active)
-    if (active) setAttention(false)
+    if (active)
+      setTerminalStatuses((prev) => {
+        let changed = false
+        const next = { ...prev }
+        for (const terminalId of terminalIds) {
+          if (next[terminalId] !== 'attention') continue
+          next[terminalId] = 'idle'
+          changed = true
+        }
+        return changed ? next : prev
+      })
   }
 
-  const status: SessionStatus = busy ? 'busy' : attention ? 'attention' : 'idle'
+  const visibleTerminalStatuses = useMemo(
+    () =>
+      Object.fromEntries(
+        terminalIds.map((terminalId) => [terminalId, terminalStatuses[terminalId] ?? 'idle'])
+      ),
+    [terminalIds, terminalStatuses]
+  )
   useEffect(() => {
-    onStatus(id, status)
-  }, [id, status, onStatus])
+    onStatus(id, visibleTerminalStatuses)
+  }, [id, visibleTerminalStatuses, onStatus])
 
   const [grows, setGrows] = useState<{ sig: string; values: Record<string, number> }>({
     sig: '',
@@ -115,7 +134,12 @@ function Session({
   const handleBottomCwd = useCallback((next: string) => onCwd(id, next), [onCwd, id])
   const handlePrimaryTitle = useCallback((next: string) => onTitle(id, next), [onTitle, id])
   const handleInterrupt = useCallback(
-    (interruptedCwd?: string) => onInterrupt(id, interruptedCwd),
+    (terminalId: number) => {
+      setTerminalStatuses((prev) =>
+        prev[terminalId] === 'idle' ? prev : { ...prev, [terminalId]: 'idle' }
+      )
+      onInterrupt(id, terminalId)
+    },
     [id, onInterrupt]
   )
 
@@ -219,13 +243,14 @@ function Session({
                 </button>
               )}
               <Terminal
+                terminalId={pane.id}
                 cwd={pane.cwd ?? cwd}
                 startupCommand={pane.startupCommand ?? startupCommand}
                 active={active}
                 focusOnActivate={i === 0}
                 onStatus={paneStatusCbs[pane.id]}
                 onTitle={i === 0 ? handlePrimaryTitle : undefined}
-                onInterrupt={() => handleInterrupt(pane.cwd ?? cwd)}
+                onInterrupt={() => handleInterrupt(pane.id)}
               />
             </div>
           </Fragment>
@@ -272,7 +297,14 @@ function Session({
         className={`terminal-secondary${bottom.collapsed ? ' terminal-secondary-collapsed' : ''}`}
         style={{ flexBasis: bottom.collapsed ? 0 : bottom.size }}
       >
-        <Terminal cwd={cwd} onCwd={handleBottomCwd} active={active} />
+        <Terminal
+          terminalId={bottomTerminalId}
+          cwd={cwd}
+          onCwd={handleBottomCwd}
+          onStatus={paneStatusCbs[bottomTerminalId]}
+          onInterrupt={() => handleInterrupt(bottomTerminalId)}
+          active={active}
+        />
       </div>
       {bottom.collapsed && (
         <PanelRestore

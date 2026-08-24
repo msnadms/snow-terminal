@@ -1,7 +1,7 @@
 import { Fragment, memo, useMemo, useState } from 'react'
 import ContextMenu from './ContextMenu'
 import { repoColor } from '@renderer/repoColor'
-import { slotAllowed } from '@renderer/tabGroups'
+import { groupSlotAllowed, slotAllowed } from '@renderer/tabGroups'
 import { useGitColors } from '@renderer/useGitColors'
 import type { CommandItem, SessionStatus } from '../App'
 import type { Preset } from '../useSnowconfig'
@@ -21,6 +21,7 @@ interface TabBarProps {
   onCloseGroup: (ids: number[]) => void
   onAddGroup: (preset: Preset) => void
   onReorder: (from: number, to: number) => void
+  onReorderGroup: (from: number, count: number, to: number) => void
   onAdd: () => void
   onOpenBrowser: () => void
   onOpenWorkflows: () => void
@@ -45,6 +46,7 @@ function TabBar({
   onCloseGroup,
   onAddGroup,
   onReorder,
+  onReorderGroup,
   onAdd,
   onOpenBrowser,
   onOpenWorkflows,
@@ -66,20 +68,70 @@ function TabBar({
     x: number
     y: number
   } | null>(null)
-  const [drag, setDrag] = useState<{ from: number; over: number } | null>(null)
+  const [drag, setDrag] = useState<
+    | { kind: 'tab'; from: number; over: number }
+    | { kind: 'group'; from: number; count: number; over: number }
+    | null
+  >(null)
   const lanes = useGitColors()?.lanes
 
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
 
   const groups = useMemo(() => sessions.map((session) => session.group), [sessions])
 
-  const insertAt =
-    drag &&
-    drag.over !== drag.from &&
-    drag.over !== drag.from + 1 &&
-    slotAllowed(groups, drag.from, drag.over)
-      ? drag.over
-      : null
+  const insertAt = drag
+    ? drag.kind === 'tab'
+      ? drag.over !== drag.from &&
+        drag.over !== drag.from + 1 &&
+        slotAllowed(groups, drag.from, drag.over)
+        ? drag.over
+        : null
+      : groupSlotAllowed(groups, drag.from, drag.count, drag.over)
+        ? drag.over
+        : null
+    : null
+
+  const updateDragOver = (over: number): void => {
+    setDrag((current) => (current && current.over !== over ? { ...current, over } : current))
+  }
+
+  const finishDrop = (): void => {
+    if (drag && insertAt !== null) {
+      if (drag.kind === 'tab') onReorder(drag.from, insertAt)
+      else onReorderGroup(drag.from, drag.count, insertAt)
+    }
+    setDrag(null)
+  }
+
+  const groupDropClass = (from: number, count: number): string =>
+    insertAt === from
+      ? ' tab-drop-before'
+      : insertAt === sessions.length && insertAt === from + count
+        ? ' tab-drop-after'
+        : ''
+
+  const beginGroupDrag = (
+    e: React.DragEvent<HTMLButtonElement>,
+    from: number,
+    count: number
+  ): void => {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', `group:${from}`)
+    setDrag({ kind: 'group', from, count, over: from })
+  }
+
+  const dragOverGroup = (
+    e: React.DragEvent<HTMLElement>,
+    from: number,
+    count: number,
+    collapsed = true
+  ): void => {
+    if (!drag) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    const rect = e.currentTarget.getBoundingClientRect()
+    updateDragOver(collapsed && e.clientX >= rect.left + rect.width / 2 ? from + count : from)
+  }
 
   const toggleGroup = (group: string): void => {
     setCollapsedGroups((prev) => {
@@ -124,22 +176,31 @@ function TabBar({
     return result
   }, [sessions])
 
-  const renderTab = (session: TabSession, i: number): React.JSX.Element => {
+  const renderTab = (
+    session: TabSession,
+    i: number,
+    group?: { from: number; count: number }
+  ): React.JSX.Element => {
     const { id } = session
-    const drop =
-      insertAt === i
+    const groupBoundary =
+      group != null &&
+      (insertAt === group.from ||
+        (insertAt === sessions.length && insertAt === group.from + group.count))
+    const drop = groupBoundary
+      ? ''
+      : insertAt === i
         ? ' tab-drop-before'
         : insertAt === sessions.length && i === sessions.length - 1
           ? ' tab-drop-after'
           : ''
     return (
       <div
-        className={`tab${activeId === id ? ' tab-active' : ''}${drag?.from === i ? ' tab-dragging' : ''}${drop}`}
+        className={`tab${activeId === id ? ' tab-active' : ''}${drag?.kind === 'tab' && drag.from === i ? ' tab-dragging' : ''}${drop}`}
         draggable
         onDragStart={(e) => {
           e.dataTransfer.effectAllowed = 'move'
           e.dataTransfer.setData('text/plain', String(id))
-          setDrag({ from: i, over: i })
+          setDrag({ kind: 'tab', from: i, over: i })
         }}
         onDragOver={(e) => {
           if (!drag) return
@@ -147,12 +208,11 @@ function TabBar({
           e.dataTransfer.dropEffect = 'move'
           const rect = e.currentTarget.getBoundingClientRect()
           const over = e.clientX < rect.left + rect.width / 2 ? i : i + 1
-          setDrag((d) => (d && d.over !== over ? { ...d, over } : d))
+          updateDragOver(over)
         }}
         onDrop={(e) => {
           e.preventDefault()
-          if (drag && insertAt !== null) onReorder(drag.from, insertAt)
-          setDrag(null)
+          finishDrop()
         }}
         onDragEnd={() => setDrag(null)}
         onClick={() => onSelect(id)}
@@ -240,33 +300,58 @@ function TabBar({
           }
 
           if (collapsed) {
+            const from = seg.items[0].index
+            const count = seg.items.length
             return (
               <Fragment key={seg.group}>
                 {boundaryDivider && <span className="tab-group-divider" />}
                 <button
-                  className="tab-group-collapsed"
+                  className={`tab-group-collapsed${drag?.kind === 'group' && drag.from === from ? ' tab-dragging' : ''}${groupDropClass(from, count)}`}
                   style={style}
+                  draggable
+                  onDragStart={(e) => beginGroupDrag(e, from, count)}
+                  onDragOver={(e) => dragOverGroup(e, from, count)}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    finishDrop()
+                  }}
+                  onDragEnd={() => setDrag(null)}
                   onClick={() => toggleGroup(seg.group)}
                   onContextMenu={onGroupContextMenu}
-                  title={`${seg.items.length} tabs (click to expand)`}
+                  title={`${seg.items.length} tabs (click to expand, drag to reorder)`}
                 />
               </Fragment>
             )
           }
 
+          const from = seg.items[0].index
+          const count = seg.items.length
+
           return (
             <Fragment key={seg.group}>
               {boundaryDivider && <span className="tab-group-divider" />}
-              <div className="tab-group" style={style} onContextMenu={onGroupContextMenu}>
+              <div
+                className={`tab-group${drag?.kind === 'group' && drag.from === from ? ' tab-dragging' : ''}${groupDropClass(from, count)}`}
+                style={style}
+                onContextMenu={onGroupContextMenu}
+              >
                 <button
                   className="tab-group-toggle"
+                  draggable
+                  onDragStart={(e) => beginGroupDrag(e, from, count)}
+                  onDragOver={(e) => dragOverGroup(e, from, count, false)}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    finishDrop()
+                  }}
+                  onDragEnd={() => setDrag(null)}
                   onClick={() => toggleGroup(seg.group)}
-                  title="Collapse group"
+                  title="Collapse group (drag to reorder)"
                 />
                 {seg.items.map(({ session, index }, ii) => (
                   <Fragment key={session.id}>
                     {ii > 0 && <span className="tab-group-item-divider" />}
-                    {renderTab(session, index)}
+                    {renderTab(session, index, { from, count })}
                   </Fragment>
                 ))}
               </div>

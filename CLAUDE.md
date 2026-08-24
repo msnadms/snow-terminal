@@ -681,7 +681,8 @@ events Claude Code emits.
 The channel is a **directory of files, not an IPC socket**: the hook runs as a short-lived child of
 the user's `claude` process, which has no way to talk to a running snow. So the hook writes
 `~/.config/snow/agents/<session_id>.json`
-(`{ sessionId, terminal?, cwd, state, detail, promptId?, agent, updated }`) and
+(`{ sessionId, terminalBinding?, terminalOwner?, cwd, state, detail, promptId?, turnEnded?, agent,
+updated }`; `terminal` is accepted from older Snow processes) and
 `src/main/agents.ts` reads and watches that directory — snow only ever reads it, and nothing but the
 hook writes it. Snow only removes records when their terminal exits or they become stale.
 
@@ -700,9 +701,9 @@ why a session stopped — none of which is visible from a hook.
 
 | Event              | State                                                                                       |
 | ------------------ | ------------------------------------------------------------------------------------------- |
-| `SessionStart`     | `idle` — an agent is alive in this cwd                                                      |
+| `SessionStart`     | `idle` — an agent is alive in this cwd; `source: compact` changes nothing                   |
 | `UserPromptSubmit` | `busy`                                                                                      |
-| `PreToolUse`       | `busy`, plus a `detail` string built from the tool call                                     |
+| `PreToolUse`       | `busy`, except `AskUserQuestion` is `attention`; includes detail from the tool call         |
 | `Notification`     | `attention` for permission, elicitation, or agent-input prompts; idle reminders stay `idle` |
 | `SubagentStop`     | `busy`                                                                                      |
 | `Stop`             | `idle` (not emitted for a user interrupt)                                                   |
@@ -717,6 +718,18 @@ ignored when it carries that record's `promptId`. Writing it as a property of th
 rather than as a branch for the two events that first showed the bug is what covers the recap's
 `PreToolUse` calls too, and means a future `busy` event inherits the guard by construction. Real
 user, SDK, scheduled, and loop prompts receive a new correlation ID and still become `busy`.
+
+**The guard applies only to an `idle` the turn's own end wrote**, which is what `turnEnded` on the
+record marks (`Stop` and `StopFailure` set it; every other write clears it). Every other way a
+record reaches `idle` leaves the turn running, and suppressing the rest of that turn pinned `idle`
+over an agent that was visibly working — the tab dot simply stopped appearing. Two events reach it:
+an `idle_prompt` notification, which Claude Code emits after 60 s of waiting and therefore fires
+while a **permission prompt sits unanswered**, so approving it and working on never lit the tab
+again; and `SessionStart` with `source: compact`, which auto-compaction fires mid-turn. Compaction
+is now no state change at all rather than an `idle` the guard would read as a finished turn — the
+agent was working before it and is working after it, and only the context between them moved. What
+the recap needs is narrower than what the guard was asserting: the record went idle **because the
+turn ended**, not merely because it is idle now.
 
 The `Notification` classification is an **allowlist over a field another product owns**, so it is
 the one place the hook fails _loud_ rather than open: a notification carrying no `notification_type`
@@ -763,13 +776,43 @@ keystroke, where sweeping the directory meant a synchronous `readdir` plus a par
 A retire or release only broadcasts when the last read actually reported that token, so a bottom
 shell — which has a token but never an agent — costs nothing on either count.
 
-**The heuristic stays as the floor, not the ceiling.** `App` keeps `statuses` (per tab, from the PTY
-byte burst) and adds `agentDirs` (per normalized cwd, from `agents:get` + `agents:changed`); a
-hook-reported state always wins, and the heuristic answers only for a directory no agent reports — a
-bottom shell, an `npm run dev` split, a Codex pane, a Claude session with no hooks installed.
+Bindings also carry a per-process owner. This matters when a packaged Snow and `npm run dev` are
+open together: neither process has the other's terminal registry. New records use
+`terminalBinding`/`terminalOwner` rather than the legacy `terminal` field, so another current Snow
+leaves the foreign record alive but does not attach it to one of its tabs, while an older Snow does
+not recognize it as owned and therefore cannot delete it. The owning process still resolves the
+binding to its stable pane id normally.
+
+**The heuristic stays as the floor, not the ceiling.** `Session` keeps byte-burst status per terminal
+(including the bottom shell) and reports both those values and their tab aggregate to `App`.
+`agentDirs` remains per normalized cwd, from `agents:get` + `agents:changed`; a hook-reported state
+always wins for its directory, and the heuristic answers only where no agent reports — an
+`npm run dev` split, a Codex pane, or a Claude session with no hooks installed.
 Deleting it would regress every non-Claude pane to no status at all. The merge also folds in agent
 directories with **no tab**, which is what lets the workflow manager show a worktree someone is
 running `claude` in from outside snow.
+
+**A tab's own dot is session-specific.** `tabStatusIn` overlays hook state on the byte heuristic for
+each terminal the tab owns, then takes the loudest resulting terminal; cwd is never a tab-ownership
+fallback. This keeps two tabs opened in the same
+folder independent, keeps an agent attached after it changes into a child directory, and prevents
+an external agent from lighting an arbitrary Snow tab. An interrupt is likewise timestamped by
+terminal id, so interrupting one of two sessions in the same directory cannot hide the other.
+
+Directory identity belongs exclusively to the workflow rollup. `sessionDirStatuses` maps each
+terminal's byte heuristic to that terminal's own configured/live cwd, then overlays `agentDirs` as
+the authoritative hook state. `WorkflowManager` folds every live record below a workflow root and
+uses `attention > busy > idle`; when statuses differ it exposes the composition, for example
+`needs input · 1 working`, while the individual tabs retain their own dots. Tokenless external
+agents participate in this rollup but never in a tab dot. `workflowSessionsOf` also creates one
+synthetic `busy` rollup record for a working terminal that has no hook record; this keeps the working
+chip aligned with the byte-fallback dot without double-counting, because any real record on that
+terminal remains authoritative and suppresses its synthetic fallback. It deliberately does not
+synthesize `attention`: heuristic attention means only that output stopped while a tab was inactive,
+not that an agent explicitly requested input. Only a hook record can make that claim. The workflow
+manager instead renders that persistent unread terminal state as `finished` (or `ready to review`
+when the worktree has reviewable changes), so the working chip changes meaning rather than flashing
+away. Opening the terminal acknowledges the state and removes the finished chip.
 
 **`idle` never counts as a live agent in a rollup.** `liveAgentsIn` (`useAgents.ts`) is what both
 `WorkflowManager` and `WorkflowSelect` count through, and it drops `idle`; `App` likewise folds an
@@ -1453,6 +1496,10 @@ any repo) keep their place instead of being herded to one end, so they can sit b
 within `[first, last + 1]` of its own group, and an ungrouped tab may land anywhere except strictly
 inside a group's run. Both cases resolve to `insertAt === null`, which already suppresses the drop
 indicator and the drop itself — a refused drop shows nothing rather than snapping back.
+
+Dragging a group's expand/collapse button moves the whole group as one contiguous block. The group
+drag may land at any tab slot except inside another group (or anywhere in its own source range), and
+`App.reorderTabGroup` removes and reinserts the complete range so the tabs keep their relative order.
 
 The color is `repoColor(key, lanes)` — an FNV hash of the normalized root into the theme's existing
 `git.lanes` palette. Hashing (rather than handing colors out in open order) keeps a repo the same

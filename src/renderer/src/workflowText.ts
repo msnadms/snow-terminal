@@ -96,14 +96,18 @@ export interface InboxSignal {
  */
 export function inboxSignal(
   entry: WorkflowEntry,
-  agents: { waiting: number; working: number }
+  agents: { waiting: number; working: number },
+  finished = false
 ): InboxSignal {
-  if (agents.waiting > 0)
+  if (agents.waiting > 0) {
+    const waiting = agents.waiting === 1 ? 'needs input' : `${agents.waiting} need input`
+    const working = agents.working > 0 ? ` · ${agents.working} working` : ''
     return {
       tier: 4,
-      label: agents.waiting === 1 ? 'needs input' : `${agents.waiting} need input`,
+      label: `${waiting}${working}`,
       slug: 'input'
     }
+  }
   if (agents.working > 0)
     return {
       tier: 2,
@@ -112,6 +116,7 @@ export function inboxSignal(
     }
   if (entry.review && (entry.review.changed > 0 || (entry.review.ahead ?? 0) > 0))
     return { tier: 3, label: 'ready to review', slug: 'review' }
+  if (finished) return { tier: 3, label: 'finished', slug: 'finished' }
   if (entry.worktree && !usable(entry)) return { tier: 1, label: '', slug: '' }
   return { tier: 0, label: '', slug: '' }
 }

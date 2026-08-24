@@ -5,7 +5,7 @@ import path from 'path'
 import { randomUUID } from 'crypto'
 import { shellSpec } from './shellIntegration'
 import { log } from './log'
-import { releaseTerminal, retainTerminal, retireTerminal } from './agents'
+import { agentOwner, releaseTerminal, retainTerminal, retireTerminal } from './agents'
 
 interface PtySession {
   pty: IPty
@@ -118,8 +118,16 @@ export function registerPtyHandlers(): void {
         cols,
         rows,
         cwd,
-        startupCommand
-      }: { id: number; cols: number; rows: number; cwd?: string; startupCommand?: string }
+        startupCommand,
+        ownerId
+      }: {
+        id: number
+        cols: number
+        rows: number
+        cwd?: string
+        startupCommand?: string
+        ownerId?: number
+      }
     ) => {
       const existing = sessions.get(id)
       if (existing) killSession(id, existing)
@@ -128,7 +136,7 @@ export function registerPtyHandlers(): void {
       // Per spawn, not per id: a respawn of the same pane must not inherit the token whose records
       // the outgoing pty's own exit is about to delete.
       const agentTerminal = randomUUID()
-      retainTerminal(agentTerminal)
+      retainTerminal(agentTerminal, ownerId ?? id)
       let pty: IPty
       try {
         pty = spawn(spec.file, spec.args, {
@@ -136,7 +144,11 @@ export function registerPtyHandlers(): void {
           cols: cols || 80,
           rows: rows || 24,
           cwd: cwd || os.homedir(),
-          env: { ...spec.env, SNOW_AGENT_TERMINAL: agentTerminal }
+          env: {
+            ...spec.env,
+            SNOW_AGENT_BINDING: agentTerminal,
+            SNOW_AGENT_OWNER: agentOwner
+          }
         })
       } catch (error) {
         releaseTerminal(agentTerminal)

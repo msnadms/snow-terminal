@@ -360,7 +360,11 @@ function WorkflowManager({
                 cost,
                 dir,
                 order,
-                signal: inboxSignal(entry, activity.summary)
+                signal: inboxSignal(
+                  entry,
+                  activity.summary,
+                  activity.status === 'attention' && activity.summary.waiting === 0
+                )
               }
             })
             .sort(
@@ -416,7 +420,13 @@ function WorkflowManager({
                         {status && status !== 'idle' && (
                           <span
                             className={`tab-status tab-status-${status}`}
-                            title={status === 'busy' ? 'Busy' : 'Ready for input'}
+                            title={
+                              status === 'busy'
+                                ? 'Busy'
+                                : activity.summary.waiting > 0
+                                  ? 'Ready for input'
+                                  : 'Finished'
+                            }
                           />
                         )}
                         {signal.label ? (
