@@ -607,7 +607,7 @@ body {
   align-items: baseline;
   gap: 10px;
   margin-bottom: 14px;
-  color: var(--ui-strong-text, #cdd6f4);
+  color: var(--ui-text, #cdd6f4);
   font-size: 15px;
 }
 
@@ -622,6 +622,32 @@ body {
   white-space: pre-line;
 }
 
+.wfm-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.wfm-repo-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 18px;
+}
+
+.wfm-repo-column {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 18px;
+}
+
+@media (max-width: 1200px) {
+  .wfm-repo-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .wfm-repo {
   margin-bottom: 18px;
   padding: 10px 12px;
@@ -629,6 +655,33 @@ body {
   border: 1px solid var(--ui-border, #313244);
   border-left: 3px solid var(--wfm-repo, var(--ui-border-hover, #45475a));
   border-radius: 5px;
+}
+
+.wfm-grid > .wfm-repo,
+.wfm-repo-column > .wfm-repo {
+  margin-bottom: 0;
+}
+
+.wfm-repo-dragging {
+  opacity: 0.45;
+}
+
+.wfm-repo-drop-before {
+  box-shadow: -5px 0 0 -2px var(--ui-accent, #a6dcf0);
+}
+
+.wfm-repo-drop-after {
+  box-shadow: 5px 0 0 -2px var(--ui-accent, #a6dcf0);
+}
+
+@media (max-width: 1200px) {
+  .wfm-repo-drop-before {
+    box-shadow: 0 -5px 0 -2px var(--ui-accent, #a6dcf0);
+  }
+
+  .wfm-repo-drop-after {
+    box-shadow: 0 5px 0 -2px var(--ui-accent, #a6dcf0);
+  }
 }
 
 .wfm-nonaffiliated {
@@ -639,6 +692,26 @@ body {
   display: flex;
   align-items: baseline;
   gap: 10px;
+}
+
+.wfm-drag-handle {
+  flex: 0 0 auto;
+  width: 16px;
+  padding: 0;
+  font: inherit;
+  color: var(--ui-faint-text, #6c7086);
+  background: transparent;
+  border: 0;
+  cursor: grab;
+}
+
+.wfm-drag-handle:hover,
+.wfm-drag-handle:focus-visible {
+  color: var(--ui-accent, #a6dcf0);
+}
+
+.wfm-drag-handle:active {
+  cursor: grabbing;
 }
 
 .wfm-repo-name {
@@ -692,15 +765,21 @@ body {
 }
 
 .wfm-rows {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 8px;
   margin-top: 8px;
 }
 
+.wfm-rows-no-status {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .wfm-row {
-  display: flex;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
-  gap: 8px;
   height: 28px;
   padding: 0 4px;
   border-radius: 4px;
@@ -712,14 +791,13 @@ body {
 
 .wfm-row-status {
   display: flex;
-  flex: 0 0 132px;
   align-items: center;
   gap: 6px;
   overflow: hidden;
 }
 
 /* The compound selector is what outranks the `flex: 0 0 auto` the badge rule below shares with
-   `.wfm-repo-inbox`, which sits outside the fixed-width status column and must not shrink. */
+   `.wfm-repo-inbox`, which sits outside the shared status column and must not shrink. */
 .wfm-branch,
 .wfm-row-status .wfm-inbox {
   flex: 0 1 auto;
@@ -727,6 +805,33 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.wfm-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.wfm-branch-link {
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.wfm-branch-link:hover:not(:disabled) {
+  color: var(--ui-accent, #a6dcf0);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.wfm-branch-link:disabled {
+  cursor: default;
 }
 
 .wfm-branch-missing {
@@ -801,31 +906,6 @@ body {
 
 .wfm-state-checked-out {
   color: var(--ui-accent, #89b4fa);
-}
-
-.wfm-review {
-  flex: 0 0 auto;
-  padding: 0 6px;
-  height: 18px;
-  font: inherit;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  color: var(--ui-muted-text, #a6adc8);
-  background: transparent;
-  border: 1px solid var(--ui-border, #313244);
-  border-radius: 4px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.wfm-review:hover:not(:disabled) {
-  color: var(--ui-accent, #a6dcf0);
-  border-color: var(--ui-border-hover, #45475a);
-}
-
-.wfm-review:disabled {
-  opacity: 0.45;
-  cursor: default;
 }
 
 .wfm-cost {
@@ -1537,13 +1617,18 @@ body {
   cursor: pointer;
 }
 
-.context-menu-item:hover {
+.context-menu-item:hover:not(:disabled) {
   color: var(--ui-danger, #f38ba8);
   background: var(--ui-surface-hover, #313244);
 }
 
-.context-menu-item--action:hover {
+.context-menu-item--action:hover:not(:disabled) {
   color: var(--ui-accent, #89b4fa);
+}
+
+.context-menu-item:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .context-menu-empty {

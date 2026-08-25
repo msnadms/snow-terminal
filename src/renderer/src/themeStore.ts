@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { contrast, toHex, toLab } from '@renderer/color'
 
 type ThemeResult = Awaited<ReturnType<typeof window.api.theme.get>>
 export type Theme = ThemeResult['theme']
@@ -37,6 +38,28 @@ const cssVars: Record<Exclude<keyof GitColors, 'lanes'>, string> = {
 
 const kebab = (key: string): string => key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)
 
+const warningBase = '#f9e2af'
+const warningContrast = 4.5
+const warningChromaGain = 1.4
+const warningStep = 0.02
+const warningRange = [0.2, 0.98]
+
+function warningFor(background: string): string {
+  const base = toLab(warningBase)
+  const surface = toLab(background)
+  if (!base || !surface) return warningBase
+  const [lightness, a, b] = base
+  const away = surface[0] > 0.6 ? -warningStep : warningStep
+  let color = warningBase
+  for (let step = 0; ; step++) {
+    const level = lightness + away * step
+    if (level < warningRange[0] || level > warningRange[1]) return color
+    const boost = 1 + (warningChromaGain - 1) * Math.min(1, Math.abs(level - lightness) / 0.4)
+    color = toHex([level, a * boost, b * boost])
+    if (contrast(color, background) >= warningContrast) return color
+  }
+}
+
 function applyCssVars(theme: Theme): void {
   const root = document.documentElement
   for (const [key, name] of Object.entries(cssVars)) {
@@ -45,6 +68,7 @@ function applyCssVars(theme: Theme): void {
   for (const [key, value] of Object.entries(theme.ui)) {
     root.style.setProperty(`--ui-${kebab(key)}`, value)
   }
+  root.style.setProperty('--ui-warning', warningFor(theme.ui.background))
   for (const [key, value] of Object.entries(theme.syntax)) {
     root.style.setProperty(`--syntax-${kebab(key)}`, value)
   }

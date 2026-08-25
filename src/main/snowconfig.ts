@@ -45,6 +45,7 @@ export interface SnowConfig {
   workflowStashProtection?: WorkflowStashProtection
   keybinds?: Record<string, string>
   layout?: Layout
+  workspaceOrder?: string[]
 }
 
 export interface SnowconfigResult {
@@ -70,6 +71,22 @@ function validateCommandList(value: unknown): string[] {
     if (command) result.push(command)
   }
   return result
+}
+
+function validateWorkspaceOrder(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const result: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const repo = item.trim()
+    if (repo && !result.includes(repo)) result.push(repo)
+  }
+  return result
+}
+
+function validateWorkspaceOrderField(raw: unknown, key: string): string[] {
+  if (!raw || typeof raw !== 'object') return []
+  return validateWorkspaceOrder((raw as Record<string, unknown>)[key])
 }
 
 function validateRatios(value: unknown): number[] | null {
@@ -187,6 +204,7 @@ interface RawConfig {
   workflowStashProtection: WorkflowStashProtection | null
   keybinds: Record<string, string> | null
   layout: Layout | null
+  workspaceOrder: string[] | null
   error: string | null
 }
 
@@ -206,6 +224,7 @@ function rawConfig(): RawConfig {
       workflowStashProtection: validateWorkflowStashProtection(raw, 'workflowStashProtection'),
       keybinds: validateKeybinds(raw, 'keybinds'),
       layout: validateLayout(raw, 'layout'),
+      workspaceOrder: validateWorkspaceOrderField(raw, 'workspaceOrder'),
       error: null
     }
   } catch (err) {
@@ -223,6 +242,7 @@ function rawConfig(): RawConfig {
         workflowStashProtection: null,
         keybinds: null,
         layout: null,
+        workspaceOrder: null,
         error: null
       }
     return {
@@ -237,6 +257,7 @@ function rawConfig(): RawConfig {
       workflowStashProtection: null,
       keybinds: null,
       layout: null,
+      workspaceOrder: null,
       error: e.message
     }
   }
@@ -256,6 +277,7 @@ function readSnowconfig(): SnowconfigResult {
     workflowStashProtection,
     keybinds,
     layout,
+    workspaceOrder,
     error
   } = rawConfig()
   return {
@@ -270,7 +292,8 @@ function readSnowconfig(): SnowconfigResult {
       ...(hooksPrompted !== null ? { hooksPrompted } : {}),
       ...(workflowStashProtection ? { workflowStashProtection } : {}),
       ...(keybinds ? { keybinds } : {}),
-      ...(layout ? { layout } : {})
+      ...(layout ? { layout } : {}),
+      ...(workspaceOrder?.length ? { workspaceOrder } : {})
     },
     path: file,
     error
@@ -304,6 +327,7 @@ function writeConfig(next: Omit<RawConfig, 'error'>): SnowconfigResult {
     if (next.workflowStashProtection) data.workflowStashProtection = next.workflowStashProtection
     if (next.keybinds) data.keybinds = next.keybinds
     if (next.layout) data.layout = next.layout
+    if (next.workspaceOrder?.length) data.workspaceOrder = next.workspaceOrder
     fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`)
   } catch (err) {
     return { config: { presets: [] }, path: file, error: (err as Error).message }
@@ -324,6 +348,7 @@ function mutateConfig(mutate: (cfg: Omit<RawConfig, 'error'>) => boolean): Snowc
     workflowStashProtection,
     keybinds,
     layout,
+    workspaceOrder,
     error
   } = rawConfig()
   if (error) return readSnowconfig()
@@ -338,7 +363,8 @@ function mutateConfig(mutate: (cfg: Omit<RawConfig, 'error'>) => boolean): Snowc
     hooksPrompted,
     workflowStashProtection,
     keybinds,
-    layout
+    layout,
+    workspaceOrder
   }
   if (!mutate(cfg)) return readSnowconfig()
   return writeConfig(cfg)
@@ -591,6 +617,16 @@ export function registerSnowconfigHandlers(): void {
     mutateConfig((cfg) => {
       const next: Layout = { ...(cfg.layout ?? {}), ...coerceLayout(patch) }
       cfg.layout = Object.keys(next).length ? next : null
+      return true
+    })
+  )
+  ipcMain.handle('snowconfig:setWorkspaceOrder', (_e, order: string[]): SnowconfigResult =>
+    mutateConfig((cfg) => {
+      const next = validateWorkspaceOrder(order)
+      const previous = cfg.workspaceOrder ?? []
+      if (previous.length === next.length && previous.every((repo, index) => repo === next[index]))
+        return false
+      cfg.workspaceOrder = next.length ? next : null
       return true
     })
   )

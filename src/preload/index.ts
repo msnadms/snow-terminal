@@ -280,6 +280,8 @@ const snowconfig = {
     ipcRenderer.invoke('snowconfig:setHooksPrompted'),
   setLayout: (patch: Partial<Layout>): Promise<SnowconfigResult> =>
     ipcRenderer.invoke('snowconfig:setLayout', patch),
+  setWorkspaceOrder: (order: string[]): Promise<SnowconfigResult> =>
+    ipcRenderer.invoke('snowconfig:setWorkspaceOrder', order),
   onChanged: (callback: (result: SnowconfigResult) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, result: SnowconfigResult): void => callback(result)
     ipcRenderer.on('snowconfig:changed', listener)

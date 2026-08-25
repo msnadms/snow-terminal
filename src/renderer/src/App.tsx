@@ -34,6 +34,7 @@ import {
 export type { SessionStatus } from './agentStatus'
 
 type ActiveId = number | 'home' | 'workflows'
+type AppPage = Extract<ActiveId, string>
 
 const GIT_MIN = 220
 const GIT_COLLAPSE = 120
@@ -120,10 +121,12 @@ function App(): React.JSX.Element {
   const nextIdRef = useRef(1)
   const tabsRef = useRef(tabs)
   const activeIdRef = useRef(activeId)
+  const lastVisitedRef = useRef<AppPage>('home')
   const cwdsRef = useRef(cwds)
   useEffect(() => {
     tabsRef.current = tabs
     activeIdRef.current = activeId
+    if (typeof activeId === 'string') lastVisitedRef.current = activeId
     cwdsRef.current = cwds
   }, [tabs, activeId, cwds])
   const {
@@ -136,6 +139,8 @@ function App(): React.JSX.Element {
     hooksPrompted,
     keybinds,
     layout,
+    workspaceOrder,
+    setWorkspaceOrder,
     error: presetsError
   } = useSnowconfig()
   const visiblePresets = useMemo(
@@ -754,7 +759,7 @@ function App(): React.JSX.Element {
     if (typeof active === 'number' && idSet.has(active)) {
       const index = current.findIndex((t) => t.id === active)
       const neighbor = remaining[index - 1] ?? remaining[index]
-      setActiveId(neighbor ? neighbor.id : 'home')
+      setActiveId(neighbor ? neighbor.id : lastVisitedRef.current)
     }
     setTabs(remaining)
     const dropKeys = <T,>(prev: Record<number, T>): Record<number, T> => {
@@ -964,6 +969,8 @@ function App(): React.JSX.Element {
               sessionTitles={sessionDirTitles}
               agentSessions={workflowAgentSessions}
               openSessions={openSessions}
+              workspaceOrder={workspaceOrder}
+              onWorkspaceOrderChange={setWorkspaceOrder}
             />
             {mountedTabs.map((tab) => {
               if (tab.kind === 'commit')

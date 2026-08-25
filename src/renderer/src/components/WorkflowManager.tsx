@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import ContextMenu from './ContextMenu'
 import FailureDialog from './FailureDialog'
 import RemoveWorkflowDialog from './RemoveWorkflowDialog'
 import StopWorkflowDialog from './StopWorkflowDialog'
@@ -13,11 +14,9 @@ import {
   inboxSignal,
   inScope,
   isRegistered,
-  launchLabel,
   parkedBadge,
   parkedTitle,
   repoScope,
-  reviewBadge,
   reviewTitle,
   staleTitle,
   stateLabel,
@@ -32,6 +31,7 @@ import {
 
 type Overview = Awaited<ReturnType<typeof window.api.workflow.overview>>
 type Targeted = { repo: WorkflowRepo; entry: WorkflowEntry }
+type WorkflowMenu = Targeted & { x: number; y: number }
 type Activity = {
   status?: SessionStatus
   title?: string
@@ -60,6 +60,13 @@ type SessionRow = {
   cost: number
   signal: InboxSignal
 }
+type RepoDrag = {
+  repo: string
+  target: string
+  after: boolean
+}
+
+const narrowWorkspaceQuery = '(max-width: 1200px)'
 
 interface WorkflowManagerProps {
   active: boolean
@@ -72,6 +79,8 @@ interface WorkflowManagerProps {
   sessionTitles: Record<string, string>
   agentSessions: AgentSession[]
   openSessions: OpenSession[]
+  workspaceOrder: string[]
+  onWorkspaceOrderChange: typeof window.api.snowconfig.setWorkspaceOrder
 }
 
 function openDir(repo: WorkflowRepo, entry: WorkflowEntry): string | undefined {
@@ -83,6 +92,22 @@ function openDir(repo: WorkflowRepo, entry: WorkflowEntry): string | undefined {
 function directoryKey(dir: string): string {
   const normalized = normalizePath(dir)
   return navigator.platform.startsWith('Win') ? normalized.toLowerCase() : normalized
+}
+
+function orderRepos(repos: WorkflowRepo[], order: string[]): WorkflowRepo[] {
+  const positions = new Map<string, number>()
+  for (const [index, repo] of order.entries()) {
+    const key = directoryKey(repo)
+    if (!positions.has(key)) positions.set(key, index)
+  }
+  return repos
+    .map((repo, index) => ({ repo, index, position: positions.get(directoryKey(repo.repo)) }))
+    .sort(
+      (left, right) =>
+        (left.position ?? Number.MAX_SAFE_INTEGER) - (right.position ?? Number.MAX_SAFE_INTEGER) ||
+        left.index - right.index
+    )
+    .map(({ repo }) => repo)
 }
 
 const emptyActivity: Activity = {
@@ -135,7 +160,9 @@ function WorkflowManager({
   sessionStatuses,
   sessionTitles,
   agentSessions,
-  openSessions
+  openSessions,
+  workspaceOrder,
+  onWorkspaceOrderChange
 }: WorkflowManagerProps): React.JSX.Element {
   const [overview, setOverview] = useState<Overview | null>(null)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
@@ -143,6 +170,9 @@ function WorkflowManager({
   const [demoting, setDemoting] = useState<Targeted | null>(null)
   const [failure, setFailure] = useState<Failure | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [repoDrag, setRepoDrag] = useState<RepoDrag | null>(null)
+  const [workflowMenu, setWorkflowMenu] = useState<WorkflowMenu | null>(null)
+  const [isNarrow, setIsNarrow] = useState(() => window.matchMedia(narrowWorkspaceQuery).matches)
   const lanes = useGitColors()?.lanes
   const usage = useUsage()
   const overviewRef = useRef<Overview | null>(null)
@@ -150,6 +180,14 @@ function WorkflowManager({
   useEffect(() => {
     overviewRef.current = overview
   }, [overview])
+
+  useEffect(() => {
+    const media = window.matchMedia(narrowWorkspaceQuery)
+    const update = (): void => setIsNarrow(media.matches)
+    update()
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
 
   /**
    * The manager summarizes worktrees that may not have an open shell, Git panel, or diff view of
@@ -515,8 +553,77 @@ function WorkflowManager({
     }, 'Removing workspace…')
   }
 
+  const orderedRepos = orderRepos(overview?.repos ?? [], workspaceOrder)
+
+  const saveRepoOrder = (next: string[]): void => {
+    void onWorkspaceOrderChange(next).then((result) => {
+      if (!result.error) return
+      setFailure({
+        title: 'Could not save workspace order',
+        detail: `${result.path}\n${result.error}`
+      })
+    })
+  }
+
+  const moveRepo = (repo: string, target: string, after: boolean): void => {
+    if (directoryKey(repo) === directoryKey(target)) return
+    const current = orderedRepos.map((entry) => entry.repo)
+    const next = current.filter((entry) => directoryKey(entry) !== directoryKey(repo))
+    const targetIndex = next.findIndex((entry) => directoryKey(entry) === directoryKey(target))
+    if (targetIndex < 0) return
+    next.splice(targetIndex + (after ? 1 : 0), 0, repo)
+    saveRepoOrder(next)
+  }
+
+  const nudgeRepo = (repo: string, offset: -1 | 1): void => {
+    const current = orderedRepos.map((entry) => entry.repo)
+    const index = current.findIndex((entry) => directoryKey(entry) === directoryKey(repo))
+    const target = index + offset
+    if (index < 0 || target < 0 || target >= current.length) return
+    const moved = current[index]
+    current[index] = current[target]
+    current[target] = moved
+    saveRepoOrder(current)
+  }
+
+  const beginRepoDrag = (e: React.DragEvent<HTMLElement>, repo: string): void => {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', repo)
+    setRepoDrag({ repo, target: repo, after: false })
+  }
+
+  const dragOverRepo = (e: React.DragEvent<HTMLElement>, target: string): void => {
+    if (!repoDrag) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    const rect = e.currentTarget.getBoundingClientRect()
+    const after = isNarrow
+      ? e.clientY >= rect.top + rect.height / 2
+      : e.clientX >= rect.left + rect.width / 2
+    setRepoDrag((current) =>
+      current && (current.target !== target || current.after !== after)
+        ? { ...current, target, after }
+        : current
+    )
+  }
+
+  const dropRepo = (e: React.DragEvent<HTMLElement>, target: string): void => {
+    if (!repoDrag) return
+    e.preventDefault()
+    const rect = e.currentTarget.getBoundingClientRect()
+    const after = isNarrow
+      ? e.clientY >= rect.top + rect.height / 2
+      : e.clientX >= rect.left + rect.width / 2
+    moveRepo(repoDrag.repo, target, after)
+    setRepoDrag(null)
+  }
+
   const nonaffiliatedSection = (): React.JSX.Element => {
     const needYou = sessionRows.filter((row) => needsOperator(row.signal)).length
+    const hasRowStatus = sessionRows.some(
+      ({ activity, signal }) =>
+        (activity.status !== undefined && activity.status !== 'idle') || !!signal.label
+    )
     return (
       <section className="wfm-repo wfm-nonaffiliated">
         <div className="wfm-repo-header">
@@ -534,70 +641,294 @@ function WorkflowManager({
         {sessionRows.length === 0 ? (
           <div className="wfm-note wfm-note-muted">No open sessions outside a workspace.</div>
         ) : (
-          <div className="wfm-rows">
+          <div className={`wfm-rows${hasRowStatus ? '' : ' wfm-rows-no-status'}`}>
             {sessionRows.map(({ session, activity, cost, signal }) => (
               <div className="wfm-row" key={session.id}>
-                <span className="wfm-row-status">
-                  {activity.status && activity.status !== 'idle' && (
-                    <span
-                      className={`tab-status tab-status-${activity.status}`}
-                      title={
-                        activity.status === 'busy'
-                          ? 'Busy'
-                          : activity.summary.waiting > 0
-                            ? 'Ready for input'
-                            : 'Finished'
-                      }
-                    />
-                  )}
-                  {signal.label && (
-                    <span
-                      className={`wfm-inbox wfm-inbox-${signal.slug}`}
-                      title={signalTitle(signal, activity)}
-                    >
-                      {signal.label}
+                {hasRowStatus && (
+                  <span className="wfm-row-status">
+                    {activity.status && activity.status !== 'idle' && (
+                      <span
+                        className={`tab-status tab-status-${activity.status}`}
+                        title={
+                          activity.status === 'busy'
+                            ? 'Busy'
+                            : activity.summary.waiting > 0
+                              ? 'Ready for input'
+                              : 'Finished'
+                        }
+                      />
+                    )}
+                    {signal.label && (
+                      <span
+                        className={`wfm-inbox wfm-inbox-${signal.slug}`}
+                        title={signalTitle(signal, activity)}
+                      >
+                        {signal.label}
+                      </span>
+                    )}
+                  </span>
+                )}
+                <div className="wfm-row-main">
+                  <span className="wfm-branch" title={session.dir}>
+                    {session.label}
+                  </span>
+                  <span className="wfm-session-path" title={session.dir}>
+                    {session.dir ?? 'Starting shell…'}
+                  </span>
+                  {activity.title && (
+                    <span className="wfm-activity" title={activity.title}>
+                      {activity.title}
                     </span>
                   )}
-                </span>
-                <span className="wfm-branch" title={session.dir}>
-                  {session.label}
-                </span>
-                <span className="wfm-session-path" title={session.dir}>
-                  {session.dir ?? 'Starting shell…'}
-                </span>
-                {activity.title && (
-                  <span className="wfm-activity" title={activity.title}>
-                    {activity.title}
+                  {!!cost && (
+                    <span
+                      className="wfm-cost"
+                      title="Estimated agent spend in this directory since snow started"
+                    >
+                      {formatCost(cost)}
+                    </span>
+                  )}
+                  <span className="wfm-row-actions">
+                    <button
+                      className="wfm-action wfm-action-launch"
+                      onClick={() => onSelectSession(session.id)}
+                      title={`Open ${session.label}`}
+                    >
+                      ▸ Open session
+                    </button>
+                    <button
+                      className="wfm-action wfm-action-icon wfm-action-remove"
+                      onClick={() => onCloseSession(session.id)}
+                      title={`Close ${session.label}`}
+                    >
+                      ✕
+                    </button>
                   </span>
-                )}
-                {!!cost && (
-                  <span
-                    className="wfm-cost"
-                    title="Estimated agent spend in this directory since snow started"
-                  >
-                    {formatCost(cost)}
-                  </span>
-                )}
-                <span className="wfm-row-actions">
-                  <button
-                    className="wfm-action wfm-action-launch"
-                    onClick={() => onSelectSession(session.id)}
-                    title={`Open ${session.label}`}
-                  >
-                    ▸ Open session
-                  </button>
-                  <button
-                    className="wfm-action wfm-action-icon wfm-action-remove"
-                    onClick={() => onCloseSession(session.id)}
-                    title={`Close ${session.label}`}
-                  >
-                    ✕
-                  </button>
-                </span>
+                </div>
               </div>
             ))}
           </div>
         )}
+      </section>
+    )
+  }
+
+  const repoCard = (repo: WorkflowRepo): React.JSX.Element => {
+    const registered = isRegistered(repo.workflows)
+    const rows: WorkflowRow[] = repo.workflows
+      .map((entry, order) => {
+        const dir = openDir(repo, entry)
+        const indexed = dir ? indexedFor(dir) : { activity: emptyActivity, cost: 0 }
+        const { activity, cost } = indexed
+        return {
+          entry,
+          activity,
+          cost,
+          dir,
+          order,
+          signal: inboxSignal(
+            entry,
+            activity.summary,
+            activity.status === 'attention' && activity.summary.waiting === 0
+          )
+        }
+      })
+      .sort(
+        (left, right) =>
+          right.signal.tier - left.signal.tier || right.cost - left.cost || left.order - right.order
+      )
+    const needYou = rows.filter((row) => needsOperator(row.signal)).length
+    const hasRowStatus = rows.some(
+      ({ entry, activity, signal }) =>
+        (activity.status !== undefined && activity.status !== 'idle') ||
+        !!signal.label ||
+        !!stateLabel(entry)
+    )
+    return (
+      <section
+        className={`wfm-repo${repoDrag?.repo === repo.repo ? ' wfm-repo-dragging' : ''}${
+          repoDrag?.target === repo.repo && repoDrag.repo !== repo.repo
+            ? repoDrag.after
+              ? ' wfm-repo-drop-after'
+              : ' wfm-repo-drop-before'
+            : ''
+        }`}
+        key={repo.repo}
+        style={{ '--wfm-repo': repoColor(repo.repo, lanes) } as React.CSSProperties}
+        onDragOver={(e) => dragOverRepo(e, repo.repo)}
+        onDrop={(e) => dropRepo(e, repo.repo)}
+        onDragEnd={() => setRepoDrag(null)}
+      >
+        <div className="wfm-repo-header">
+          <button
+            type="button"
+            className="wfm-drag-handle"
+            draggable
+            onDragStart={(e) => beginRepoDrag(e, repo.repo)}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+                e.preventDefault()
+                nudgeRepo(repo.repo, -1)
+              } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+                e.preventDefault()
+                nudgeRepo(repo.repo, 1)
+              }
+            }}
+            title="Drag to reorder; use arrow keys to move"
+            aria-label={`Reorder ${repo.name}`}
+          >
+            ⠿
+          </button>
+          <span className="wfm-repo-name">{repo.name}</span>
+          <span className="wfm-repo-path" title={repo.repo}>
+            {repo.repo}
+          </span>
+          {needYou > 0 && (
+            <span
+              className="wfm-repo-inbox"
+              title={`${needYou} workspace${needYou === 1 ? '' : 's'} need your attention`}
+            >
+              {needYou} need{needYou === 1 ? 's' : ''} you
+            </span>
+          )}
+          <button
+            className="wfm-launch-all"
+            disabled={action.pending || repo.workflows.length === 0 || repo.unreachable}
+            onClick={() => launchAll(repo)}
+            title={`Open every workspace in ${repo.name}, applying each matching preset startup command`}
+          >
+            {repo.workflows.length > 1 ? ` Open all ${repo.workflows.length}` : ' Open'}
+          </button>
+        </div>
+        {repo.unreachable && (
+          <div className="wfm-note">
+            snow could not read this repository - the directory may have moved or been deleted. Its
+            workspace records can still be removed.
+          </div>
+        )}
+        {repo.error && <div className="wfm-note">{repo.error}</div>}
+        <div className={`wfm-rows${hasRowStatus ? '' : ' wfm-rows-no-status'}`}>
+          {rows.map(({ entry, activity, cost, dir, signal }) => {
+            const state = stateLabel(entry)
+            const status = activity.status
+            const title = activity.title
+            return (
+              <div className="wfm-row" key={entry.branch}>
+                {hasRowStatus && (
+                  <span className="wfm-row-status">
+                    {status && status !== 'idle' && (
+                      <span
+                        className={`tab-status tab-status-${status}`}
+                        title={
+                          status === 'busy'
+                            ? 'Busy'
+                            : activity.summary.waiting > 0
+                              ? 'Ready for input'
+                              : 'Finished'
+                        }
+                      />
+                    )}
+                    {signal.label ? (
+                      <span
+                        className={`wfm-inbox wfm-inbox-${signal.slug}`}
+                        title={signalTitle(signal, activity)}
+                      >
+                        {signal.label}
+                      </span>
+                    ) : (
+                      state && (
+                        <span className={`wfm-state wfm-state-${stateSlug(state)}`}>{state}</span>
+                      )
+                    )}
+                  </span>
+                )}
+                <div className="wfm-row-main">
+                  <button
+                    type="button"
+                    className={`wfm-branch wfm-branch-link${entry.exists ? '' : ' wfm-branch-missing'}`}
+                    disabled={!dir || entry.review?.changed === 0}
+                    onClick={() => dir && onOpenDiff(dir, entry.branch)}
+                    title={
+                      dir
+                        ? entry.review
+                          ? reviewTitle(entry, entry.review)
+                          : `Open ${entry.branch}'s diff`
+                        : (entry.worktree ?? parkedTitle(entry))
+                    }
+                  >
+                    {entry.branch}
+                  </button>
+                  {title && (
+                    <span className="wfm-activity" title={title}>
+                      {title}
+                    </span>
+                  )}
+                  {!!cost && (
+                    <span
+                      className="wfm-cost"
+                      title="Estimated agent spend in this directory since snow started"
+                    >
+                      {formatCost(cost)}
+                    </span>
+                  )}
+                  {entry.parked && (
+                    <span className="wfm-parked" title={parkedTitle(entry)}>
+                      {parkedBadge(entry.parked)}
+                    </span>
+                  )}
+                  <span className="wfm-row-actions">
+                    <button
+                      className="wfm-action wfm-action-icon"
+                      type="button"
+                      disabled={action.pending}
+                      aria-label={`Actions for ${entry.branch}`}
+                      aria-haspopup="menu"
+                      aria-expanded={
+                        workflowMenu?.repo.repo === repo.repo &&
+                        workflowMenu.entry.branch === entry.branch
+                      }
+                      onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect()
+                        setWorkflowMenu({ repo, entry, x: rect.right - 200, y: rect.bottom + 4 })
+                      }}
+                      title={`Actions for ${entry.branch}`}
+                    >
+                      ⋮
+                    </button>
+                  </span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        <div className="wfm-repo-footer">
+          <form className="wfm-create" onSubmit={(e) => create(repo, e)}>
+            <input
+              className="wfm-create-input"
+              placeholder="New workspace…"
+              value={drafts[repo.repo] ?? ''}
+              disabled={repo.unreachable}
+              onChange={(e) => setDrafts((prev) => ({ ...prev, [repo.repo]: e.target.value }))}
+            />
+            <button
+              className="wfm-action"
+              type="submit"
+              disabled={action.pending || !(drafts[repo.repo] ?? '').trim()}
+            >
+              +
+            </button>
+          </form>
+          {repo.current && !registered && (
+            <button
+              className="wfm-action"
+              disabled={action.pending}
+              onClick={() => register(repo)}
+              title={`Track ${repo.current} as a workspace branch`}
+            >
+              Register workspace
+            </button>
+          )}
+        </div>
       </section>
     )
   }
@@ -636,222 +967,16 @@ function WorkflowManager({
     return (
       <>
         {nonaffiliatedSection()}
-        {overview.repos.map((repo) => {
-          const registered = isRegistered(repo.workflows)
-          const rows: WorkflowRow[] = repo.workflows
-            .map((entry, order) => {
-              const dir = openDir(repo, entry)
-              const indexed = dir ? indexedFor(dir) : { activity: emptyActivity, cost: 0 }
-              const { activity, cost } = indexed
-              return {
-                entry,
-                activity,
-                cost,
-                dir,
-                order,
-                signal: inboxSignal(
-                  entry,
-                  activity.summary,
-                  activity.status === 'attention' && activity.summary.waiting === 0
-                )
-              }
-            })
-            .sort(
-              (left, right) =>
-                right.signal.tier - left.signal.tier ||
-                right.cost - left.cost ||
-                left.order - right.order
-            )
-          const needYou = rows.filter((row) => needsOperator(row.signal)).length
-          return (
-            <section
-              className="wfm-repo"
-              key={repo.repo}
-              style={{ '--wfm-repo': repoColor(repo.repo, lanes) } as React.CSSProperties}
-            >
-              <div className="wfm-repo-header">
-                <span className="wfm-repo-name">{repo.name}</span>
-                <span className="wfm-repo-path" title={repo.repo}>
-                  {repo.repo}
-                </span>
-                {needYou > 0 && (
-                  <span
-                    className="wfm-repo-inbox"
-                    title={`${needYou} workspace${needYou === 1 ? '' : 's'} need your attention`}
-                  >
-                    {needYou} need{needYou === 1 ? 's' : ''} you
-                  </span>
-                )}
-                <button
-                  className="wfm-launch-all"
-                  disabled={action.pending || repo.workflows.length === 0 || repo.unreachable}
-                  onClick={() => launchAll(repo)}
-                  title={`Open every workspace in ${repo.name}, applying each matching preset startup command`}
-                >
-                  ▸ Open all {repo.workflows.length}
-                </button>
-              </div>
-              {repo.unreachable && (
-                <div className="wfm-note">
-                  snow could not read this repository - the directory may have moved or been
-                  deleted. Its workspace records can still be removed.
-                </div>
-              )}
-              {repo.error && <div className="wfm-note">{repo.error}</div>}
-              <div className="wfm-rows">
-                {rows.map(({ entry, activity, cost, dir, signal }) => {
-                  const state = stateLabel(entry)
-                  const status = activity.status
-                  const title = activity.title
-                  return (
-                    <div className="wfm-row" key={entry.branch}>
-                      <span className="wfm-row-status">
-                        {status && status !== 'idle' && (
-                          <span
-                            className={`tab-status tab-status-${status}`}
-                            title={
-                              status === 'busy'
-                                ? 'Busy'
-                                : activity.summary.waiting > 0
-                                  ? 'Ready for input'
-                                  : 'Finished'
-                            }
-                          />
-                        )}
-                        {signal.label ? (
-                          <span
-                            className={`wfm-inbox wfm-inbox-${signal.slug}`}
-                            title={signalTitle(signal, activity)}
-                          >
-                            {signal.label}
-                          </span>
-                        ) : (
-                          state && (
-                            <span className={`wfm-state wfm-state-${stateSlug(state)}`}>
-                              {state}
-                            </span>
-                          )
-                        )}
-                      </span>
-                      <span
-                        className={`wfm-branch${entry.exists ? '' : ' wfm-branch-missing'}`}
-                        title={entry.worktree ?? parkedTitle(entry)}
-                      >
-                        {entry.branch}
-                      </span>
-                      {entry.review && (
-                        <button
-                          className="wfm-review"
-                          disabled={entry.review.changed === 0 || !dir}
-                          onClick={() => dir && onOpenDiff(dir, entry.branch)}
-                          title={reviewTitle(entry, entry.review)}
-                        >
-                          {reviewBadge(entry.review)}
-                        </button>
-                      )}
-                      {title && (
-                        <span className="wfm-activity" title={title}>
-                          {title}
-                        </span>
-                      )}
-                      {!!cost && (
-                        <span
-                          className="wfm-cost"
-                          title="Estimated agent spend in this directory since snow started"
-                        >
-                          {formatCost(cost)}
-                        </span>
-                      )}
-                      {entry.parked && (
-                        <span className="wfm-parked" title={parkedTitle(entry)}>
-                          {parkedBadge(entry.parked)}
-                        </span>
-                      )}
-                      <span className="wfm-row-actions">
-                        <button
-                          className="wfm-action wfm-action-launch"
-                          disabled={action.pending || repo.unreachable}
-                          onClick={() => launch(repo, entry)}
-                          title={
-                            usable(entry) || entry.current
-                              ? `Open ${entry.branch}'s workspace shell`
-                              : `Create ${entry.branch}'s isolated workspace`
-                          }
-                        >
-                          ▸ {launchLabel(entry)}
-                        </button>
-                        <span className="wfm-action-slot">
-                          {usable(entry) ? (
-                            <button
-                              className="wfm-action wfm-action-icon"
-                              disabled={action.pending}
-                              onClick={() => setDemoting({ repo, entry })}
-                              title={`Remove ${entry.branch}'s workspace and terminate its terminals if required`}
-                            >
-                              󰏤
-                            </button>
-                          ) : entry.worktree ? (
-                            <button
-                              className="wfm-action wfm-action-icon"
-                              disabled={action.pending || repo.unreachable}
-                              onClick={() => prune(repo)}
-                              title={staleTitle(entry)}
-                            >
-                              ⟳
-                            </button>
-                          ) : null}
-                        </span>
-                        <button
-                          className="wfm-action wfm-action-icon wfm-action-remove"
-                          disabled={action.pending}
-                          onClick={() => setRemoving({ repo, entry })}
-                          title={`Remove ${entry.branch} from your workflows`}
-                        >
-                          ✕
-                        </button>
-                      </span>
-                    </div>
-                  )
-                })}
-              </div>
-              <div className="wfm-repo-footer">
-                <form className="wfm-create" onSubmit={(e) => create(repo, e)}>
-                  <input
-                    className="wfm-create-input"
-                    placeholder="New workspace…"
-                    value={drafts[repo.repo] ?? ''}
-                    disabled={repo.unreachable}
-                    onChange={(e) =>
-                      setDrafts((prev) => ({ ...prev, [repo.repo]: e.target.value }))
-                    }
-                  />
-                  <button
-                    className="wfm-action"
-                    type="submit"
-                    disabled={action.pending || !(drafts[repo.repo] ?? '').trim()}
-                  >
-                    +
-                  </button>
-                </form>
-                {repo.current && !registered && (
-                  <button
-                    className="wfm-action"
-                    disabled={action.pending}
-                    onClick={() => register(repo)}
-                    title={`Track ${repo.current} as a workspace branch`}
-                  >
-                    Register workspace
-                  </button>
-                )}
-                <span className="wfm-base">
-                  {repo.defaultBranch
-                    ? `Branches from origin/${repo.defaultBranch}`
-                    : 'Branches from HEAD'}
-                </span>
-              </div>
-            </section>
-          )
-        })}
+        <div className="wfm-repo-columns">
+          {(isNarrow
+            ? [orderedRepos]
+            : [0, 1].map((column) => orderedRepos.filter((_, index) => index % 2 === column))
+          ).map((repos, column) => (
+            <div className="wfm-repo-column" key={column}>
+              {repos.map(repoCard)}
+            </div>
+          ))}
+        </div>
       </>
     )
   }
@@ -862,7 +987,56 @@ function WorkflowManager({
         Workspaces
         {action.label && <span className="wfm-busy">{action.label}</span>}
       </div>
-      {body()}
+      <div className="wfm-grid">{body()}</div>
+      {workflowMenu && (
+        <ContextMenu x={workflowMenu.x} y={workflowMenu.y} onClose={() => setWorkflowMenu(null)}>
+          <button
+            className="context-menu-item context-menu-item--action"
+            disabled={workflowMenu.repo.unreachable}
+            onClick={() => {
+              setWorkflowMenu(null)
+              launch(workflowMenu.repo, workflowMenu.entry)
+            }}
+          >
+            {usable(workflowMenu.entry) || workflowMenu.entry.current
+              ? 'Open workspace shell'
+              : 'Create isolated workspace'}
+          </button>
+          {workflowMenu.entry.worktree &&
+            (usable(workflowMenu.entry) ? (
+              <button
+                className="context-menu-item context-menu-item--action"
+                onClick={() => {
+                  setWorkflowMenu(null)
+                  setDemoting({ repo: workflowMenu.repo, entry: workflowMenu.entry })
+                }}
+              >
+                Remove isolated workspace…
+              </button>
+            ) : (
+              <button
+                className="context-menu-item context-menu-item--action"
+                disabled={workflowMenu.repo.unreachable}
+                title={staleTitle(workflowMenu.entry)}
+                onClick={() => {
+                  setWorkflowMenu(null)
+                  prune(workflowMenu.repo)
+                }}
+              >
+                Prune stale workspace
+              </button>
+            ))}
+          <button
+            className="context-menu-item"
+            onClick={() => {
+              setWorkflowMenu(null)
+              setRemoving({ repo: workflowMenu.repo, entry: workflowMenu.entry })
+            }}
+          >
+            Remove from workflows…
+          </button>
+        </ContextMenu>
+      )}
       {removing && (
         <RemoveWorkflowDialog
           entry={removing.entry}

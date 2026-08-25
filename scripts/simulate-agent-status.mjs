@@ -146,7 +146,7 @@ try {
   assert.equal(inboxSignal({}, { waiting: 0, working: 0 }, true).label, 'finished')
   assert.equal(
     inboxSignal({ review: { changed: 1 } }, { waiting: 0, working: 0 }, true).label,
-    'ready to review'
+    'review'
   )
 
   // eslint-disable-next-line @typescript-eslint/explicit-function-return-type

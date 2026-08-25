@@ -38,8 +38,8 @@ export function isRegistered(workflows: WorkflowEntry[]): boolean {
 }
 
 export function launchLabel(entry: WorkflowEntry): string {
-  if (usable(entry) || entry.current) return 'Open workspace'
-  return 'Create workspace'
+  if (usable(entry) || entry.current) return 'Open'
+  return 'Create'
 }
 
 export function stateLabel(entry: WorkflowEntry): string {
@@ -115,7 +115,7 @@ export function inboxSignal(
       slug: 'working'
     }
   if (entry.review && (entry.review.changed > 0 || (entry.review.ahead ?? 0) > 0))
-    return { tier: 3, label: 'ready to review', slug: 'review' }
+    return { tier: 3, label: 'review', slug: 'review' }
   if (finished) return { tier: 3, label: 'finished', slug: 'finished' }
   if (entry.worktree && !usable(entry)) return { tier: 1, label: '', slug: '' }
   return { tier: 0, label: '', slug: '' }

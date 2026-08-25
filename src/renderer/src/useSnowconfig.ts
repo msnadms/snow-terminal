@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 type SnowconfigResult = Awaited<ReturnType<typeof window.api.snowconfig.get>>
 export type Preset = SnowconfigResult['config']['presets'][number]
@@ -18,6 +18,8 @@ export function useSnowconfig(): {
   hooksPrompted: boolean
   keybinds: Record<string, string>
   layout: Layout
+  workspaceOrder: string[]
+  setWorkspaceOrder: (order: string[]) => Promise<SnowconfigResult>
   error: string | null
 } {
   const [presets, setPresets] = useState<Preset[]>([])
@@ -29,6 +31,7 @@ export function useSnowconfig(): {
   const [hooksPrompted, setHooksPrompted] = useState(false)
   const [keybinds, setKeybinds] = useState<Record<string, string>>({})
   const [layout, setLayout] = useState<Layout>({})
+  const [workspaceOrder, setWorkspaceOrderState] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -47,6 +50,7 @@ export function useSnowconfig(): {
       setHooksPrompted(result.config.hooksPrompted ?? false)
       setKeybinds(result.config.keybinds ?? {})
       setLayout(result.config.layout ?? {})
+      setWorkspaceOrderState(result.config.workspaceOrder ?? [])
     }
 
     window.api.snowconfig.get().then(receive)
@@ -56,6 +60,11 @@ export function useSnowconfig(): {
       cancelled = true
       offChanged()
     }
+  }, [])
+
+  const setWorkspaceOrder = useCallback(async (order: string[]): Promise<SnowconfigResult> => {
+    setWorkspaceOrderState(order)
+    return window.api.snowconfig.setWorkspaceOrder(order)
   }, [])
 
   return {
@@ -68,6 +77,8 @@ export function useSnowconfig(): {
     hooksPrompted,
     keybinds,
     layout,
+    workspaceOrder,
+    setWorkspaceOrder,
     error
   }
 }

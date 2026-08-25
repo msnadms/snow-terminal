@@ -235,6 +235,22 @@ mechanical), `ui` as `--ui-` and `syntax` as `--syntax-`, both plus the kebab-ca
 is a thin wrapper returning `theme.git`; `lanes` off it reaches `GitPanel` since SVG strokes need the
 value in JS.
 
+**A `var(--ui-*)` fallback is a hardcoded dark color, so a name no section defines never themes at
+all.** That is a silent failure rather than a loud one: the page renders, and only a light theme
+reveals it. Two such names had accumulated — `--ui-strong-text` (`strongText` exists, but in the
+`git` section, so `themeStore` emits it as `--git-strong-text`) and `--ui-warning` (defined nowhere),
+which is why the workflow manager's title and its "n needs you" chip stayed near-white on every light
+theme. The title now reads `--ui-text`, which is the same `#cdd6f4` on the default theme and correct
+everywhere else. `--ui-warning` is instead **derived** and set by `applyCssVars` alongside the mapped
+colors: `warningFor` keeps the amber's hue, walks its OKLab lightness away from `ui.background` (down
+on a light theme, up on a dark one) until WCAG contrast reaches 4.5, and gains chroma as it goes,
+since a pastel amber turns to mud when it is merely darkened. A dark theme meets the target at step
+zero and therefore keeps the exact `#f9e2af` it had; the light themes land on a legible gold. It is
+derived rather than added to `UiColors` because `mergeColors` fills a missing key from the defaults,
+so a new key would hand every existing theme file — none of which can grow one, being written
+`wx` — the same dark amber that caused this. The OKLab conversions behind it live in `color.ts`,
+shared with `repoColor.ts` so there is one copy.
+
 The `--ui-*` properties replaced the Catppuccin hexes the chrome CSS used to hardcode. The
 replacement was scoped to skip the git-view block (`.git-panel` … `.commit-truncated`), which stays
 on `--git-*`/`--syntax-*` — several `--ui-*` defaults (`accent`, `placeholder`, `borderHover`) share a
@@ -1503,10 +1519,33 @@ drag may land at any tab slot except inside another group (or anywhere in its ow
 
 The color is `repoColor(key, lanes)` — an FNV hash of the normalized root into the theme's existing
 `git.lanes` palette. Hashing (rather than handing colors out in open order) keeps a repo the same
-color across restarts, at the cost of two repos occasionally sharing a lane; the divider between
-groups is what keeps those legible. `TabBar` reads `lanes` from `useGitColors` itself, so `App` passes
-only the group key and the whole strip recolors with the theme. `WorkflowManager` colors each repo
-card off the same function, so a card and its tabs match.
+color across restarts, but hashing **alone** is not enough: with four repos in an eight-lane palette
+a collision is more likely than not, and two repos that hash to one bucket are then the same color in
+every theme — which is what the workflow manager's two columns put side by side, since it sorts repos
+by name and fills the columns by index parity, so cards 1 and 3 are stacked. So the hash is the
+_preference_, not the answer: `repoColor` remembers what it has handed out and gives a new repo the
+**free lane furthest in OKLab from every color already in use**, walking the palette from the hashed
+index so the first repo still lands on its hashed lane and ties break deterministically. Distance
+rather than mere inequality is the test because most palettes are hue-ordered, so the neighbouring
+lane is usually the near-duplicate (`nord`'s `#88c0d0`/`#8fbcbb`) that reads as the same color at a
+3 px border.
+
+**A palette can run out of separation before it runs out of lanes**, and picking the best of a bad
+set is still bad: `everforest` is mostly greens and the default `theme.json` is eight pastels of one
+blue-violet family, which bottomed out at 0.082 and 0.053 for four workspaces even under maximin. So
+when the winning lane scores below `laneSeparation`, snow leaves the palette rather than shipping two
+cards the eye reads as one — it takes that lane into OKLCH and searches hue rotations crossed with a
+±0.1 lightness shift, keeping the variant furthest from the colors in use. Rotating hue and lightness
+around the lane's own chroma is what keeps the invented color in the theme's register: a pastel stays
+a pastel, a muted lane stays muted, only the hue moves. Four workspaces now separate by ≥0.10 in every
+shipped theme (was 0.000 for a colliding pair), and twelve by ≥0.085.
+
+The memo is a module singleton keyed on the palette, which is what keeps the two surfaces agreeing:
+`TabBar` and `WorkflowManager` both call the one function and so read the one assignment, and a theme
+switch resets it wholesale. Only a repo that actually collides depends on which surface asked first,
+so a repo keeps its color across restarts in the ordinary case. `TabBar` reads `lanes` from
+`useGitColors` itself, so `App` passes only the group key and the whole strip recolors with the theme.
+`WorkflowManager` colors each repo card off the same function, so a card and its tabs match.
 
 The pane stack is deliberately rendered from **`mountedTabs`** — `tabs` sorted by `id`, an order
 reordering can never disturb — not from `tabs`. Keyed reconciliation moves a reordered child with
