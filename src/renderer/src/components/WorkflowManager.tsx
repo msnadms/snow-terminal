@@ -35,6 +35,7 @@ type WorkflowMenu = Targeted & { x: number; y: number }
 type Activity = {
   status?: SessionStatus
   title?: string
+  sessionId?: number
   agents: AgentSession[]
   summary: AgentSummary
 }
@@ -49,6 +50,7 @@ type WorkflowRow = {
 type OpenSession = {
   id: number
   dir?: string
+  directories: string[]
   label: string
   status?: SessionStatus
   title?: string
@@ -65,6 +67,7 @@ type RepoDrag = {
   target: string
   after: boolean
 }
+export type WorkflowReviewTarget = { cwd: string; branch: string }
 
 const narrowWorkspaceQuery = '(max-width: 1200px)'
 
@@ -74,6 +77,7 @@ interface WorkflowManagerProps {
   onSelectSession: (id: number) => void
   onCloseSession: (id: number) => void
   onOpenDiff: (cwd: string, branch: string) => void
+  onReviewAll: (targets: WorkflowReviewTarget[]) => void
   onCloseWorktree?: (dir: string) => void
   sessionStatuses: Record<string, SessionStatus>
   sessionTitles: Record<string, string>
@@ -156,6 +160,7 @@ function WorkflowManager({
   onSelectSession,
   onCloseSession,
   onOpenDiff,
+  onReviewAll,
   onCloseWorktree,
   sessionStatuses,
   sessionTitles,
@@ -327,7 +332,7 @@ function WorkflowManager({
   const indexedRows = useMemo(() => {
     type Indexed = {
       agents: AgentSession[]
-      tabSelected: { path: string; status: SessionStatus } | null
+      tabSelected: { path: string; status: SessionStatus; sessionId?: number } | null
       cost: number
     }
     const indexed = new Map<string, Indexed>()
@@ -341,6 +346,16 @@ function WorkflowManager({
     for (const session of nonaffiliatedSessions) {
       if (session.dir && !indexed.has(directoryKey(session.dir))) {
         indexed.set(directoryKey(session.dir), { agents: [], tabSelected: null, cost: 0 })
+      }
+    }
+
+    const sessionsByDirectory = new Map<string, OpenSession[]>()
+    for (const session of openSessions) {
+      for (const dir of session.directories) {
+        const key = directoryKey(dir)
+        const current = sessionsByDirectory.get(key) ?? []
+        if (!current.includes(session)) current.push(session)
+        sessionsByDirectory.set(key, current)
       }
     }
 
@@ -364,9 +379,11 @@ function WorkflowManager({
 
     const rank: Record<SessionStatus, number> = { attention: 2, busy: 1, idle: 0 }
     for (const [path, status] of Object.entries(sessionStatuses)) {
+      const candidates = sessionsByDirectory.get(directoryKey(path)) ?? []
+      const session = candidates.find((candidate) => candidate.status === status) ?? candidates[0]
       visitOwners(path, (row) => {
         if (!row.tabSelected || rank[status] > rank[row.tabSelected.status]) {
-          row.tabSelected = { path, status }
+          row.tabSelected = { path, status, sessionId: session?.id }
         }
       })
     }
@@ -387,6 +404,7 @@ function WorkflowManager({
           ? {
               status: row.tabSelected.status,
               title: row.tabSelected.status === 'idle' ? undefined : tabTitle,
+              sessionId: row.tabSelected.sessionId,
               agents: row.agents,
               summary
             }
@@ -396,9 +414,21 @@ function WorkflowManager({
           .map((session) => session.detail)
           .filter(Boolean)
           .join('\n')
+        const selectedState = summary.waiting ? 'attention' : summary.working ? 'busy' : undefined
+        const selectedSession = selectedState
+          ? openSessions.find((session) =>
+              row.agents.some(
+                (agent) =>
+                  agent.state === selectedState &&
+                  agent.terminalId != null &&
+                  session.terminalIds.includes(agent.terminalId)
+              )
+            )
+          : undefined
         activity = {
           status: summary.waiting ? 'attention' : 'busy',
           title: tabTitle || detail,
+          sessionId: selectedSession?.id,
           agents: row.agents,
           summary
         }
@@ -413,7 +443,8 @@ function WorkflowManager({
     sessionStatuses,
     sessionTitles,
     usage,
-    nonaffiliatedSessions
+    nonaffiliatedSessions,
+    openSessions
   ])
 
   const indexedFor = (dir: string): { activity: Activity; cost: number } =>
@@ -555,6 +586,40 @@ function WorkflowManager({
 
   const orderedRepos = orderRepos(overview?.repos ?? [], workspaceOrder)
 
+  const rowsFor = (repo: WorkflowRepo): WorkflowRow[] =>
+    repo.workflows
+      .map((entry, order) => {
+        const dir = openDir(repo, entry)
+        const indexed = dir ? indexedFor(dir) : { activity: emptyActivity, cost: 0 }
+        const { activity, cost } = indexed
+        return {
+          entry,
+          activity,
+          cost,
+          dir,
+          order,
+          signal: inboxSignal(
+            entry,
+            activity.summary,
+            activity.status === 'attention' && activity.summary.waiting === 0
+          )
+        }
+      })
+      .sort(
+        (left, right) =>
+          right.signal.tier - left.signal.tier || right.cost - left.cost || left.order - right.order
+      )
+
+  const reviewTargets = orderedRepos.flatMap((repo) =>
+    rowsFor(repo).flatMap(({ entry, dir, signal }) =>
+      dir &&
+      signal.slug === 'review' &&
+      ((entry.review?.changed ?? 0) > 0 || (entry.review?.ahead ?? 0) > 0)
+        ? [{ cwd: dir, branch: entry.branch }]
+        : []
+    )
+  )
+
   const saveRepoOrder = (next: string[]): void => {
     void onWorkspaceOrderChange(next).then((result) => {
       if (!result.error) return
@@ -659,19 +724,32 @@ function WorkflowManager({
                       />
                     )}
                     {signal.label && (
-                      <span
+                      <button
+                        type="button"
                         className={`wfm-inbox wfm-inbox-${signal.slug}`}
-                        title={signalTitle(signal, activity)}
+                        disabled={!session.dir}
+                        onClick={() => session.dir && onOpenDiff(session.dir, session.label)}
+                        title={`${signalTitle(signal, activity)}\nOpen ${session.label}'s diff`}
+                        aria-label={`Open ${session.label}'s diff: ${signal.label}`}
                       >
                         {signal.label}
-                      </span>
+                      </button>
                     )}
                   </span>
                 )}
                 <div className="wfm-row-main">
-                  <span className="wfm-branch" title={session.dir}>
+                  <button
+                    type="button"
+                    className="wfm-branch wfm-branch-link"
+                    onClick={() => onSelectSession(session.id)}
+                    title={
+                      session.dir
+                        ? `${session.dir}\nOpen ${session.label}`
+                        : `Open ${session.label}`
+                    }
+                  >
                     {session.label}
-                  </span>
+                  </button>
                   <span className="wfm-session-path" title={session.dir}>
                     {session.dir ?? 'Starting shell…'}
                   </span>
@@ -715,28 +793,7 @@ function WorkflowManager({
 
   const repoCard = (repo: WorkflowRepo): React.JSX.Element => {
     const registered = isRegistered(repo.workflows)
-    const rows: WorkflowRow[] = repo.workflows
-      .map((entry, order) => {
-        const dir = openDir(repo, entry)
-        const indexed = dir ? indexedFor(dir) : { activity: emptyActivity, cost: 0 }
-        const { activity, cost } = indexed
-        return {
-          entry,
-          activity,
-          cost,
-          dir,
-          order,
-          signal: inboxSignal(
-            entry,
-            activity.summary,
-            activity.status === 'attention' && activity.summary.waiting === 0
-          )
-        }
-      })
-      .sort(
-        (left, right) =>
-          right.signal.tier - left.signal.tier || right.cost - left.cost || left.order - right.order
-      )
+    const rows = rowsFor(repo)
     const needYou = rows.filter((row) => needsOperator(row.signal)).length
     const hasRowStatus = rows.some(
       ({ entry, activity, signal }) =>
@@ -829,12 +886,16 @@ function WorkflowManager({
                       />
                     )}
                     {signal.label ? (
-                      <span
+                      <button
+                        type="button"
                         className={`wfm-inbox wfm-inbox-${signal.slug}`}
-                        title={signalTitle(signal, activity)}
+                        disabled={!dir || entry.review?.changed === 0}
+                        onClick={() => dir && onOpenDiff(dir, entry.branch)}
+                        title={`${signalTitle(signal, activity)}\nOpen ${entry.branch}'s diff`}
+                        aria-label={`Open ${entry.branch}'s diff: ${signal.label}`}
                       >
                         {signal.label}
-                      </span>
+                      </button>
                     ) : (
                       state && (
                         <span className={`wfm-state wfm-state-${stateSlug(state)}`}>{state}</span>
@@ -846,18 +907,32 @@ function WorkflowManager({
                   <button
                     type="button"
                     className={`wfm-branch wfm-branch-link${entry.exists ? '' : ' wfm-branch-missing'}`}
-                    disabled={!dir || entry.review?.changed === 0}
-                    onClick={() => dir && onOpenDiff(dir, entry.branch)}
+                    disabled={activity.sessionId == null && (action.pending || repo.unreachable)}
+                    onClick={() =>
+                      activity.sessionId == null
+                        ? launch(repo, entry)
+                        : onSelectSession(activity.sessionId)
+                    }
                     title={
                       dir
                         ? entry.review
-                          ? reviewTitle(entry, entry.review)
-                          : `Open ${entry.branch}'s diff`
+                          ? `${reviewTitle(entry, entry.review)}\nOpen ${entry.branch}'s session`
+                          : `Open ${entry.branch}'s session`
                         : (entry.worktree ?? parkedTitle(entry))
                     }
                   >
                     {entry.branch}
                   </button>
+                  {!!entry.conflicted && (
+                    <span
+                      className="wfm-conflicts"
+                      title={`${entry.conflicted} file${entry.conflicted === 1 ? '' : 's'} also changed in another workspace`}
+                      aria-label={`${entry.conflicted} conflicted file${entry.conflicted === 1 ? '' : 's'}`}
+                    >
+                      <div className="wfm-nerd"> </div>
+                      {entry.conflicted}
+                    </span>
+                  )}
                   {title && (
                     <span className="wfm-activity" title={title}>
                       {title}
@@ -984,8 +1059,21 @@ function WorkflowManager({
   return (
     <div className="wfm" style={{ display: active ? 'block' : 'none' }}>
       <div className="wfm-title">
-        Workspaces
+        <span>Workspaces</span>
         {action.label && <span className="wfm-busy">{action.label}</span>}
+        <button
+          type="button"
+          className="wfm-review-all"
+          disabled={reviewTargets.length === 0}
+          onClick={() => onReviewAll(reviewTargets)}
+          title={
+            reviewTargets.length === 0
+              ? 'No workflows are ready to review'
+              : `Review ${reviewTargets.length} workflow${reviewTargets.length === 1 ? '' : 's'} in one tab`
+          }
+        >
+          Review all{reviewTargets.length > 0 ? ` (${reviewTargets.length})` : ''}
+        </button>
       </div>
       <div className="wfm-grid">{body()}</div>
       {workflowMenu && (

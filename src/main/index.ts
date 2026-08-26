@@ -123,10 +123,10 @@ app.whenReady().then(() => {
   // Watch ~/.claude/projects for Claude Code session logs to tally daily/weekly cost.
   registerUsageHandlers()
 
-  // Watch ~/.config/snow/agents for the status records `snow hooks install` makes Claude Code write.
+  // Watch ~/.config/snow/agents for the status records installed Claude Code/Codex hooks write.
   registerAgentHandlers()
 
-  // Keep an installed hook shim pointing at this copy of the app; never installs one.
+  // Refresh installed hooks and carry an existing Claude hook installation forward to Codex.
   refreshHooks()
   registerHooksHandlers()
 

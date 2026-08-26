@@ -19,7 +19,7 @@ export interface HooksResult {
 }
 
 export interface HooksState {
-  /** Whether Claude Code is on this machine at all; nothing is worth offering when it is not. */
+  /** Whether a supported agent is on this machine at all; nothing is worth offering otherwise. */
   available: boolean
   installed: boolean
   stashProtection: WorkflowStashProtection
@@ -30,6 +30,7 @@ export interface HooksState {
 interface HookHandler {
   type?: string
   command?: string
+  commandWindows?: string
 }
 
 interface HookGroup {
@@ -40,16 +41,38 @@ interface HookGroup {
 const marker = 'snow-agent-hook'
 const helperMarker = 'snow-workspace-stash'
 const scriptName = `${marker}.mjs`
-const hookEvents = [
+const claudeHookEvents = [
   'SessionStart',
   'UserPromptSubmit',
   'PreToolUse',
+  'PostToolUse',
   'Notification',
   'Stop',
   'StopFailure',
   'SubagentStop',
   'SessionEnd'
 ]
+const codexHookEvents = [
+  'SessionStart',
+  'UserPromptSubmit',
+  'PreToolUse',
+  'PermissionRequest',
+  'PostToolUse',
+  'SubagentStart',
+  'SubagentStop',
+  'Stop',
+  'SessionEnd'
+]
+
+type HookAgent = 'claude' | 'codex'
+
+interface HookTarget {
+  agent: HookAgent
+  label: string
+  directory: string
+  file: string
+  events: string[]
+}
 
 export function hooksDir(): string {
   return path.join(configDir(), 'hooks')
@@ -75,9 +98,28 @@ function helperShimFile(): string {
  * merely usual: inside double quotes bash still unescapes `\$` and `\\`, which a directory starting
  * with `$` or a UNC home would otherwise hit. Git Bash runs a `.cmd` addressed this way happily.
  */
-function shimCommand(): string {
+function shimCommand(agent: HookAgent): string {
   const file = shimFile()
-  return `"${process.platform === 'win32' ? file.split(path.sep).join('/') : file}"`
+  return `"${process.platform === 'win32' ? file.split(path.sep).join('/') : file}" ${agent}`
+}
+
+/**
+ * Codex runs Windows hooks through cmd.exe. A quoted path works in a terminal but can be
+ * reinterpreted by Codex's own outer command quoting and make every hook exit before the shim
+ * starts. Keep the command line itself quote-free and put the path-safe invocation in PowerShell's
+ * UTF-16LE encoded payload instead.
+ */
+function codexWindowsCommand(agent: HookAgent): string {
+  const file = shimFile().replaceAll("'", "''")
+  const payload = `& '${file}' '${agent}'; exit $LASTEXITCODE`
+  return [
+    'powershell.exe',
+    '-NoLogo',
+    '-NoProfile',
+    '-NonInteractive',
+    '-EncodedCommand',
+    Buffer.from(payload, 'utf16le').toString('base64')
+  ].join(' ')
 }
 
 function claudeDir(): string {
@@ -85,8 +127,43 @@ function claudeDir(): string {
   return configured && path.isAbsolute(configured) ? configured : path.join(os.homedir(), '.claude')
 }
 
-function settingsFile(): string {
+function claudeSettingsFile(): string {
   return path.join(claudeDir(), 'settings.json')
+}
+
+function codexDir(): string {
+  const configured = process.env.CODEX_HOME
+  return configured && path.isAbsolute(configured) ? configured : path.join(os.homedir(), '.codex')
+}
+
+function codexHooksFile(): string {
+  return path.join(codexDir(), 'hooks.json')
+}
+
+function hookTargets(): HookTarget[] {
+  return [
+    {
+      agent: 'claude',
+      label: 'Claude Code',
+      directory: claudeDir(),
+      file: claudeSettingsFile(),
+      events: claudeHookEvents
+    },
+    {
+      agent: 'codex',
+      label: 'Codex',
+      directory: codexDir(),
+      file: codexHooksFile(),
+      events: codexHookEvents
+    }
+  ]
+}
+
+/** Install into agents present on this machine; retain Claude as the no-agent fallback for the
+ * existing CLI behavior, where `snow hooks install` may prepare hooks before Claude's first run. */
+function installTargets(): HookTarget[] {
+  const available = hookTargets().filter((target) => fs.existsSync(target.directory))
+  return available.length > 0 ? available : [hookTargets()[0]]
 }
 
 /**
@@ -147,9 +224,12 @@ function writeRuntime(): void {
   }
 }
 
-function readSettings(): { settings: Record<string, unknown>; error: string | null } {
+function readSettings(target: HookTarget): {
+  settings: Record<string, unknown>
+  error: string | null
+} {
   try {
-    const raw = JSON.parse(fs.readFileSync(settingsFile(), 'utf8')) as unknown
+    const raw = JSON.parse(fs.readFileSync(target.file, 'utf8')) as unknown
     if (!raw || typeof raw !== 'object' || Array.isArray(raw))
       return { settings: {}, error: 'the file does not contain a JSON object' }
     return { settings: raw as Record<string, unknown>, error: null }
@@ -164,23 +244,38 @@ function isSnowHandler(handler: HookHandler): boolean {
   return typeof handler?.command === 'string' && handler.command.includes(marker)
 }
 
-function snowGroup(event: string, command: string): HookGroup {
+function snowGroup(event: string, agent: HookAgent): HookGroup {
+  const command = shimCommand(agent)
   return {
-    ...(event === 'PreToolUse' ? { matcher: '*' } : {}),
-    hooks: [{ type: 'command', command }]
+    ...(event === 'PreToolUse' || event === 'PostToolUse' ? { matcher: '*' } : {}),
+    hooks: [
+      {
+        type: 'command',
+        command,
+        // PostToolUse also refreshes status. Keep it ordered with Stop/SessionEnd so a late
+        // completion cannot restore `busy` after the turn has already ended.
+        ...(agent === 'codex' && process.platform === 'win32'
+          ? { commandWindows: codexWindowsCommand(agent) }
+          : {})
+      }
+    ]
   }
 }
 
 /**
  * The whole of what being installed means, expressed once: snow's own entries out, exactly one
  * group per supported event back in. `install` and `repairSettings` both reconcile to this, so
- * repair cannot drift into a weaker second installer - an event added to `hookEvents`, a changed
- * `PreToolUse` matcher, or a duplicated handler is fixed by the same pass either way.
+ * repair cannot drift into a weaker second installer - an event added to either product's set, a
+ * changed tool matcher, or a duplicated handler is fixed by the same pass either way.
  */
-function withSnowHooks(raw: unknown, command: string): Record<string, HookGroup[]> {
+function withSnowHooks(
+  raw: unknown,
+  agent: HookAgent,
+  events: string[]
+): Record<string, HookGroup[]> {
   const { hooks } = withoutSnow(raw)
-  for (const event of hookEvents) {
-    hooks[event] = [...(hooks[event] ?? []), snowGroup(event, command)]
+  for (const event of events) {
+    hooks[event] = [...(hooks[event] ?? []), snowGroup(event, agent)]
   }
   return hooks
 }
@@ -214,13 +309,13 @@ function withoutSnow(raw: unknown): { hooks: Record<string, HookGroup[]>; remove
   return { hooks, removed }
 }
 
-function writeSettings(settings: Record<string, unknown>): void {
-  fs.mkdirSync(claudeDir(), { recursive: true })
-  fs.writeFileSync(settingsFile(), `${JSON.stringify(settings, null, 2)}\n`)
+function writeSettings(target: HookTarget, settings: Record<string, unknown>): void {
+  fs.mkdirSync(target.directory, { recursive: true })
+  fs.writeFileSync(target.file, `${JSON.stringify(settings, null, 2)}\n`)
 }
 
 function failure(verb: string, error: string, detail = ''): HooksResult {
-  return { ok: false, message: `Could not ${verb} snow's Claude Code hooks`, detail, error }
+  return { ok: false, message: `Could not ${verb} snow's agent hooks`, detail, error }
 }
 
 function install(protection?: WorkflowStashProtection): HooksResult {
@@ -235,37 +330,45 @@ function install(protection?: WorkflowStashProtection): HooksResult {
     return failure('install', `Could not write ${collapseHome(hooksDir())}`, (err as Error).message)
   }
 
-  const { settings, error } = readSettings()
-  if (error)
+  const targets = installTargets()
+  const configs = targets.map((target) => ({ target, ...readSettings(target) }))
+  const unreadable = configs.find((config) => config.error)
+  if (unreadable) {
     return failure(
       'install',
-      `Could not read ${collapseHome(settingsFile())}`,
-      `${error}\n\nFix or move that file, then run: snow hooks install`
-    )
-
-  const hooks = withSnowHooks(settings.hooks, shimCommand())
-
-  try {
-    writeSettings({ ...settings, hooks })
-  } catch (err) {
-    return failure(
-      'install',
-      `Could not write ${collapseHome(settingsFile())}`,
-      (err as Error).message
+      `Could not read ${collapseHome(unreadable.target.file)}`,
+      `${unreadable.error}\n\nFix or move that file, then run: snow hooks install`
     )
   }
 
+  for (const { target, settings } of configs) {
+    const hooks = withSnowHooks(settings.hooks, target.agent, target.events)
+    try {
+      writeSettings(target, { ...settings, hooks })
+    } catch (err) {
+      return failure(
+        'install',
+        `Could not write ${collapseHome(target.file)}`,
+        (err as Error).message
+      )
+    }
+  }
+
+  const labels = targets.map((target) => target.label)
   return {
     ok: true,
-    message: 'Claude Code hooks installed',
+    message: `${labels.join(' and ')} hooks installed`,
     detail: [
-      'snow now reads live session status from Claude Code instead of inferring it from terminal output.',
+      `snow now reads live session status from ${labels.join(' and ')} instead of inferring it from terminal output.`,
       '',
       `Hook: ${collapseHome(shimFile())}`,
       `Marked-stash restore helper: ${collapseHome(helperShimFile())} restore`,
-      `Settings: ${collapseHome(settingsFile())}`,
+      ...targets.map((target) => `${target.label}: ${collapseHome(target.file)}`),
       '',
-      'Claude sessions that are already running keep their old settings until they restart.',
+      'Agent sessions that are already running keep their old settings until they restart.',
+      ...(targets.some((target) => target.agent === 'codex')
+        ? ['Codex requires new or changed hooks to be reviewed with /hooks before they run.']
+        : []),
       `Shared-stash protection: ${activeWorkflowStashProtection()} (change with: snow hooks protection warn|deny|off)`,
       'Take them out again with: snow hooks remove'
     ].join('\n'),
@@ -274,37 +377,54 @@ function install(protection?: WorkflowStashProtection): HooksResult {
 }
 
 function remove(): HooksResult {
-  const { settings, error } = readSettings()
-  if (error) return failure('remove', `Could not read ${collapseHome(settingsFile())}`, error)
+  const configs = hookTargets()
+    .filter((target) => fs.existsSync(target.file))
+    .map((target) => ({ target, ...readSettings(target) }))
+  const unreadable = configs.find((config) => config.error)
+  if (unreadable)
+    return failure(
+      'remove',
+      `Could not read ${collapseHome(unreadable.target.file)}`,
+      unreadable.error!
+    )
 
-  const { hooks, removed } = withoutSnow(settings.hooks)
+  let removed = 0
+  const changed: { target: HookTarget; settings: Record<string, unknown> }[] = []
+  for (const { target, settings } of configs) {
+    const result = withoutSnow(settings.hooks)
+    removed += result.removed
+    if (result.removed === 0) continue
+    const next = { ...settings }
+    if (Object.keys(result.hooks).length > 0) next.hooks = result.hooks
+    else delete next.hooks
+    changed.push({ target, settings: next })
+  }
+
   if (removed === 0)
     return {
       ok: true,
       message: 'No snow hooks were installed',
-      detail: `${collapseHome(settingsFile())} has nothing to remove.`,
+      detail: `${configs.map(({ target }) => collapseHome(target.file)).join(' and ') || 'Agent settings'} had nothing to remove.`,
       error: null
     }
 
-  const next = { ...settings }
-  if (Object.keys(hooks).length > 0) next.hooks = hooks
-  else delete next.hooks
-
-  try {
-    writeSettings(next)
-  } catch (err) {
-    return failure(
-      'remove',
-      `Could not write ${collapseHome(settingsFile())}`,
-      (err as Error).message
-    )
+  for (const { target, settings } of changed) {
+    try {
+      writeSettings(target, settings)
+    } catch (err) {
+      return failure(
+        'remove',
+        `Could not write ${collapseHome(target.file)}`,
+        (err as Error).message
+      )
+    }
   }
 
   return {
     ok: true,
-    message: 'Claude Code hooks removed',
+    message: 'Agent hooks removed',
     detail: [
-      `Took ${removed} hook ${removed === 1 ? 'entry' : 'entries'} out of ${collapseHome(settingsFile())}.`,
+      `Took ${removed} hook ${removed === 1 ? 'entry' : 'entries'} out of ${changed.map(({ target }) => collapseHome(target.file)).join(' and ')}.`,
       '',
       `${collapseHome(hooksDir())} was left alone; delete it by hand if you want it gone.`,
       'Session status falls back to what snow can infer from terminal output.'
@@ -314,14 +434,18 @@ function remove(): HooksResult {
 }
 
 export function hooksState(): HooksState {
-  const available = fs.existsSync(claudeDir())
-  const settings = collapseHome(settingsFile())
-  const { settings: parsed, error } = readSettings()
+  const targets = hookTargets().filter((target) => fs.existsSync(target.directory))
+  const configs = targets.map((target) => ({ target, ...readSettings(target) }))
+  const failed = configs.find((config) => config.error)
+  const available = targets.length > 0
+  const settings = targets.map((target) => collapseHome(target.file)).join(' · ')
   const stashProtection = activeWorkflowStashProtection()
-  if (error) return { available, installed: false, settings, stashProtection, error }
+  if (failed) return { available, installed: false, settings, stashProtection, error: failed.error }
   return {
     available,
-    installed: withoutSnow(parsed.hooks).removed > 0,
+    installed:
+      configs.length > 0 &&
+      configs.every(({ settings: parsed }) => withoutSnow(parsed.hooks).removed > 0),
     settings,
     stashProtection,
     error: null
@@ -329,9 +453,9 @@ export function hooksState(): HooksState {
 }
 
 const protectionDetail: Record<WorkflowStashProtection, string> = {
-  off: 'Claude Code will not warn about unqualified git stash commands in snow workspaces.',
-  deny: 'Claude Code will block unqualified git stash commands in snow workspaces.',
-  warn: 'Claude Code will ask before running an unqualified git stash command in a snow workspace.'
+  off: 'Agents will not warn about unqualified git stash commands in snow workspaces.',
+  deny: 'Agents will block unqualified git stash commands in snow workspaces.',
+  warn: 'Agents will warn before running an unqualified git stash command in a snow workspace.'
 }
 
 export function runHooks(action: string, protection?: string): HooksResult {
@@ -381,43 +505,59 @@ function isInstalled(raw: unknown): boolean {
 
 /**
  * Reconciles an already-installed hooks block back to what `install` would write. This is
- * maintenance of something the user asked for, not an install: it runs only when the shim is
- * already on disk, and `snow hooks remove` deliberately leaves that shim behind, so an entry in
- * settings.json is what has to prove the user still wants them. It exists because that entry is
- * the half of the install a shim refresh cannot reach - a stale command path written by an older
- * snow, or an event this version added, is only fixable from here.
+ * maintenance of something the user asked for, not a fresh install: an entry in either agent config
+ * has to prove the user still wants it. Those entries are the half of the install a shim refresh
+ * cannot reach - a stale command path written by an older snow, an event this version added, or
+ * another supported agent is only fixable from here.
  */
 function repairSettings(): void {
-  const { settings, error } = readSettings()
-  if (error) {
-    log('warn', 'hooks', 'settings unreadable, left alone', { error })
-    return
-  }
-  if (!isInstalled(settings.hooks)) return
+  const targets = hookTargets()
+  const configs = targets.map((target) => ({ target, ...readSettings(target) }))
+  const installed = configs.filter(({ settings }) => isInstalled(settings.hooks))
+  if (installed.length === 0) return
+  const installedForClaude = installed.some(({ target }) => target.agent === 'claude')
 
-  const command = shimCommand()
-  const hooks = withSnowHooks(settings.hooks, command)
-  if (JSON.stringify(hooks) === JSON.stringify(settings.hooks)) return
+  for (const { target, settings, error } of configs) {
+    // A Claude installation is explicit opt-in to Snow's agent integration. Carry that opt-in
+    // forward to Codex even when Codex has not created ~/.codex yet; writeSettings creates it.
+    if (!fs.existsSync(target.directory) && !(target.agent === 'codex' && installedForClaude))
+      continue
+    if (error) {
+      log('warn', 'hooks', 'settings unreadable, left alone', { path: target.file, error })
+      continue
+    }
+    const command = shimCommand(target.agent)
+    const hooks = withSnowHooks(settings.hooks, target.agent, target.events)
+    if (JSON.stringify(hooks) === JSON.stringify(settings.hooks)) continue
 
-  try {
-    writeSettings({ ...settings, hooks })
-    log('info', 'hooks', 'hook settings repaired', { command })
-  } catch (err) {
-    log('warn', 'hooks', 'repair failed', { error: (err as Error).message })
+    try {
+      writeSettings(target, { ...settings, hooks })
+      log('info', 'hooks', 'hook settings repaired', { agent: target.agent, command })
+    } catch (err) {
+      log('warn', 'hooks', 'repair failed', {
+        agent: target.agent,
+        error: (err as Error).message
+      })
+    }
   }
 }
 
 /**
- * The shim names a specific app binary, so an update would otherwise leave it dangling. It is only
- * ever refreshed once the user has installed it: snow creates neither this directory nor a hooks
- * entry in settings.json on its own.
+ * The shim names a specific app binary, so an update would otherwise leave it dangling. A hook
+ * entry, rather than the shim itself, proves the user installed Snow's integration. This also lets
+ * startup recover a missing runtime and migrate an existing Claude installation to Codex.
  */
 export function refreshHooks(): void {
-  if (!fs.existsSync(shimFile())) return
+  const installed = hookTargets().some((target) => {
+    if (!fs.existsSync(target.file)) return false
+    return isInstalled(readSettings(target).settings.hooks)
+  })
+  if (!installed) return
   try {
     writeRuntime()
   } catch (err) {
     log('warn', 'hooks', 'refresh failed', { error: (err as Error).message })
+    return
   }
   repairSettings()
 }

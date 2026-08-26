@@ -9,7 +9,7 @@ import HomePage from './components/HomePage'
 import ResizeHandle from './components/ResizeHandle'
 import PanelRestore from './components/PanelRestore'
 import Tour from './components/Tour'
-import WorkflowManager from './components/WorkflowManager'
+import WorkflowManager, { type WorkflowReviewTarget } from './components/WorkflowManager'
 import WorkingDiffView from './components/WorkingDiffView'
 import FailureDialog from './components/FailureDialog'
 import { basename, failureOf, isInside, normalizePath, shortHash, uniqueBy } from './format'
@@ -53,7 +53,15 @@ type Tab =
       bottomTerminalId: number
     }
   | { kind: 'commit'; id: number; cwd: string; hash: string }
-  | { kind: 'diff'; id: number; cwd: string; branch: string; focus?: string; focusKey: number }
+  | {
+      kind: 'diff'
+      id: number
+      cwd: string
+      branch: string
+      focus?: string
+      focusKey: number
+      review?: { targets: WorkflowReviewTarget[]; index: number }
+    }
   | { kind: 'browser'; id: number; url: string }
 
 type RepoEntry = { cwd: string; presetCwd?: string; presetName?: string }
@@ -464,7 +472,9 @@ function App(): React.JSX.Element {
         continue
       }
       if (tab.kind === 'diff') {
-        result[tab.id] = `${tab.branch} ✎`
+        result[tab.id] = tab.review
+          ? `Review ${tab.review.index + 1}/${tab.review.targets.length}`
+          : `${tab.branch} ✎`
         continue
       }
       if (tab.kind === 'browser') {
@@ -482,10 +492,15 @@ function App(): React.JSX.Element {
       tabs.flatMap((tab) => {
         if (tab.kind !== 'shell') return []
         const sessionPanes = panes[tab.id] ?? []
+        const directories = [
+          tabCwd(tab),
+          ...sessionPanes.map((pane) => pane.cwd ?? tab.cwd)
+        ].filter((dir): dir is string => !!dir)
         return [
           {
             id: tab.id,
             dir: tabCwd(tab),
+            directories,
             label: labels[tab.id] ?? `Session ${tab.id}`,
             status: tabStatuses[tab.id],
             title: titles[tab.id],
@@ -587,7 +602,7 @@ function App(): React.JSX.Element {
   }, [])
 
   const openDiff = useCallback((cwd: string, branch: string, file?: string): void => {
-    const existing = tabsRef.current.find((t) => t.kind === 'diff' && t.cwd === cwd)
+    const existing = tabsRef.current.find((t) => t.kind === 'diff' && !t.review && t.cwd === cwd)
     if (existing) {
       setTabs((prev) =>
         prev.map((t) =>
@@ -602,6 +617,65 @@ function App(): React.JSX.Element {
     const id = nextIdRef.current++
     setTabs((prev) => [...prev, { kind: 'diff', id, cwd, branch, focus: file, focusKey: 0 }])
     setActiveId(id)
+  }, [])
+
+  const openReview = useCallback((targets: WorkflowReviewTarget[]): void => {
+    if (targets.length === 0) return
+    const current = targets[0]
+    const existing = tabsRef.current.find((tab) => tab.kind === 'diff' && tab.review)
+    if (existing) {
+      setTabs((prev) =>
+        prev.map((tab) =>
+          tab.id === existing.id && tab.kind === 'diff'
+            ? {
+                ...tab,
+                cwd: current.cwd,
+                branch: current.branch,
+                focus: undefined,
+                focusKey: tab.focusKey + 1,
+                review: { targets, index: 0 }
+              }
+            : tab
+        )
+      )
+      setActiveId(existing.id)
+      return
+    }
+    const id = nextIdRef.current++
+    setTabs((prev) => [
+      ...prev,
+      {
+        kind: 'diff',
+        id,
+        cwd: current.cwd,
+        branch: current.branch,
+        focusKey: 0,
+        review: { targets, index: 0 }
+      }
+    ])
+    setActiveId(id)
+  }, [])
+
+  const moveReview = useCallback((id: number, offset: -1 | 1): void => {
+    setTabs((prev) =>
+      prev.map((tab) => {
+        if (tab.id !== id || tab.kind !== 'diff' || !tab.review) return tab
+        const index = Math.max(
+          0,
+          Math.min(tab.review.targets.length - 1, tab.review.index + offset)
+        )
+        if (index === tab.review.index) return tab
+        const current = tab.review.targets[index]
+        return {
+          ...tab,
+          cwd: current.cwd,
+          branch: current.branch,
+          focus: undefined,
+          focusKey: tab.focusKey + 1,
+          review: { ...tab.review, index }
+        }
+      })
+    )
   }, [])
 
   const openBrowser = useCallback((url = 'https://www.google.com'): void => {
@@ -964,6 +1038,7 @@ function App(): React.JSX.Element {
               onSelectSession={setActiveId}
               onCloseSession={closeSession}
               onOpenDiff={openDiff}
+              onReviewAll={openReview}
               onCloseWorktree={closeWorktree}
               sessionStatuses={sessionDirStatuses}
               sessionTitles={sessionDirTitles}
@@ -986,11 +1061,21 @@ function App(): React.JSX.Element {
               if (tab.kind === 'diff')
                 return (
                   <WorkingDiffView
-                    key={tab.id}
+                    key={`${tab.id}:${tab.cwd}`}
                     active={activeId === tab.id}
                     cwd={tab.cwd}
                     focus={tab.focus}
                     focusKey={tab.focusKey}
+                    review={
+                      tab.review
+                        ? {
+                            index: tab.review.index,
+                            total: tab.review.targets.length,
+                            onPrevious: () => moveReview(tab.id, -1),
+                            onNext: () => moveReview(tab.id, 1)
+                          }
+                        : undefined
+                    }
                     onOpenCommit={openCommit}
                   />
                 )

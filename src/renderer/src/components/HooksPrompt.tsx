@@ -51,12 +51,12 @@ function HooksPrompt({ prompted }: HooksPromptProps): React.JSX.Element | null {
 
   return (
     <div className="home-hooks">
-      <div className="home-hooks-title">Let Claude Code report its own status?</div>
+      <div className="home-hooks-title">Let your agents report their own status?</div>
       <div className="home-hooks-detail">
         {'snow currently guesses whether a pane is busy from terminal output, which cannot see a '}
         {'session waiting on a permission prompt. Installing hooks adds an entry to '}
         <span className="home-hooks-path">{state.settings}</span>
-        {' that reports it directly. Undo any time with '}
+        {' that let Claude Code and Codex report it directly. Undo any time with '}
         <span className="home-hooks-path">snow hooks remove</span>.
         {' Shared-stash protection starts in deny mode; change it with '}
         <span className="home-hooks-path">snow hooks protection deny|warn|off</span>

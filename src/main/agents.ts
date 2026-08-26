@@ -2,8 +2,10 @@ import { ipcMain } from 'electron'
 import { randomUUID } from 'crypto'
 import fs from 'fs'
 import path from 'path'
-import { broadcast, configDir } from './config'
+import { broadcast, configDir, expandHome, samePath } from './config'
+import { mainWorktreeRoot, worktreeMap } from './git'
 import { log } from './log'
+import { addRecord, recordsFor, workflowsPath } from './registry'
 
 export type AgentState = 'busy' | 'attention' | 'idle'
 
@@ -115,6 +117,102 @@ const live = new Map<string, LiveTerminal>()
  */
 const reported = new Set<string>()
 
+/**
+ * Agent-created worktrees arrive outside Snow's workflow handlers. The activity-directory contract
+ * is the common point shared by Claude Code and any other dispatcher that reports sessions to Snow,
+ * so use each reported cwd to discover the repository's linked worktrees and adopt them. Scanning
+ * the whole repository (rather than only the reporting session's directory) matters for an
+ * orchestrator that stays in the primary checkout while creating worktrees for its teammates.
+ *
+ * Keep reconciliation serial and coalesced so bursts of hook events cannot run Git scans and
+ * registry updates out of order or grow an unbounded queue behind the active pass.
+ */
+let workflowRegistration: Promise<void> | null = null
+let pendingWorkflowRegistration: AgentSession[] | null = null
+let acceptingWorkflowRegistrations = false
+
+export async function registerAgentWorktrees(sessions: AgentSession[]): Promise<void> {
+  const cwds = sessions
+    .map((session) => session.cwd.trim())
+    .filter((cwd, index, all) => cwd && all.findIndex((known) => samePath(known, cwd)) === index)
+  const repos: string[] = []
+
+  for (const cwd of cwds) {
+    const repo = await mainWorktreeRoot(cwd)
+    if (!repo || repos.some((known) => samePath(known, repo))) continue
+    repos.push(repo)
+  }
+
+  for (const repo of repos) {
+    const linked = await worktreeMap(repo)
+
+    const { records, error } = recordsFor(repo)
+    if (error) {
+      log('warn', 'agents', 'workflow registration skipped', {
+        repo,
+        path: workflowsPath(),
+        error
+      })
+      continue
+    }
+
+    for (const [branch, directory] of linked) {
+      // The primary checkout is not evidence of a workflow: an ordinary Claude/Codex session on
+      // main must not opt that branch into Snow's parking behavior. A secondary worktree is.
+      if (samePath(directory, repo)) continue
+      const existing = records.find((record) => record.branch === branch)
+      if (existing?.worktree && samePath(expandHome(existing.worktree), directory)) continue
+
+      const failed = addRecord(repo, branch, directory)
+      if (failed) {
+        log('warn', 'agents', 'workflow registration failed', {
+          repo,
+          branch,
+          worktree: directory,
+          path: workflowsPath(),
+          error: failed
+        })
+        continue
+      }
+      log('info', 'agents', 'worktree registered as workflow', {
+        repo,
+        branch,
+        worktree: directory
+      })
+    }
+  }
+}
+
+function scheduleWorkflowRegistration(sessions: AgentSession[]): void {
+  if (!acceptingWorkflowRegistrations) return
+  // An empty latest read cancels a trailing scan that has not started yet.
+  if (sessions.length === 0) {
+    pendingWorkflowRegistration = null
+    return
+  }
+  // Snapshot this read: later cleanup mutates files on disk, not these values.
+  pendingWorkflowRegistration = sessions.map((session) => ({ ...session }))
+  if (workflowRegistration) return
+
+  workflowRegistration = (async () => {
+    try {
+      // Reads arriving during a pass replace the trailing snapshot. That retains the post-tool
+      // rescan needed to see a newly created worktree without queueing every intermediate event.
+      while (acceptingWorkflowRegistrations && pendingWorkflowRegistration) {
+        const snapshot = pendingWorkflowRegistration
+        pendingWorkflowRegistration = null
+        try {
+          await registerAgentWorktrees(snapshot)
+        } catch (error) {
+          log('warn', 'agents', 'workflow discovery failed', { error: String(error) })
+        }
+      }
+    } finally {
+      workflowRegistration = null
+    }
+  })()
+}
+
 function announce(token: string): void {
   if (reported.has(token)) scheduleBroadcast()
 }
@@ -176,6 +274,7 @@ export function readAgents(): AgentsResult {
     }
     sessions.push(session)
   }
+  scheduleWorkflowRegistration(sessions)
   return { sessions, error: null }
 }
 
@@ -211,6 +310,8 @@ function watchAgents(): void {
 }
 
 export function disposeAgentWatcher(): void {
+  acceptingWorkflowRegistrations = false
+  pendingWorkflowRegistration = null
   watcher?.close()
   watcher = null
   if (timer) clearTimeout(timer)
@@ -240,6 +341,7 @@ export function disposeAgentWatcher(): void {
 }
 
 export function registerAgentHandlers(): void {
+  acceptingWorkflowRegistrations = true
   watchAgents()
   ipcMain.handle('agents:get', (): AgentsResult => readAgents())
 }

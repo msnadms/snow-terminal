@@ -7,6 +7,8 @@ const stateByEvent = {
   SessionStart: 'idle',
   UserPromptSubmit: 'busy',
   PreToolUse: 'busy',
+  PostToolUse: 'busy',
+  SubagentStart: 'busy',
   SubagentStop: 'busy',
   Stop: 'idle',
   StopFailure: 'idle'
@@ -96,7 +98,7 @@ function toolTarget(input) {
 
 function detailFor(event) {
   if (event.hook_event_name === 'Notification') return clip(event.message, 160)
-  if (event.hook_event_name !== 'PreToolUse') return ''
+  if (!['PreToolUse', 'PermissionRequest', 'PostToolUse'].includes(event.hook_event_name)) return ''
   const tool = clip(event.tool_name, 40) || 'Tool'
   const target = toolTarget(event.tool_input)
   return target ? `${tool} ${target}` : tool
@@ -110,6 +112,7 @@ function detailFor(event) {
  * but this list does not name is a notice it has classified as something else, and is believed.
  */
 function stateFor(event, previous) {
+  if (event.hook_event_name === 'PermissionRequest') return 'attention'
   if (event.hook_event_name === 'Notification') {
     const type = event.notification_type
     if (typeof type !== 'string' || !type) return 'attention'
@@ -555,6 +558,10 @@ function decide(permissionDecision, reason) {
   )
 }
 
+function warn(reason) {
+  fs.writeSync(1, JSON.stringify({ systemMessage: reason }))
+}
+
 async function readStdin() {
   const chunks = []
   for await (const chunk of process.stdin) chunks.push(chunk)
@@ -627,14 +634,20 @@ async function main() {
     detail,
     ...(promptId ? { promptId } : {}),
     ...(turnEnded ? { turnEnded: true } : {}),
-    agent: 'claude',
+    agent: process.argv[2] === 'codex' ? 'codex' : 'claude',
     updated: Date.now()
   })
 
   // Anything that throws on the way here leaves the command allowed: a registry snow cannot read
   // must never block the user's git.
   if (event.hook_event_name !== 'PreToolUse') return
-  if (protection !== 'off') decide(protection === 'deny' ? 'deny' : 'ask', refusal)
+  if (protection === 'deny') decide('deny', refusal)
+  else if (protection === 'warn') {
+    // Codex deliberately does not support `permissionDecision: "ask"` on PreToolUse. Its supported
+    // non-blocking equivalent is a visible system warning; Claude keeps its interactive prompt.
+    if (process.argv[2] === 'codex') warn(refusal)
+    else decide('ask', refusal)
+  }
 }
 
 // A hook that fails or hangs degrades the session it is attached to, and a status badge is not
