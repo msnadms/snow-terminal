@@ -10,6 +10,7 @@ import {
   isStaged,
   markerPrefix,
   newestStash,
+  parkedFilePaths,
   parkedFiles,
   stashEntries,
   switchBranch,
@@ -56,6 +57,8 @@ export interface WorkflowEntry {
   worktreeExists?: boolean
   worktreeLinked?: boolean
   review?: WorkflowReview
+  /** Files also changed by at least one other workflow in this repository, from detail reads. */
+  conflicted?: number
 }
 
 export interface WorkflowList {
@@ -165,20 +168,70 @@ async function aheadOf(directory: string, bases: string[]): Promise<number | nul
  * set (`--no-track`), so review distance is measured against the default branch instead - the remote
  * ref first, then the local one for a repo with no remote.
  */
-async function reviewOf(directory: string, bases: string[]): Promise<WorkflowReview | null> {
+interface WorkflowReviewState {
+  review: WorkflowReview
+  files: string[]
+}
+
+interface DescribedWorkflow extends WorkflowEntry {
+  changedFiles: string[]
+}
+
+export function nameStatusPaths(raw: string): string[] {
+  const fields = raw.split('\0')
+  const paths: string[] = []
+  for (let index = 0; index < fields.length;) {
+    const status = fields[index++]
+    if (!status) continue
+    const first = fields[index++]
+    if (first) paths.push(first)
+    if (status[0] === 'R' || status[0] === 'C') {
+      const second = fields[index++]
+      if (second) paths.push(second)
+    }
+  }
+  return paths
+}
+
+async function committedPaths(directory: string, bases: string[]): Promise<string[]> {
+  for (const base of bases) {
+    try {
+      const raw = await gitFor(directory).raw([
+        'diff',
+        '--name-status',
+        '-z',
+        '-M',
+        `${base}...HEAD`
+      ])
+      return nameStatusPaths(raw)
+    } catch {
+      continue
+    }
+  }
+  return []
+}
+
+async function reviewOf(directory: string, bases: string[]): Promise<WorkflowReviewState | null> {
   try {
     const status = await gitFor(directory).status()
+    const committed = await committedPaths(directory, bases)
     return {
-      changed: status.files.length,
-      staged: status.files.filter((file) => isStaged(file.index)).length,
-      ahead: await aheadOf(directory, bases)
+      review: {
+        changed: status.files.length,
+        staged: status.files.filter((file) => isStaged(file.index)).length,
+        ahead: await aheadOf(directory, bases)
+      },
+      files: [
+        ...committed,
+        ...status.files.flatMap((file) => [file.from, file.path].filter(Boolean) as string[])
+      ]
     }
   } catch {
     return null
   }
 }
 
-async function describeWorkflows(
+export async function describeWorkflows(
   cwd: string | undefined,
   repo: string | null,
   records: WorkflowRecord[],
@@ -197,8 +250,8 @@ async function describeWorkflows(
 
   const current = summary.current || null
   const bases = target ? [`${target.remote}/${target.branch}`, target.branch] : []
-  const workflows = await Promise.all(
-    records.map(async ({ branch, worktree }): Promise<WorkflowEntry> => {
+  const described = await Promise.all(
+    records.map(async ({ branch, worktree }): Promise<DescribedWorkflow> => {
       const entry = newestStash(entries, branch)
       const absoluteWorktree = worktree ? expandHome(worktree) : undefined
       const worktreeExists = absoluteWorktree
@@ -217,13 +270,19 @@ async function describeWorkflows(
           : branch === current
             ? (repo ?? cwd ?? null)
             : null
+      const [review, parkedPaths] = await Promise.all([
+        detail && reviewDir ? reviewOf(reviewDir, bases) : null,
+        detail && entry ? parkedFilePaths(cwd, entry.selector) : null
+      ])
       return {
         branch,
         current: branch === current,
         exists: summary.all.includes(branch),
         parked: entry
           ? {
-              files: await parkedFiles(cwd, entry.selector),
+              files: detail
+                ? (parkedPaths?.length ?? null)
+                : await parkedFiles(cwd, entry.selector),
               date: entry.date,
               count: entries.filter((candidate) => candidate.branch === branch).length
             }
@@ -231,10 +290,31 @@ async function describeWorkflows(
         worktree: absoluteWorktree,
         worktreeExists,
         worktreeLinked,
-        review: detail && reviewDir ? ((await reviewOf(reviewDir, bases)) ?? undefined) : undefined
+        review: review?.review,
+        changedFiles: [...(review?.files ?? []), ...(parkedPaths ?? [])]
       }
     })
   )
+
+  const owners = new Map<string, Set<number>>()
+  if (detail) {
+    described.forEach((entry, index) => {
+      for (const file of new Set(entry.changedFiles)) {
+        const current = owners.get(file) ?? new Set<number>()
+        current.add(index)
+        owners.set(file, current)
+      }
+    })
+  }
+  const workflows: WorkflowEntry[] = described.map(({ changedFiles, ...entry }) => ({
+    ...entry,
+    ...(detail
+      ? {
+          conflicted: [...new Set(changedFiles)].filter((file) => (owners.get(file)?.size ?? 0) > 1)
+            .length
+        }
+      : {})
+  }))
 
   return { repo, current, defaultBranch: target?.branch ?? null, workflows, error }
 }
@@ -514,7 +594,9 @@ export function registerWorkflowHandlers(): void {
             parked = true
           }
           // Removal deletes the directory whole, ignored files included, with or without --force;
-          // the renderer confirms that. --force covers what the stash above could not take.
+          // the renderer confirms that. The first --force covers what the stash above could not
+          // take. The second is required for explicitly locked worktrees (Claude Code creates
+          // these); the same confirmation also covers overriding that advisory lock.
           //
           // Run from the main worktree: invoking this from the target worktree itself also keeps
           // that directory as Git's current working directory, which prevents its removal on Windows.
@@ -523,12 +605,12 @@ export function registerWorkflowHandlers(): void {
           // part of stopping a workflow and it is only needed on Windows, where an open shell holds
           // the directory - so it is worth finding out whether removal needs it before paying it.
           try {
-            await gitFor(repo).raw(['worktree', 'remove', '--force', directory])
+            await gitFor(repo).raw(['worktree', 'remove', '--force', '--force', directory])
           } catch (first) {
             if (!(await stillLinked(repo, name, directory))) throw first
             await closePtysInDirectory(directory)
             terminalsClosed = true
-            await gitFor(repo).raw(['worktree', 'remove', '--force', directory])
+            await gitFor(repo).raw(['worktree', 'remove', '--force', '--force', directory])
           }
           if (samePath(path.dirname(directory), worktreeContainer(repo)))
             await fs.promises.rmdir(worktreeContainer(repo)).catch(() => {})

@@ -11,6 +11,7 @@ import type {
   GitLog,
   GitPullRequestResult,
   GitRepo,
+  GitReviewDiff,
   GitStatus,
   GitSyncDefaultResult,
   GitSyncResult,
@@ -135,6 +136,7 @@ const git = {
   show: (cwd: string | undefined, hash: string): Promise<GitCommitDetail> =>
     ipcRenderer.invoke('git:show', cwd, hash),
   diff: (cwd?: string): Promise<GitWorkingDiff> => ipcRenderer.invoke('git:diff', cwd),
+  reviewDiff: (cwd?: string): Promise<GitReviewDiff> => ipcRenderer.invoke('git:reviewDiff', cwd),
   status: (cwd?: string): Promise<GitStatus> => ipcRenderer.invoke('git:status', cwd),
   branches: (cwd?: string): Promise<GitBranches> => ipcRenderer.invoke('git:branches', cwd),
   defaultBranch: (cwd?: string): Promise<string | null> =>

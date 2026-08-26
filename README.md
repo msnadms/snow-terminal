@@ -26,13 +26,18 @@ next to the code they touch.
   Parked work lives in git's own stash list and is never dropped. A **workspace
   manager** tab lists every registered branch across every repo, each openable
   in its own git worktree. Opening a workspace applies its matching preset's
-  startup command; starting an additional agent is a separate action, so Snow
-  supplies Git context while Claude Code, Codex, or another dispatcher owns
-  task assignment.
-- **Agent activity** - Snow can read agent activity published by Claude Code
-  hooks or another tool into its local activity directory. It surfaces agents
+  startup command. Its **Review all** action walks every review-ready workflow
+  in one tab with previous/next controls, showing each branch's cumulative
+  committed and working changes from the remote default branch. Starting an
+  additional agent is a separate action, so Snow supplies Git context while
+  Claude Code, Codex, or another dispatcher owns task assignment.
+- **Agent activity** - Snow can read agent activity published by Claude Code,
+  Codex hooks, or another tool into its local activity directory. It surfaces
+  agents
   by workspace, attention state, activity detail, cost, and Git review state;
-  it never dispatches or declares agent tasks complete.
+  it never dispatches or declares agent tasks complete. Linked worktrees
+  created by a reporting agent or orchestrator are automatically registered as
+  Snow workspaces.
 - **Repo tab groups** - tabs are grouped and colored by the repo (or worktree)
   they belong to, so a linked worktree's session sits next to the repo it came
   from instead of scattered across the tab strip.
@@ -115,11 +120,15 @@ edit:
   (the filename is retained for compatibility).
 - `snow.log` - a rolling log of main-process and IPC activity.
 
-When Claude Code activity hooks are installed, `.snowconfig` can set
+When Claude Code or Codex activity hooks are installed, `.snowconfig` can set
 `workflowStashProtection` to `deny` (default), `warn`, or `off` for raw
-`git stash` commands inside a Snow worktree. `warn` asks for confirmation;
-change it with
+`git stash` commands inside a Snow worktree. `warn` asks for confirmation in
+Claude Code and surfaces a non-blocking warning in Codex; change it with
 `snow hooks protection <warn|deny|off>`.
+
+If Snow's hooks are already installed for Claude Code, the next Snow startup
+also creates and reconciles Codex's hook configuration automatically. Codex
+still requires new or changed hook definitions to be reviewed with `/hooks`.
 
 In deny mode, agents can inspect stashes but cannot run raw restore or write
 commands. Snow's denial supplies the path to its `snow-workspace-stash restore`

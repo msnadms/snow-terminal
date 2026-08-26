@@ -616,6 +616,29 @@ body {
   font-size: 11px;
 }
 
+.wfm-review-all {
+  margin-left: auto;
+  padding: 4px 10px;
+  font: inherit;
+  color: var(--ui-accent, #a6dcf0);
+  background: transparent;
+  border: 1px solid var(--ui-border-hover, #45475a);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.wfm-review-all:hover:not(:disabled) {
+  color: var(--ui-text, #cdd6f4);
+  border-color: var(--ui-accent, #a6dcf0);
+}
+
+.wfm-review-all:disabled {
+  color: var(--ui-muted-text, #a6adc8);
+  cursor: default;
+  opacity: 0.5;
+}
+
 .wfm-empty {
   padding: 8px 2px;
   color: var(--ui-muted-text, #a6adc8);
@@ -863,11 +886,32 @@ body {
 .wfm-repo-inbox {
   flex: 0 0 auto;
   padding: 1px 6px;
+  font-family: inherit;
   font-size: 11px;
   line-height: 16px;
   border: 1px solid var(--ui-border, #313244);
   border-radius: 9px;
+  background: transparent;
   white-space: nowrap;
+}
+
+button.wfm-inbox {
+  margin: 0;
+  cursor: pointer;
+}
+
+button.wfm-inbox:hover {
+  border-color: currentColor;
+}
+
+button.wfm-inbox:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+button.wfm-inbox:focus-visible {
+  outline: 1px solid var(--ui-accent, #a6dcf0);
+  outline-offset: 1px;
 }
 
 .wfm-inbox-input,
@@ -913,6 +957,22 @@ body {
   color: var(--ui-muted-text, #a6adc8);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+
+.wfm-conflicts {
+  flex: 0 0 auto;
+  color: var(--ui-warning, #f9e2af);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+}
+
+.wfm-nerd {
+  font-size: 20px;
 }
 
 .wfm-parked {
@@ -2754,6 +2814,48 @@ body.resizing-y * {
 
 .commit-tools-row > :first-child {
   border-bottom-left-radius: 4px;
+}
+
+.review-navigation {
+  display: flex;
+  align-items: stretch;
+  color: var(--git-strong-text, #e4eefb);
+  background: var(--git-bg, #171c2b);
+  border: 1px solid var(--git-button-border, #2a3852);
+  border-top: none;
+  border-right: none;
+}
+
+.review-navigation-button {
+  width: 32px;
+  padding: 5px 8px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.review-navigation-button:hover:not(:disabled) {
+  color: var(--git-accent, #a6dcf0);
+}
+
+.review-navigation-button:disabled {
+  color: var(--git-muted, #5d6f8f);
+  cursor: default;
+}
+
+.review-navigation-position {
+  display: flex;
+  min-width: 54px;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 6px;
+  color: var(--git-muted, #5d6f8f);
+  border-right: 1px solid var(--git-button-border, #2a3852);
+  border-left: 1px solid var(--git-button-border, #2a3852);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .commit-totop-button {

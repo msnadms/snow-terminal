@@ -77,6 +77,10 @@ export interface GitWorkingDiff {
   truncated: boolean
 }
 
+export interface GitReviewDiff extends GitWorkingDiff {
+  target: string
+}
+
 export interface GitCommitResult {
   ok: boolean
   error?: string
@@ -196,6 +200,64 @@ const maxSourceChars = 400_000
 const emptyTree = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 
 let scratchIndexCount = 0
+
+async function workingTreeDiff(
+  cwd?: string,
+  baseOverride?: string,
+  includeStaging = true
+): Promise<GitWorkingDiff> {
+  const git = gitFor(cwd)
+  const root = (await worktreeRoot(cwd)) ?? cwd ?? os.homedir()
+  const [branch, head] = await Promise.all([
+    git
+      .raw(['rev-parse', '--abbrev-ref', 'HEAD'])
+      .then((name) => name.trim())
+      .catch(() => ''),
+    git
+      .raw(['rev-parse', '--verify', '--quiet', 'HEAD'])
+      .then((sha) => sha.trim())
+      .catch(() => '')
+  ])
+
+  const base = (baseOverride ?? head) || emptyTree
+  const indexFile = path.join(os.tmpdir(), `snow-diff-${process.pid}-${++scratchIndexCount}`)
+  const scratch = simpleGit(root, gitOptions)
+    .env('GIT_OPTIONAL_LOCKS', '0')
+    .env('GIT_INDEX_FILE', indexFile)
+  const stagedPaths = includeStaging
+    ? git
+        .raw(['diff', '--cached', '--name-only', '-z', base])
+        .then((out) => new Set(out.split('\0').filter(Boolean)))
+        .catch(() => new Set<string>())
+    : Promise.resolve(new Set<string>())
+
+  try {
+    await scratch.raw(['read-tree', base])
+    await scratch.raw(['add', '-A', '-N'])
+
+    const range = ['diff', base, '-M']
+    const [numstat, raw, staged] = await Promise.all([
+      scratch.raw([...range, '--numstat', '-z']),
+      scratch.raw([...range, '--patch', '--no-color']),
+      stagedPaths
+    ])
+    const { patch, truncated } = capPatch(raw)
+    const files = parseNumstat(numstat)
+    if (includeStaging) {
+      for (const file of files) file.staged = staged.has(file.path)
+    }
+
+    return {
+      branch: branch && branch !== 'HEAD' ? branch : null,
+      base,
+      files,
+      patch,
+      truncated
+    }
+  } finally {
+    await fs.promises.rm(indexFile, { force: true })
+  }
+}
 
 function capPatch(patch: string): { patch: string; truncated: boolean } {
   if (patch.length <= maxPatchChars) return { patch, truncated: false }
@@ -722,14 +784,38 @@ export async function defaultBranch(
     }
   }
 
+  const resolves = async (ref: string): Promise<boolean> => {
+    try {
+      return !!(await git.raw(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).trim()
+    } catch {
+      return false
+    }
+  }
+
+  let symbolic = ''
   try {
     const ref = (await git.raw(['symbolic-ref', '--short', `refs/remotes/${remote}/HEAD`])).trim()
     const prefix = `${remote}/`
-    const branch = ref.startsWith(prefix) ? ref.slice(prefix.length) : ref
-    return branch ? { remote, branch } : null
+    symbolic = ref.startsWith(prefix) ? ref.slice(prefix.length) : ref
   } catch {
-    return null
+    /* fall through to named candidates */
   }
+  if (symbolic && (await resolves(`refs/remotes/${remote}/${symbolic}`)))
+    return { remote, branch: symbolic }
+
+  // A remote can be usable without a cached remote/HEAD symbolic ref (for example after a local
+  // clone or when `set-head --auto` has never run). Prefer the configured initial branch, then
+  // the two conventional names, but only return a branch whose remote-tracking ref resolves:
+  // callers rely on this result being safe to spell as `<remote>/<branch>`.
+  const configured = await git
+    .raw(['config', '--get', 'init.defaultBranch'])
+    .then((branch) => branch.trim())
+    .catch(() => '')
+  const candidates = [...new Set([configured, 'main', 'master'].filter(Boolean))]
+  for (const branch of candidates) {
+    if (await resolves(`refs/remotes/${remote}/${branch}`)) return { remote, branch }
+  }
+  return null
 }
 
 const scpLike = /^(?:[^@/]+@)?([^:/]+):(.+)$/
@@ -856,24 +942,32 @@ export function newestStash(entries: StashEntry[], branch: string): StashEntry |
   return entries.find((entry) => entry.branch === branch) ?? null
 }
 
-async function countLines(cwd: string | undefined, args: string[]): Promise<number | null> {
+async function readNullPaths(cwd: string | undefined, args: string[]): Promise<string[] | null> {
   try {
     const raw = await gitFor(cwd).raw(args)
-    return raw.split('\n').filter((line) => line.trim()).length
+    return raw.split('\0').filter((entry) => entry.length > 0)
   } catch {
     return null
   }
+}
+
+export async function parkedFilePaths(
+  cwd: string | undefined,
+  selector: string
+): Promise<string[] | null> {
+  const [tracked, untracked] = await Promise.all([
+    readNullPaths(cwd, ['stash', 'show', '--name-only', '-z', selector]),
+    readNullPaths(cwd, ['ls-tree', '-r', '--name-only', '-z', `${selector}^3`])
+  ])
+  return tracked === null ? null : [...tracked, ...(untracked ?? [])]
 }
 
 export async function parkedFiles(
   cwd: string | undefined,
   selector: string
 ): Promise<number | null> {
-  const [tracked, untracked] = await Promise.all([
-    countLines(cwd, ['stash', 'show', '--name-only', selector]),
-    countLines(cwd, ['ls-tree', '-r', '--name-only', `${selector}^3`])
-  ])
-  return tracked === null ? null : tracked + (untracked ?? 0)
+  const paths = await parkedFilePaths(cwd, selector)
+  return paths?.length ?? null
 }
 
 async function registryFor(cwd?: string): Promise<{ parkable: string[]; owner: string | null }> {
@@ -1345,53 +1439,29 @@ export function registerGitHandlers(): void {
   )
 
   ipcMain.handle('git:diff', async (_event, cwd?: string): Promise<GitWorkingDiff> => {
+    return workingTreeDiff(cwd)
+  })
+
+  ipcMain.handle('git:reviewDiff', async (_event, cwd?: string): Promise<GitReviewDiff> => {
     const git = gitFor(cwd)
-    const root = (await worktreeRoot(cwd)) ?? cwd ?? os.homedir()
-    const [branch, head] = await Promise.all([
-      git
-        .raw(['rev-parse', '--abbrev-ref', 'HEAD'])
-        .then((name) => name.trim())
-        .catch(() => ''),
-      git
-        .raw(['rev-parse', '--verify', '--quiet', 'HEAD'])
-        .then((sha) => sha.trim())
-        .catch(() => '')
-    ])
+    const target = await defaultBranch(cwd, false)
+    if (!target) throw new Error('Could not find the remote default branch')
 
-    const base = head || emptyTree
-    const indexFile = path.join(os.tmpdir(), `snow-diff-${process.pid}-${++scratchIndexCount}`)
-    const scratch = simpleGit(root, gitOptions)
-      .env('GIT_OPTIONAL_LOCKS', '0')
-      .env('GIT_INDEX_FILE', indexFile)
-    const stagedPaths = git
-      .raw(['diff', '--cached', '--name-only', '-z', base])
-      .then((out) => new Set(out.split('\0').filter(Boolean)))
-      .catch(() => new Set<string>())
-
-    try {
-      await scratch.raw(['read-tree', base])
-      await scratch.raw(['add', '-A', '-N'])
-
-      const range = ['diff', base, '-M']
-      const [numstat, raw, staged] = await Promise.all([
-        scratch.raw([...range, '--numstat', '-z']),
-        scratch.raw([...range, '--patch', '--no-color']),
-        stagedPaths
-      ])
-      const { patch, truncated } = capPatch(raw)
-      const files = parseNumstat(numstat)
-      for (const file of files) file.staged = staged.has(file.path)
-
-      return {
-        branch: branch && branch !== 'HEAD' ? branch : null,
-        base,
-        files,
-        patch,
-        truncated
+    const candidates = [`${target.remote}/${target.branch}`, target.branch]
+    for (const candidate of candidates) {
+      try {
+        const base = (await git.raw(['merge-base', candidate, 'HEAD'])).trim()
+        if (!base) continue
+        return {
+          ...(await workingTreeDiff(cwd, base, false)),
+          target: candidate
+        }
+      } catch {
+        continue
       }
-    } finally {
-      await fs.promises.rm(indexFile, { force: true })
     }
+
+    throw new Error(`Could not find a merge base with ${candidates.join(' or ')}`)
   })
 
   ipcMain.handle(

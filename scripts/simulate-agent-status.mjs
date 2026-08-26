@@ -150,11 +150,15 @@ try {
   )
 
   // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
-  const runHook = (hookEvent) =>
-    execFileSync(process.execPath, [path.join(root, 'resources/hooks/snow-agent-hook.mjs')], {
-      input: JSON.stringify(hookEvent),
-      env: { ...process.env, XDG_CONFIG_HOME: scratch }
-    })
+  const runHook = (hookEvent, agent) =>
+    execFileSync(
+      process.execPath,
+      [path.join(root, 'resources/hooks/snow-agent-hook.mjs'), ...(agent ? [agent] : [])],
+      {
+        input: JSON.stringify(hookEvent),
+        env: { ...process.env, XDG_CONFIG_HOME: scratch }
+      }
+    )
   // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
   const recordFor = (sessionId) => {
     const file = fs
@@ -246,7 +250,326 @@ try {
   })
   assert.equal(recordFor(liveSession).state, 'busy')
 
-  process.stdout.write('agent status parent/child and turn sequencing simulations passed\n')
+  // Codex uses the same hook input contract but names approval prompts directly instead of
+  // emitting Claude's Notification event. Its identity must survive the shared runtime, and the
+  // tool completion after a worktree-creating command must refresh discovery while the turn runs.
+  const codexSession = 'codex-session'
+  const codexBase = { session_id: codexSession, cwd: child, model: 'gpt-test-codex' }
+  runHook({ ...codexBase, hook_event_name: 'SessionStart', source: 'startup' }, 'codex')
+  assert.equal(recordFor(codexSession).agent, 'codex')
+  assert.equal(recordFor(codexSession).state, 'idle')
+  runHook(
+    {
+      ...codexBase,
+      hook_event_name: 'PermissionRequest',
+      tool_name: 'Bash',
+      tool_input: { command: 'git worktree add ../agent-worktree agent-branch' }
+    },
+    'codex'
+  )
+  assert.equal(recordFor(codexSession).state, 'attention')
+  runHook(
+    {
+      ...codexBase,
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'git worktree add ../agent-worktree agent-branch' }
+    },
+    'codex'
+  )
+  assert.equal(recordFor(codexSession).state, 'busy')
+
+  // Codex does not accept Claude's interactive `ask` decision on PreToolUse. Warn mode must use
+  // Codex's supported non-blocking systemMessage shape while Claude retains its confirmation.
+  fs.writeFileSync(
+    path.join(scratch, 'snow', '.snowworkflows'),
+    `${JSON.stringify({ workflows: [{ repo: child, branch: 'agent-branch', worktree: child }] })}\n`
+  )
+  fs.writeFileSync(
+    path.join(scratch, 'snow', '.snowconfig'),
+    `${JSON.stringify({ presets: [], workflowStashProtection: 'warn' })}\n`
+  )
+  const stashEvent = {
+    session_id: 'stash-warning',
+    cwd: child,
+    hook_event_name: 'PreToolUse',
+    tool_name: 'Bash',
+    tool_input: { command: 'git stash pop' }
+  }
+  const codexWarning = JSON.parse(runHook(stashEvent, 'codex').toString())
+  assert.match(codexWarning.systemMessage, /Every worktree/)
+  const claudeWarning = JSON.parse(
+    runHook({ ...stashEvent, session_id: 'claude-stash-warning' }).toString()
+  )
+  assert.equal(claudeWarning.hookSpecificOutput.permissionDecision, 'ask')
+
+  // The installer shares one runtime while preserving each product's supported event set and every
+  // unrelated user hook. Bundle the real main-process module with a tiny Electron façade so this
+  // exercises install and removal without touching the developer's actual home configuration.
+  const claudeConfig = path.join(scratch, 'claude-config')
+  const codexConfig = path.join(scratch, 'codex-config')
+  fs.mkdirSync(claudeConfig)
+  fs.mkdirSync(codexConfig)
+  const claudeSettings = path.join(claudeConfig, 'settings.json')
+  const codexHooks = path.join(codexConfig, 'hooks.json')
+  const customGroup = { hooks: [{ type: 'command', command: 'keep-my-hook' }] }
+  fs.writeFileSync(
+    claudeSettings,
+    `${JSON.stringify({ custom: 'claude', hooks: { Stop: [customGroup] } }, null, 2)}\n`
+  )
+  fs.writeFileSync(
+    codexHooks,
+    `${JSON.stringify({ description: 'mine', hooks: { Stop: [customGroup] } }, null, 2)}\n`
+  )
+  process.env.CLAUDE_CONFIG_DIR = claudeConfig
+  process.env.CODEX_HOME = codexConfig
+  process.env.SNOW_TEST_APP_PATH = root
+
+  const hooksBundle = path.join(scratch, 'hooks.mjs')
+  await build({
+    absWorkingDir: root,
+    entryPoints: [path.join(root, 'src/main/hooks.ts')],
+    outfile: hooksBundle,
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    plugins: [
+      {
+        name: 'electron-test-facade',
+        setup(buildApi) {
+          buildApi.onResolve({ filter: /^electron$/ }, () => ({
+            path: 'electron',
+            namespace: 'electron-test'
+          }))
+          buildApi.onLoad({ filter: /.*/, namespace: 'electron-test' }, () => ({
+            contents: `
+              export const app = { getAppPath: () => process.env.SNOW_TEST_APP_PATH };
+              export const BrowserWindow = { getAllWindows: () => [] };
+              export const dialog = {};
+              export const ipcMain = { handle() {}, on() {} };
+              export const shell = {};
+            `,
+            loader: 'js'
+          }))
+        }
+      }
+    ]
+  })
+  process.env.XDG_CONFIG_HOME = scratch
+  const { refreshHooks, runHooks } = await import(pathToFileURL(hooksBundle).href)
+  const installed = runHooks('install')
+  assert.equal(installed.ok, true, installed.detail)
+
+  const installedClaude = JSON.parse(fs.readFileSync(claudeSettings, 'utf8'))
+  const installedCodex = JSON.parse(fs.readFileSync(codexHooks, 'utf8'))
+  assert.equal(installedClaude.custom, 'claude')
+  assert.equal(installedCodex.description, 'mine')
+  assert.equal(installedClaude.hooks.Stop[0].hooks[0].command, 'keep-my-hook')
+  assert.equal(installedCodex.hooks.Stop[0].hooks[0].command, 'keep-my-hook')
+  assert(installedClaude.hooks.Notification)
+  assert.equal(installedClaude.hooks.PermissionRequest, undefined)
+  assert(installedCodex.hooks.PermissionRequest)
+  assert.equal(installedCodex.hooks.Notification, undefined)
+  assert(installedClaude.hooks.PostToolUse)
+  assert(installedCodex.hooks.PostToolUse)
+  // PostToolUse writes `busy`, so it must complete before a following Stop or SessionEnd can write
+  // the terminal state. An async handler could finish late and resurrect a completed session.
+  assert.equal(installedClaude.hooks.PostToolUse.at(-1).hooks[0].async, undefined)
+  assert.equal(installedCodex.hooks.PostToolUse.at(-1).hooks[0].async, undefined)
+  assert.equal(installedClaude.hooks.PreToolUse.at(-1).hooks[0].async, undefined)
+  assert.equal(installedCodex.hooks.PreToolUse.at(-1).hooks[0].async, undefined)
+  // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
+  const installedHandlers = (config) =>
+    Object.values(config.hooks)
+      .flat()
+      .flatMap((group) => group.hooks ?? [])
+  // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
+  const installedCommands = (config) =>
+    installedHandlers(config)
+      .map((handler) => handler.command)
+      .filter((command) => command?.includes('snow-agent-hook'))
+  assert(installedCommands(installedClaude).every((command) => command.endsWith(' claude')))
+  assert(installedCommands(installedCodex).every((command) => command.endsWith(' codex')))
+  if (process.platform === 'win32') {
+    const codexHandlers = installedHandlers(installedCodex).filter((handler) =>
+      handler.command?.includes('snow-agent-hook')
+    )
+    assert(codexHandlers.every((handler) => handler.commandWindows?.includes('-EncodedCommand ')))
+    assert(codexHandlers.every((handler) => !handler.commandWindows.includes('"')))
+
+    const sessionStart = installedCodex.hooks.SessionStart.at(-1).hooks[0]
+    execFileSync(
+      process.env.ComSpec ?? 'cmd.exe',
+      ['/D', '/S', '/C', sessionStart.commandWindows],
+      {
+        input: JSON.stringify({
+          session_id: 'codex-windows-command',
+          cwd: child,
+          hook_event_name: 'SessionStart',
+          source: 'startup'
+        }),
+        env: { ...process.env, XDG_CONFIG_HOME: scratch }
+      }
+    )
+    assert.equal(recordFor('codex-windows-command').agent, 'codex')
+  }
+
+  const removed = runHooks('remove')
+  assert.equal(removed.ok, true, removed.detail)
+  const removedClaude = JSON.parse(fs.readFileSync(claudeSettings, 'utf8'))
+  const removedCodex = JSON.parse(fs.readFileSync(codexHooks, 'utf8'))
+  assert.deepEqual(removedClaude.hooks, { Stop: [customGroup] })
+  assert.deepEqual(removedCodex.hooks, { Stop: [customGroup] })
+
+  // App startup carries an existing Claude installation over to Codex even if Codex has not yet
+  // created its config directory. It also reconstructs a missing runtime from that install intent.
+  const reinstalled = runHooks('install')
+  assert.equal(reinstalled.ok, true, reinstalled.detail)
+  fs.rmSync(codexConfig, { recursive: true, force: true })
+  const runtimeShim = path.join(
+    scratch,
+    'snow',
+    'hooks',
+    process.platform === 'win32' ? 'snow-agent-hook.cmd' : 'snow-agent-hook'
+  )
+  fs.rmSync(runtimeShim, { force: true })
+
+  refreshHooks()
+
+  assert(fs.existsSync(runtimeShim), 'startup should reconstruct the installed hook runtime')
+  assert(fs.existsSync(codexHooks), 'startup should install Codex hooks from Claude install intent')
+  const migratedCodex = JSON.parse(fs.readFileSync(codexHooks, 'utf8'))
+  assert(migratedCodex.hooks.PermissionRequest)
+  assert(installedCommands(migratedCodex).every((command) => command.endsWith(' codex')))
+
+  // Reconciliation may need a trailing pass because PostToolUse can report the same cwd after the
+  // tool changed its worktree set. While one pass is active, however, every newer read replaces the
+  // pending snapshot instead of extending a promise chain with obsolete repository scans.
+  const registrationConfig = path.join(scratch, 'registration-config')
+  const registrationRecords = path.join(registrationConfig, 'agents')
+  const registrationRecord = path.join(registrationRecords, 'session.json')
+  fs.mkdirSync(registrationRecords, { recursive: true })
+  process.env.SNOW_AGENT_TEST_CONFIG = registrationConfig
+
+  let releaseFirst
+  const firstRegistration = new Promise((resolve) => {
+    releaseFirst = resolve
+  })
+  let finishSecond
+  const secondRegistration = new Promise((resolve) => {
+    finishSecond = resolve
+  })
+  const registrationState = {
+    firstRegistration,
+    finishSecond,
+    rootCalls: [],
+    mapCalls: []
+  }
+  globalThis.__snowAgentRegistrationTest = registrationState
+
+  const agentsBundle = path.join(scratch, 'agents.mjs')
+  await build({
+    absWorkingDir: root,
+    entryPoints: [path.join(root, 'src/main/agents.ts')],
+    outfile: agentsBundle,
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    plugins: [
+      {
+        name: 'agent-registration-facade',
+        setup(buildApi) {
+          // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
+          const facade = (filter, name, contents) => {
+            buildApi.onResolve({ filter }, () => ({ path: name, namespace: 'agent-test' }))
+            buildApi.onLoad({ filter: new RegExp(`^${name}$`), namespace: 'agent-test' }, () => ({
+              contents,
+              loader: 'js'
+            }))
+          }
+          facade(/^electron$/, 'electron', 'export const ipcMain = { handle() {} };')
+          facade(
+            /^\.\/config$/,
+            'config',
+            `
+              export const broadcast = () => {};
+              export const configDir = () => process.env.SNOW_AGENT_TEST_CONFIG;
+              export const expandHome = (value) => value;
+              export const samePath = (a, b) => a.toLowerCase() === b.toLowerCase();
+            `
+          )
+          facade(
+            /^\.\/git$/,
+            'git',
+            `
+              const state = globalThis.__snowAgentRegistrationTest;
+              export async function mainWorktreeRoot(cwd) {
+                state.rootCalls.push(cwd);
+                if (state.rootCalls.length === 1) await state.firstRegistration;
+                return cwd;
+              }
+              export async function worktreeMap(repo) {
+                state.mapCalls.push(repo);
+                if (state.mapCalls.length === 2) state.finishSecond();
+                return new Map();
+              }
+            `
+          )
+          facade(/^\.\/log$/, 'log', 'export const log = () => {};')
+          facade(
+            /^\.\/registry$/,
+            'registry',
+            `
+              export const addRecord = () => null;
+              export const recordsFor = () => ({ records: [], error: null });
+              export const workflowsPath = () => 'test workflows';
+            `
+          )
+        }
+      }
+    ]
+  })
+
+  // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
+  const writeRegistrationSession = (cwd) =>
+    fs.writeFileSync(
+      registrationRecord,
+      JSON.stringify({
+        sessionId: 'registration-session',
+        cwd,
+        state: 'busy',
+        detail: '',
+        agent: 'test',
+        updated: Date.now()
+      })
+    )
+
+  const firstCwd = path.join(scratch, 'repo-first')
+  const supersededCwd = path.join(scratch, 'repo-superseded')
+  const latestCwd = path.join(scratch, 'repo-latest')
+  writeRegistrationSession(firstCwd)
+  const { disposeAgentWatcher, readAgents, registerAgentHandlers } = await import(
+    pathToFileURL(agentsBundle).href
+  )
+  registerAgentHandlers()
+  try {
+    readAgents()
+    writeRegistrationSession(supersededCwd)
+    readAgents()
+    writeRegistrationSession(latestCwd)
+    readAgents()
+    releaseFirst()
+    await secondRegistration
+  } finally {
+    disposeAgentWatcher()
+  }
+  assert.deepEqual(registrationState.rootCalls, [firstCwd, latestCwd])
+  assert.deepEqual(registrationState.mapCalls, [firstCwd, latestCwd])
+  delete globalThis.__snowAgentRegistrationTest
+
+  process.stdout.write(
+    'Claude/Codex hook installation, status, sequencing, and reconciliation simulations passed\n'
+  )
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true })
 }

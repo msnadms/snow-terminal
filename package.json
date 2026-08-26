@@ -16,6 +16,7 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "test:agent-status": "node scripts/simulate-agent-status.mjs",
+    "test:workflow-review": "node scripts/simulate-workflow-review.mjs",
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
