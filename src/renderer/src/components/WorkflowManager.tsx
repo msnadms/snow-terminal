@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useEffect, useMemo, useRef, useState } from 'react'
 import ContextMenu from './ContextMenu'
 import FailureDialog from './FailureDialog'
 import RemoveWorkflowDialog from './RemoveWorkflowDialog'
@@ -14,6 +14,12 @@ import {
   inboxSignal,
   inScope,
   isRegistered,
+  overlapClaimants,
+  overlapCounts,
+  overlapHidden,
+  overlapSummary,
+  overlapTitle,
+  overlapVerdict,
   parkedBadge,
   parkedTitle,
   repoScope,
@@ -24,7 +30,9 @@ import {
   usable,
   needsOperator,
   type InboxSignal,
+  type WorkflowComparison,
   type WorkflowEntry,
+  type WorkflowOverlapReport,
   type WorkflowRepo,
   type WorkflowResult
 } from '@renderer/workflowText'
@@ -61,6 +69,7 @@ type SessionRow = {
   activity: Activity
   cost: number
   signal: InboxSignal
+  comparison?: WorkflowComparison
 }
 type RepoDrag = {
   repo: string
@@ -154,6 +163,76 @@ function indent(text: string): string {
     .join('\n')
 }
 
+function OverlapBadge({
+  report,
+  label,
+  panelId,
+  expanded,
+  onToggle
+}: {
+  report: WorkflowOverlapReport
+  label: string
+  panelId: string
+  expanded: boolean
+  onToggle: () => void
+}): React.JSX.Element | null {
+  const counts = overlapCounts(report)
+  if (counts.total === 0) return null
+  return (
+    <button
+      className="wfm-conflicts"
+      type="button"
+      aria-expanded={expanded}
+      aria-controls={panelId}
+      aria-label={`${label}: ${overlapSummary(report)}`}
+      title={overlapTitle(report)}
+      onClick={onToggle}
+    >
+      {counts.conflict > 0 && (
+        <span className="wfm-unit wfm-unit-conflict">
+          <span className="wfm-nerd"></span>
+          {counts.conflict}
+        </span>
+      )}
+      {counts.unproven > 0 && (
+        <span className="wfm-unit wfm-unit-unproven">
+          <span className="wfm-nerd"></span>
+          {counts.unproven}
+        </span>
+      )}
+      {counts.clean > 0 && (
+        <span className="wfm-unit wfm-unit-clean">
+          <span className="wfm-nerd"></span>
+          {counts.clean}
+        </span>
+      )}
+    </button>
+  )
+}
+
+function OverlapPanel({
+  report,
+  panelId
+}: {
+  report: WorkflowOverlapReport
+  panelId: string
+}): React.JSX.Element | null {
+  const hidden = overlapHidden(report)
+  if (overlapCounts(report).total === 0) return null
+  return (
+    <div className="wfm-overlaps" id={panelId}>
+      {(report.overlaps ?? []).map((overlap) => (
+        <div className={`wfm-overlap wfm-overlap-${overlap.verdict}`} key={overlap.path}>
+          <span className="wfm-overlap-path">{overlap.path}</span>
+          <span className="wfm-overlap-verdict">{overlapVerdict(overlap)}</span>
+          <span className="wfm-overlap-detail">{overlapClaimants(overlap)}</span>
+        </div>
+      ))}
+      {hidden > 0 && <div className="wfm-overlap wfm-overlap-more">+{hidden} more</div>}
+    </div>
+  )
+}
+
 function WorkflowManager({
   active,
   onLaunch,
@@ -177,9 +256,23 @@ function WorkflowManager({
   const [refreshKey, setRefreshKey] = useState(0)
   const [repoDrag, setRepoDrag] = useState<RepoDrag | null>(null)
   const [workflowMenu, setWorkflowMenu] = useState<WorkflowMenu | null>(null)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [isNarrow, setIsNarrow] = useState(() => window.matchMedia(narrowWorkspaceQuery).matches)
   const lanes = useGitColors()?.lanes
   const usage = useUsage()
+  const sessionDirectoryKey = useMemo(
+    () =>
+      [...new Set(openSessions.map((session) => session.dir).filter((dir): dir is string => !!dir))]
+        .sort((a, b) => directoryKey(a).localeCompare(directoryKey(b)))
+        .join('\0'),
+    [openSessions]
+  )
+  const toggleOverlaps = (key: string): void =>
+    setExpanded((current) => {
+      const next = new Set(current)
+      if (!next.delete(key)) next.add(key)
+      return next
+    })
   const overviewRef = useRef<Overview | null>(null)
   const watchedDirsRef = useRef(new Map<string, string>())
   useEffect(() => {
@@ -207,16 +300,17 @@ function WorkflowManager({
   useEffect(() => {
     // Hidden, nothing is wanted, so the unwatch pass below tears every watcher down.
     const repos = active ? (overview?.repos ?? []) : []
+    const sessionDirectories = active && sessionDirectoryKey ? sessionDirectoryKey.split('\0') : []
     const wanted = new Map<string, string>()
     for (const repo of repos) {
+      wanted.set(directoryKey(repo.repo), repo.repo)
       for (const entry of repo.workflows) {
         const dir = openDir(repo, entry)
         if (!dir) continue
-        const normalized = normalizePath(dir)
-        const key = navigator.platform.startsWith('Win') ? normalized.toLowerCase() : normalized
-        wanted.set(key, dir)
+        wanted.set(directoryKey(dir), dir)
       }
     }
+    for (const dir of sessionDirectories) wanted.set(directoryKey(dir), dir)
 
     for (const [key, dir] of watchedDirsRef.current) {
       if (!wanted.has(key)) window.api.git.unwatch(dir)
@@ -225,7 +319,7 @@ function WorkflowManager({
       if (!watchedDirsRef.current.has(key)) void window.api.git.watch(dir)
     }
     watchedDirsRef.current = wanted
-  }, [overview, active])
+  }, [overview, active, sessionDirectoryKey])
 
   useEffect(
     () => () => {
@@ -263,7 +357,8 @@ function WorkflowManager({
       try {
         do {
           queued = false
-          const result = await window.api.workflow.overview(true)
+          const directories = sessionDirectoryKey ? sessionDirectoryKey.split('\0') : []
+          const result = await window.api.workflow.overview(true, directories)
           if (stopped) return
           setOverview(result)
         } while (queued)
@@ -284,9 +379,11 @@ function WorkflowManager({
     // A repo's linked worktrees live outside its root but share its stash, so they count as in
     // scope too - without them a commit in a parallel session never refreshes this screen.
     const offGit = window.api.git.onChanged((changedCwd) => {
-      const hit = overviewRef.current?.repos.some((repo) =>
-        inScope(changedCwd, repoScope(repo.repo, repo.workflows))
-      )
+      const directories = sessionDirectoryKey ? sessionDirectoryKey.split('\0') : []
+      const hit =
+        overviewRef.current?.repos.some((repo) =>
+          inScope(changedCwd, repoScope(repo.repo, repo.workflows))
+        ) || directories.some((directory) => inScope(changedCwd, [normalizePath(directory)]))
       if (hit) scheduleLoad()
     })
     const offWorkflow = window.api.workflow.onChanged(scheduleLoad)
@@ -297,7 +394,7 @@ function WorkflowManager({
       offGit()
       offWorkflow()
     }
-  }, [active, refreshKey])
+  }, [active, refreshKey, sessionDirectoryKey])
 
   const workflowDirectories = useMemo(
     () =>
@@ -322,6 +419,16 @@ function WorkflowManager({
         return true
       }),
     [openSessions, workflowDirectories]
+  )
+  const comparisonsByDirectory = useMemo(
+    () =>
+      new Map(
+        (overview?.comparisons ?? []).map((comparison) => [
+          directoryKey(comparison.directory),
+          comparison
+        ])
+      ),
+    [overview]
   )
 
   /**
@@ -480,7 +587,10 @@ function WorkflowManager({
           session,
           activity,
           cost: session.dir ? (indexedRows.get(directoryKey(session.dir))?.cost ?? 0) : 0,
-          signal: activitySignal(activity)
+          signal: activitySignal(activity),
+          comparison: session.dir
+            ? comparisonsByDirectory.get(directoryKey(session.dir))
+            : undefined
         }
       })
       .sort(
@@ -489,7 +599,7 @@ function WorkflowManager({
           right.cost - left.cost ||
           left.session.id - right.session.id
       )
-  }, [agentSessions, nonaffiliatedSessions, indexedRows])
+  }, [agentSessions, nonaffiliatedSessions, indexedRows, comparisonsByDirectory])
 
   const launchOne = async (repo: WorkflowRepo, entry: WorkflowEntry): Promise<Failure | null> => {
     if (usable(entry) && entry.worktree) {
@@ -707,84 +817,101 @@ function WorkflowManager({
           <div className="wfm-note wfm-note-muted">No open sessions outside a workspace.</div>
         ) : (
           <div className={`wfm-rows${hasRowStatus ? '' : ' wfm-rows-no-status'}`}>
-            {sessionRows.map(({ session, activity, cost, signal }) => (
-              <div className="wfm-row" key={session.id}>
-                {hasRowStatus && (
-                  <span className="wfm-row-status">
-                    {activity.status && activity.status !== 'idle' && (
-                      <span
-                        className={`tab-status tab-status-${activity.status}`}
-                        title={
-                          activity.status === 'busy'
-                            ? 'Busy'
-                            : activity.summary.waiting > 0
-                              ? 'Ready for input'
-                              : 'Finished'
-                        }
-                      />
+            {sessionRows.map(({ session, activity, cost, signal, comparison }) => {
+              const overlapKey = `session\0${session.id}`
+              const panelId = `wfm-overlaps-session-${session.id}`
+              const isOpen = expanded.has(overlapKey)
+              return (
+                <Fragment key={session.id}>
+                  <div className="wfm-row">
+                    {hasRowStatus && (
+                      <span className="wfm-row-status">
+                        {activity.status && activity.status !== 'idle' && (
+                          <span
+                            className={`tab-status tab-status-${activity.status}`}
+                            title={
+                              activity.status === 'busy'
+                                ? 'Busy'
+                                : activity.summary.waiting > 0
+                                  ? 'Ready for input'
+                                  : 'Finished'
+                            }
+                          />
+                        )}
+                        {signal.label && (
+                          <button
+                            type="button"
+                            className={`wfm-inbox wfm-inbox-${signal.slug}`}
+                            disabled={!session.dir}
+                            onClick={() => session.dir && onOpenDiff(session.dir, session.label)}
+                            title={`${signalTitle(signal, activity)}\nOpen ${session.label}'s diff`}
+                            aria-label={`Open ${session.label}'s diff: ${signal.label}`}
+                          >
+                            {signal.label}
+                          </button>
+                        )}
+                      </span>
                     )}
-                    {signal.label && (
+                    <div className="wfm-row-main">
                       <button
                         type="button"
-                        className={`wfm-inbox wfm-inbox-${signal.slug}`}
-                        disabled={!session.dir}
-                        onClick={() => session.dir && onOpenDiff(session.dir, session.label)}
-                        title={`${signalTitle(signal, activity)}\nOpen ${session.label}'s diff`}
-                        aria-label={`Open ${session.label}'s diff: ${signal.label}`}
+                        className="wfm-branch wfm-branch-link"
+                        onClick={() => onSelectSession(session.id)}
+                        title={
+                          session.dir
+                            ? `${session.dir}\nOpen ${session.label}`
+                            : `Open ${session.label}`
+                        }
                       >
-                        {signal.label}
+                        {session.label}
                       </button>
-                    )}
-                  </span>
-                )}
-                <div className="wfm-row-main">
-                  <button
-                    type="button"
-                    className="wfm-branch wfm-branch-link"
-                    onClick={() => onSelectSession(session.id)}
-                    title={
-                      session.dir
-                        ? `${session.dir}\nOpen ${session.label}`
-                        : `Open ${session.label}`
-                    }
-                  >
-                    {session.label}
-                  </button>
-                  <span className="wfm-session-path" title={session.dir}>
-                    {session.dir ?? 'Starting shell…'}
-                  </span>
-                  {activity.title && (
-                    <span className="wfm-activity" title={activity.title}>
-                      {activity.title}
-                    </span>
-                  )}
-                  {!!cost && (
-                    <span
-                      className="wfm-cost"
-                      title="Estimated agent spend in this directory since snow started"
-                    >
-                      {formatCost(cost)}
-                    </span>
-                  )}
-                  <span className="wfm-row-actions">
-                    <button
-                      className="wfm-action wfm-action-launch"
-                      onClick={() => onSelectSession(session.id)}
-                      title={`Open ${session.label}`}
-                    >
-                      ▸ Open session
-                    </button>
-                    <button
-                      className="wfm-action wfm-action-icon wfm-action-remove"
-                      onClick={() => onCloseSession(session.id)}
-                      title={`Close ${session.label}`}
-                    >
-                      ✕
-                    </button>
-                  </span>
-                </div>
-              </div>
-            ))}
+                      {comparison && (
+                        <OverlapBadge
+                          report={comparison}
+                          label={session.label}
+                          panelId={panelId}
+                          expanded={isOpen}
+                          onToggle={() => toggleOverlaps(overlapKey)}
+                        />
+                      )}
+                      <span className="wfm-session-path" title={session.dir}>
+                        {session.dir ?? 'Starting shell…'}
+                      </span>
+                      {activity.title && (
+                        <span className="wfm-activity" title={activity.title}>
+                          {activity.title}
+                        </span>
+                      )}
+                      {!!cost && (
+                        <span
+                          className="wfm-cost"
+                          title="Estimated agent spend in this directory since snow started"
+                        >
+                          {formatCost(cost)}
+                        </span>
+                      )}
+                      <span className="wfm-row-actions">
+                        <button
+                          className="wfm-action wfm-action-launch"
+                          onClick={() => onSelectSession(session.id)}
+                          title={`Open ${session.label}`}
+                        >
+                          ▸ Open session
+                        </button>
+                        <button
+                          className="wfm-action wfm-action-icon wfm-action-remove"
+                          onClick={() => onCloseSession(session.id)}
+                          title={`Close ${session.label}`}
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    </div>
+                  </div>
+                  {comparison && isOpen && <OverlapPanel report={comparison} panelId={panelId} />}
+                </Fragment>
+              )
+            })}
           </div>
         )}
       </section>
@@ -869,110 +996,113 @@ function WorkflowManager({
             const state = stateLabel(entry)
             const status = activity.status
             const title = activity.title
+            const overlapKey = `${repo.repo}\0${entry.branch}`
+            const panelId = `wfm-overlaps-${overlapKey.replace(/[^A-Za-z0-9]+/g, '-')}`
+            const isOpen = expanded.has(overlapKey)
             return (
-              <div className="wfm-row" key={entry.branch}>
-                {hasRowStatus && (
-                  <span className="wfm-row-status">
-                    {status && status !== 'idle' && (
-                      <span
-                        className={`tab-status tab-status-${status}`}
-                        title={
-                          status === 'busy'
-                            ? 'Busy'
-                            : activity.summary.waiting > 0
-                              ? 'Ready for input'
-                              : 'Finished'
-                        }
-                      />
-                    )}
-                    {signal.label ? (
-                      <button
-                        type="button"
-                        className={`wfm-inbox wfm-inbox-${signal.slug}`}
-                        disabled={!dir || entry.review?.changed === 0}
-                        onClick={() => dir && onOpenDiff(dir, entry.branch)}
-                        title={`${signalTitle(signal, activity)}\nOpen ${entry.branch}'s diff`}
-                        aria-label={`Open ${entry.branch}'s diff: ${signal.label}`}
-                      >
-                        {signal.label}
-                      </button>
-                    ) : (
-                      state && (
-                        <span className={`wfm-state wfm-state-${stateSlug(state)}`}>{state}</span>
-                      )
-                    )}
-                  </span>
-                )}
-                <div className="wfm-row-main">
-                  <button
-                    type="button"
-                    className={`wfm-branch wfm-branch-link${entry.exists ? '' : ' wfm-branch-missing'}`}
-                    disabled={activity.sessionId == null && (action.pending || repo.unreachable)}
-                    onClick={() =>
-                      activity.sessionId == null
-                        ? launch(repo, entry)
-                        : onSelectSession(activity.sessionId)
-                    }
-                    title={
-                      dir
-                        ? entry.review
-                          ? `${reviewTitle(entry, entry.review)}\nOpen ${entry.branch}'s session`
-                          : `Open ${entry.branch}'s session`
-                        : (entry.worktree ?? parkedTitle(entry))
-                    }
-                  >
-                    {entry.branch}
-                  </button>
-                  {!!entry.conflicted && (
-                    <span
-                      className="wfm-conflicts"
-                      title={`${entry.conflicted} file${entry.conflicted === 1 ? '' : 's'} also changed in another workspace`}
-                      aria-label={`${entry.conflicted} conflicted file${entry.conflicted === 1 ? '' : 's'}`}
-                    >
-                      <div className="wfm-nerd"> </div>
-                      {entry.conflicted}
+              <Fragment key={entry.branch}>
+                <div className="wfm-row">
+                  {hasRowStatus && (
+                    <span className="wfm-row-status">
+                      {status && status !== 'idle' && (
+                        <span
+                          className={`tab-status tab-status-${status}`}
+                          title={
+                            status === 'busy'
+                              ? 'Busy'
+                              : activity.summary.waiting > 0
+                                ? 'Ready for input'
+                                : 'Finished'
+                          }
+                        />
+                      )}
+                      {signal.label ? (
+                        <button
+                          type="button"
+                          className={`wfm-inbox wfm-inbox-${signal.slug}`}
+                          disabled={!dir || entry.review?.changed === 0}
+                          onClick={() => dir && onOpenDiff(dir, entry.branch)}
+                          title={`${signalTitle(signal, activity)}\nOpen ${entry.branch}'s diff`}
+                          aria-label={`Open ${entry.branch}'s diff: ${signal.label}`}
+                        >
+                          {signal.label}
+                        </button>
+                      ) : (
+                        state && (
+                          <span className={`wfm-state wfm-state-${stateSlug(state)}`}>{state}</span>
+                        )
+                      )}
                     </span>
                   )}
-                  {title && (
-                    <span className="wfm-activity" title={title}>
-                      {title}
-                    </span>
-                  )}
-                  {!!cost && (
-                    <span
-                      className="wfm-cost"
-                      title="Estimated agent spend in this directory since snow started"
-                    >
-                      {formatCost(cost)}
-                    </span>
-                  )}
-                  {entry.parked && (
-                    <span className="wfm-parked" title={parkedTitle(entry)}>
-                      {parkedBadge(entry.parked)}
-                    </span>
-                  )}
-                  <span className="wfm-row-actions">
+                  <div className="wfm-row-main">
                     <button
-                      className="wfm-action wfm-action-icon"
                       type="button"
-                      disabled={action.pending}
-                      aria-label={`Actions for ${entry.branch}`}
-                      aria-haspopup="menu"
-                      aria-expanded={
-                        workflowMenu?.repo.repo === repo.repo &&
-                        workflowMenu.entry.branch === entry.branch
+                      className={`wfm-branch wfm-branch-link${entry.exists ? '' : ' wfm-branch-missing'}`}
+                      disabled={activity.sessionId == null && (action.pending || repo.unreachable)}
+                      onClick={() =>
+                        activity.sessionId == null
+                          ? launch(repo, entry)
+                          : onSelectSession(activity.sessionId)
                       }
-                      onClick={(e) => {
-                        const rect = e.currentTarget.getBoundingClientRect()
-                        setWorkflowMenu({ repo, entry, x: rect.right - 200, y: rect.bottom + 4 })
-                      }}
-                      title={`Actions for ${entry.branch}`}
+                      title={
+                        dir
+                          ? entry.review
+                            ? `${reviewTitle(entry, entry.review)}\nOpen ${entry.branch}'s session`
+                            : `Open ${entry.branch}'s session`
+                          : (entry.worktree ?? parkedTitle(entry))
+                      }
                     >
-                      ⋮
+                      {entry.branch}
                     </button>
-                  </span>
+                    <OverlapBadge
+                      report={entry}
+                      label={entry.branch}
+                      panelId={panelId}
+                      expanded={isOpen}
+                      onToggle={() => toggleOverlaps(overlapKey)}
+                    />
+                    {title && (
+                      <span className="wfm-activity" title={title}>
+                        {title}
+                      </span>
+                    )}
+                    {!!cost && (
+                      <span
+                        className="wfm-cost"
+                        title="Estimated agent spend in this directory since snow started"
+                      >
+                        {formatCost(cost)}
+                      </span>
+                    )}
+                    {entry.parked && (
+                      <span className="wfm-parked" title={parkedTitle(entry)}>
+                        {parkedBadge(entry.parked)}
+                      </span>
+                    )}
+                    <span className="wfm-row-actions">
+                      <button
+                        className="wfm-action wfm-action-icon"
+                        type="button"
+                        disabled={action.pending}
+                        aria-label={`Actions for ${entry.branch}`}
+                        aria-haspopup="menu"
+                        aria-expanded={
+                          workflowMenu?.repo.repo === repo.repo &&
+                          workflowMenu.entry.branch === entry.branch
+                        }
+                        onClick={(e) => {
+                          const rect = e.currentTarget.getBoundingClientRect()
+                          setWorkflowMenu({ repo, entry, x: rect.right - 200, y: rect.bottom + 4 })
+                        }}
+                        title={`Actions for ${entry.branch}`}
+                      >
+                        ⋮
+                      </button>
+                    </span>
+                  </div>
                 </div>
-              </div>
+                {isOpen && <OverlapPanel report={entry} panelId={panelId} />}
+              </Fragment>
             )
           })}
         </div>

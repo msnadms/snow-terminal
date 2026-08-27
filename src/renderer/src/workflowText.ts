@@ -3,6 +3,9 @@ import { isInside, normalizePath } from '@renderer/format'
 export type WorkflowList = Awaited<ReturnType<typeof window.api.workflow.list>>
 export type WorkflowEntry = WorkflowList['workflows'][number]
 export type WorkflowRepo = Awaited<ReturnType<typeof window.api.workflow.overview>>['repos'][number]
+export type WorkflowComparison = Awaited<
+  ReturnType<typeof window.api.workflow.overview>
+>['comparisons'][number]
 export type WorkflowResult = Awaited<ReturnType<typeof window.api.workflow.switch>>
 
 function parkedCount(files: number | null): string {
@@ -58,6 +61,107 @@ export function stateSlug(state: string): string {
 /** The `● N` badge, with a multiplier when earlier parks were kept by a conflicting pop. */
 export function parkedBadge(parked: NonNullable<WorkflowEntry['parked']>): string {
   return `● ${parked.files ?? '?'}${parked.count > 1 ? ` ×${parked.count}` : ''}`
+}
+
+export type WorkflowOverlap = NonNullable<WorkflowEntry['overlaps']>[number]
+export type WorkflowOverlapReport = Pick<WorkflowEntry, 'overlaps' | 'overlapTotals'>
+
+export interface OverlapCounts {
+  conflict: number
+  unproven: number
+  clean: number
+  total: number
+}
+
+/**
+ * Counted per verdict, because one number cannot carry them: a workspace whose every shared path
+ * merges cleanly would otherwise wear the same warning badge as one nothing could prove. Totals come
+ * from the pre-cap `overlapTotals` so the badge reports the workspace rather than however much of it
+ * the panel can show. Drift against the default branch needs no special case here - main reports it
+ * as ordinary `conflict` rows.
+ */
+export function overlapCounts(entry: WorkflowOverlapReport): OverlapCounts {
+  const totals = entry.overlapTotals ?? { conflict: 0, overlap: 0, clean: 0 }
+  return {
+    conflict: totals.conflict,
+    unproven: totals.overlap,
+    clean: totals.clean,
+    total: totals.conflict + totals.overlap + totals.clean
+  }
+}
+
+type OverlapUnit = Exclude<keyof OverlapCounts, 'total'>
+
+const overlapUnits: [OverlapUnit, string][] = [
+  ['conflict', 'will not merge'],
+  ['unproven', 'not proven to merge'],
+  ['clean', 'merge cleanly']
+]
+
+function overlapPhrases(
+  entry: WorkflowOverlapReport,
+  render: (count: number, phrase: string) => string
+): string[] {
+  const counts = overlapCounts(entry)
+  return overlapUnits
+    .filter(([key]) => counts[key] > 0)
+    .map(([key, phrase]) => render(counts[key], phrase))
+}
+
+/** How many claimed paths the capped `overlaps` array leaves unshown. */
+export function overlapHidden(entry: WorkflowOverlapReport): number {
+  return overlapCounts(entry).total - (entry.overlaps?.length ?? 0)
+}
+
+export function overlapSummary(entry: WorkflowOverlapReport): string {
+  return overlapPhrases(entry, (count, phrase) => `${count} ${phrase}`).join(', ')
+}
+
+export function overlapTitle(entry: WorkflowOverlapReport): string {
+  const lines = overlapPhrases(
+    entry,
+    (count, phrase) => `${count} shared file${count === 1 ? '' : 's'} ${phrase}`
+  )
+  lines.push('', 'Show the files')
+  return lines.join('\n')
+}
+
+const sourceLabel: Record<WorkflowOverlap['source'], string> = {
+  committed: 'committed',
+  working: 'uncommitted',
+  parked: 'parked'
+}
+
+const verdictLabel: Record<WorkflowOverlap['verdict'], string> = {
+  conflict: 'will not merge',
+  overlap: 'unproven',
+  clean: 'merges cleanly'
+}
+
+/**
+ * The verdict half of a row, rendered in its own span so color can carry the distinction - three
+ * greys would not. When every claim *was* committed and the verdict is still unproven, the merge
+ * itself failed to evaluate, which is a different thing to say than "someone has work in flight".
+ */
+export function overlapVerdict(overlap: WorkflowOverlap): string {
+  const allCommitted =
+    overlap.source === 'committed' && overlap.branches.every((c) => c.source === 'committed')
+  const label =
+    overlap.verdict === 'overlap' && allCommitted
+      ? 'could not evaluate'
+      : verdictLabel[overlap.verdict]
+  return overlap.source === 'committed' ? label : `${label} (${sourceLabel[overlap.source]})`
+}
+
+/**
+ * `fix-login (uncommitted)`. An unproven path this workspace committed reads as a contradiction
+ * unless the row says whose claim could not be merged, so every claimant carries its own source and
+ * only a committed one goes unlabelled.
+ */
+export function overlapClaimants(overlap: WorkflowOverlap): string {
+  return overlap.branches
+    .map((c) => (c.source === 'committed' ? c.branch : `${c.branch} (${sourceLabel[c.source]})`))
+    .join(', ')
 }
 
 type Review = NonNullable<WorkflowEntry['review']>

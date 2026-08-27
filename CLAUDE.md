@@ -93,7 +93,7 @@ unrecoverable actions.
 Layout: file headers are `position: sticky` and `DiffScroll`'s tools row is pinned to the same corner,
 so `.commit-file-actions` takes `margin-right: auto` and `.commit-file-title-staging` reserves
 `--diff-tools-inset` of right padding. This is unconditional on purpose — a
-`scroll-state(stuck: top)` container query reads as *not* stuck at exactly the offset
+`scroll-state(stuck: top)` container query reads as _not_ stuck at exactly the offset
 `scrollIntoView({ block: 'start' })` lands on. `--diff-tools-inset` is measured by a `ResizeObserver`
 because the tools row's width changes with the find bar and `↑ Top`.
 
@@ -283,7 +283,7 @@ the first handler returning `true`. Capturing lets a matched handler `stopPropag
 reaches an xterm textarea. Only actions with a **defined** handler match, so an unavailable action
 falls through to the terminal untouched.
 
-Named actions: `newTab`, `closeTab`, `nextTab`/`prevTab` (defaults `Mod+Shift+}`/`{` — the *shifted*
+Named actions: `newTab`, `closeTab`, `nextTab`/`prevTab` (defaults `Mod+Shift+}`/`{` — the _shifted_
 characters, since `e.key` reports `}`), `newSplit`, `diffSplit`, `runCommand` (toggles
 `commandItems[0]`), `switchRepo`, `openWorkflows`, `focusCommit` (resolved by `.actionbar-input`),
 `pushRemote` (registered inside **`ActionBar`**, since `ahead`/`sync` live there; handler undefined
@@ -309,7 +309,7 @@ error, and duration — which is why `git.ts` has no logging code. Lines are
 `ISO-timestamp LEVEL [scope] message`; values are JSON-serialized then truncated at 400 chars.
 
 Exclusions: `pty:write`/`pty:resize` are in `quietChannels` (logging keystrokes would make this a
-keylogger); `pty:data` flows main→renderer and is never seen. PTY *lifecycle* is logged explicitly in
+keylogger); `pty:data` flows main→renderer and is never seen. PTY _lifecycle_ is logged explicitly in
 `pty.ts`. `snowconfig:*` are in `redactedChannels` — call and duration logged, payload not.
 
 Renderer output reaches the file through `watchRenderer(webContents)` in `createWindow`
@@ -375,7 +375,7 @@ applies only to an `idle` **the turn's own end wrote**, marked by `turnEnded` (s
 unanswered permission prompt would pin `idle` over an agent that is visibly working. Compaction is no
 state change at all.
 
-`Notification` classification is an **allowlist over a field another product owns**, and fails *loud*:
+`Notification` classification is an **allowlist over a field another product owns**, and fails _loud_:
 a notification with no `notification_type` reads as `attention`. A type Claude did report but this list
 doesn't name is believed. `attention` is the one state nothing refreshes, so misreading a renamed field
 would silently retire the signal fleet-wide.
@@ -434,14 +434,14 @@ Where two agents share a directory the **loudest state wins, not the newest**.
 
 #### Blocking shared-stash commands
 
-Because `refs/stash` is repo-wide (see *Parked work*), a stash restore an agent runs in a promoted
+Because `refs/stash` is repo-wide (see _Parked work_), a stash restore an agent runs in a promoted
 worktree can consume a **different** workspace's parked changes. `snow-agent-hook.mjs` answers
 `PreToolUse` on `Bash`/`PowerShell` with `permissionDecision: "deny"` — no extra settings entry needed,
 since the installed `PreToolUse` group already matches every tool.
 
 **Only the consuming half is refused**: `pop`, `apply`, `drop`, `clear`, `branch`, `create`, `store`.
 `list`/`show` pass. **Creating a stash passes** — it only appends, and snow re-lists under the shared
-lock before every apply. The one thing push *is* checked for is a message carrying the `snow-wf:`
+lock before every apply. The one thing push _is_ checked for is a message carrying the `snow-wf:`
 prefix, and **any** argument mentioning it refuses (parsing out `-m` vs `--message=` would only
 re-derive the same answer). `--help`/`-h` passes.
 
@@ -454,7 +454,7 @@ on `(`/`)` and leading shell keywords are skipped; a recognized **command wrappe
 **Scope is every registered directory, not only linked worktrees** — park-mode markers are created by
 `parkOnLeave` in the repo's **own** checkout. Two functions over one registry read: `guardedScope(cwd)`
 asks only whether anything snow parks is reachable (a pure path comparison, no git process, since it
-runs on every tool call mentioning the marker); `ownedBranch(cwd)` asks *whose* parked work it is and
+runs on every tool call mentioning the marker); `ownedBranch(cwd)` asks _whose_ parked work it is and
 pays for a `rev-parse` only on the explicit `restore` command.
 
 Two things bound the blast radius: the scope is read from `.snowworkflows` by the hook process itself,
@@ -504,7 +504,7 @@ is taken **only when packaged** — in dev it would hand `npm run dev` off to an
 
 Argument parsing never slices argv by position (Electron hands `second-instance` a different shape):
 `folderArg` takes the first argument that is neither a flag nor `app.getAppPath()`, resolved against the
-*reporting* process's directory (`process.cwd()`, or `workingDirectory` for a second instance).
+_reporting_ process's directory (`process.cwd()`, or `workingDirectory` for a second instance).
 
 A folder becomes a preset in `presetForDir` (in `snowconfig.ts`, which owns `mutateConfig`). It returns
 the whole `Preset`, not its name, and that object is what `cli:pending` (consumed once) and the
@@ -600,7 +600,7 @@ Three modules in a strict one-way chain — `registry.ts` ← `git.ts` ← `work
 **Registration is the opt-in.** The dropdown never enumerates branches — only registered ones, via
 `workflow:register` or `workflow:create`.
 
-Parking is a property of the *branch*, not the dropdown used. `git:checkout`, `git:checkoutRemote`, and
+Parking is a property of the _branch_, not the dropdown used. `git:checkout`, `git:checkoutRemote`, and
 `git:syncDefault` all route through `switchBranch`. On an unregistered branch snow does nothing special
 — the changes ride along, or git refuses exactly as it always would.
 
@@ -619,7 +619,7 @@ swallowing its own errors) and opens a two-button dialog on a hit.
 ### `.snowworkflows`
 
 The registry, in `~/.config/snow/`, same lifecycle as the other config files, built from `config.ts`'s
-shared helpers. `initRegistry()` runs *before* `registerGitHandlers()` in `index.ts`. Shape is
+shared helpers. `initRegistry()` runs _before_ `registerGitHandlers()` in `index.ts`. Shape is
 `{ workflows: { repo, branch }[] }` — flat, because branch names collide across repos. `repo` is the
 worktree root with `~` collapsed on write and expanded on read; comparisons go through `samePath`
 (resolve + slash-normalize, case-insensitive on win32 — necessary because
@@ -639,9 +639,9 @@ an apply and never cached**. When a branch has more than one marker stash, the n
 stay listed as parked — lossless.
 
 **`refs/stash` is shared by every worktree of a repository** while `HEAD` and `index` are per-worktree,
-so `stash@{0}` means "whatever was pushed last *anywhere* in this repo". Snow's own machinery is safe by
-construction; a bare restore typed by an agent is not, which is what the hook refuses (see *Blocking
-shared-stash commands*).
+so `stash@{0}` means "whatever was pushed last _anywhere_ in this repo". Snow's own machinery is safe by
+construction; a bare restore typed by an agent is not, which is what the hook refuses (see _Blocking
+shared-stash commands_).
 
 `parkOnLeave()` is the single gate: `git stash push -u` **only when the current branch is registered and
 dirty**, refusing a tree with conflicts. `restoreOnEnter()` is its mirror and is likewise gated on
@@ -678,7 +678,7 @@ terminals were actually closed.
 elsewhere that `cd`s into the worktree holds it just as firmly.
 
 Parked file counts are `git stash show --name-only` plus `git ls-tree -r --name-only <sel>^3` rather
-than `git stash show -u` (which needs git ≥ 2.32). A missing `^3` counts as zero, but a failed *tracked*
+than `git stash show -u` (which needs git ≥ 2.32). A missing `^3` counts as zero, but a failed _tracked_
 listing yields `null`, not `0`. `WorkflowParked.count` carries how many marker stashes the branch has,
 rendered as `● N ×2`. No git watcher is added — stash writes touch `.git/refs/stash`, already covered by
 `git:watch`.
@@ -713,10 +713,96 @@ tracking ref: `aheadOf` tries `<remote>/<default>` then the local default, repor
 0 when neither resolves. A failed `status` drops `review` entirely — "no changes" and "could not look"
 are not the same row.
 
-Detailed reads retain each workflow's changed paths long enough to compare them within the repo; a row
-gets a warning count when a path also appears in another workflow. The comparison includes committed
-branch changes, both sides of working-tree renames, and the newest parked stash, then drops the paths
-before returning over IPC.
+#### Overlap and conflict detection
+
+Detailed reads retain each workflow's changed paths long enough to compare them within the repo, and
+each path carries **where the claim came from** — `committed` (the `base...HEAD` diff), `working`
+(status entries, both sides of a rename), or `parked` (the newest marker stash). Committed and dirty
+provenance are retained separately per (path, workflow): the committed fact makes the branch tips
+testable, while the dirty fact prevents that test from proving the worktree or stash clean.
+
+`git merge-tree` merges **commits**; it cannot see a dirty worktree or a stash. That constraint is the
+seam the three verdicts fall out of, not a limitation to work around:
+
+| Every claim on the path                  | Verdict                | Decided by                                  |
+| ---------------------------------------- | ---------------------- | ------------------------------------------- |
+| all committed                            | `conflict` or `clean`  | a real `merge-tree` between the branch tips |
+| anything touching working tree or parked | `overlap` ("unproven") | path intersection                           |
+
+`overlap` renders as **"unproven"**, and every claimant carries its own `source` so the row can say
+_why_. Without that a path this workflow committed reads as a flat contradiction — `unproven
+(committed)` — when the thing blocking the merge is somebody else's dirty tree. Only a `committed`
+claim goes unlabelled, so `unproven · pop-swagga (uncommitted)` names the blocker. When **every**
+claim was committed and the verdict is still unproven, the merge itself failed to evaluate, and the
+renderer says `could not evaluate` instead — a different statement, derived rather than stored.
+
+`overlap` is **unknown, not benign** — it is what a path gets when nothing could evaluate it. The
+distinction from `clean` is why `provenClean` demands that _every_ claimant committed the path and that
+each pair actually evaluated: one untested claimant leaves the whole path unproven, since "we checked
+and it is fine" is a far stronger statement than "we could not check". A path both sides committed that
+merges cleanly still **stays listed** — textual auto-merge says nothing about whether two edits make
+sense together — it just stops being alarming.
+
+Path intersection is therefore **the prefilter deciding which pairs are worth a subprocess**, not the
+answer. Only pairs sharing a path both sides _committed_ are merge-tested, so the cost is bounded by
+real collisions rather than by workflow count. Conflicted paths come back from `merge-tree` verbatim
+and are unioned in, so a rename/delete conflict intersection never saw is still reported. Every
+workflow tip is also merge-tested against the **default branch** (O(n), not O(n²)) — the branch that
+is far behind and will explode on merge is otherwise invisible.
+
+Those base conflicts are recorded through the **same `noteConflict`** a sibling's are, so drift lands
+in `overlaps` as ordinary `conflict` rows naming the default branch as the claimant. It is
+deliberately **not** a claim-bearing participant: it contributes nothing to path intersection, so it
+can never manufacture an unproven overlap — only a real merge failure puts it on a row. Keeping it on
+the one pipeline is what makes it sort, cap, count and render with everything else; as a parallel
+`string[]` every consumer special-cased it, and anything added later (a filter, a new verdict) would
+silently have skipped it.
+
+Uncommitted work in the repo's **own** checkout on an unregistered branch joins the comparison as a
+participant and appears in other rows' `branches`, but never becomes a row — the manager lists what has
+been registered.
+
+`src/main/mergeCheck.ts` owns the subprocess. It uses `execFile`, **not** simple-git, because `.raw()`
+rejects on any non-zero exit and `GitError` carries no code — "1 means conflicts" and "128 means the
+command failed" would arrive as the same rejection. It therefore re-supplies `core.longpaths` (win32)
+and `GIT_OPTIONAL_LOCKS=0` by hand; those live on `gitFor`, not centrally. Exit `>1` yields `null`
+("could not look"), deliberately not `[]` ("merges clean").
+
+Support is probed **functionally** — one `merge-tree --write-tree --name-only -z HEAD HEAD` per repo —
+rather than by parsing `git --version`, covering `--write-tree` (2.38) and `--name-only` (2.40) at once.
+An older git degrades the whole feature to path overlap; nothing errors. Session comparisons derive
+that fallback by intersecting the paths committed on the session and default branch since their
+merge base, so committed overlaps remain visible as unproven when the merge itself cannot run.
+
+Every subprocess passes a **module-wide semaphore** (`maxInFlight`, 6). Path intersection bounds the
+pair count by real collisions, but one commonly-committed path — a lockfile, `package.json` — is
+claimed by every workspace that committed it, and that single file yields the full C(n, 2); a cold
+overview across several repos would spawn them all at once, each writing loose objects. The freed
+slot is handed **straight to the next waiter** rather than released and re-taken, so the count is
+conserved exactly and a burst cannot briefly exceed the limit. `runGit` is never nested inside
+another `runGit` (the support probe completes before the merge it gates begins), so the gate cannot
+deadlock.
+
+Results cache on the **pair of commit SHAs**, which is what makes this affordable: a detailed overview
+re-fires through a 100 ms debounce on every mutation in any open repo, and a workflow that has not
+committed since the last read costs zero subprocesses. The cache is bounded (oldest evicted) since SHA
+pairs never self-invalidate. Note `--write-tree` writes loose objects, so this is **not a pure read** —
+they are unreferenced and collected by `git gc`, one write per never-before-seen pair.
+
+`-z` output is sectioned: tree OID, then the conflicted names, then an **empty NUL entry**, then
+informational messages. Parsing must stop at that separator or the message text reads as paths.
+
+Paths are capped at `overlapCap` (20, conflicts first then untested then clean) with `overlapTotals`
+carrying the true count **per verdict** — a breakdown rather than one number, because the capped
+array cannot be counted for them: the cap slices off the tail, which is exactly where the least
+alarming ones sort to.
+
+`overlapCounts` in the renderer folds that into what the badge draws, taking its totals from the
+**pre-cap** `overlapTotals` so the badge reports the workspace rather than however much the panel can
+show. It needs no case for base drift — main has already reported it as ordinary `conflict` rows. The
+badge is one segmented pill, a unit per non-zero verdict (conflict, unproven, clean), each carrying
+its own nerd-font glyph and count; every tint is mixed from `currentColor`, so the three verdict
+rules only ever set `color`. `overlapHidden` is the one place the `+N more` count is derived.
 
 The review badge is a **button** opening that worktree's `WorkingDiffView` through the same `openDiff`
 the git panel uses (which is why `App` reads `tabsRef` there and wraps it in `useCallback` —
@@ -775,7 +861,7 @@ drag. Only the active pane is visible, so the stack's DOM order carries no meani
 
 Every tab with a directory belongs to a group keyed on that directory's `mainWorktreeRoot` — the
 repo-wide identity behind the `withRepoLock` key and every registry lookup. It answers with the current
-worktree's own top level whenever the git dir *is* the common dir, falling back to `dirname(common)`
+worktree's own top level whenever the git dir _is_ the common dir, falling back to `dirname(common)`
 only for a linked worktree (taking `dirname` unconditionally names an unrelated directory under
 `--separate-git-dir`).
 
@@ -793,7 +879,7 @@ via `App.reorderTabGroup`.
 
 The color is `repoColor(key, lanes)` — an FNV hash of the normalized root into `git.lanes`. Hashing
 alone is not enough (with four repos in an eight-lane palette a collision is likelier than not), so the
-hash is the *preference*: `repoColor` remembers what it handed out and gives a new repo the **free lane
+hash is the _preference_: `repoColor` remembers what it handed out and gives a new repo the **free lane
 furthest in OKLab from every color in use**, walking from the hashed index. Distance rather than
 inequality is the test, because hue-ordered palettes put the near-duplicate next door. When the winning
 lane scores below `laneSeparation`, snow leaves the palette and searches OKLCH hue rotations crossed
@@ -824,7 +910,7 @@ canonicalizes, so one discovery feeds both surfaces and they cannot drift.
 The **Freeze** checkbox pins the git view: `App` holds `frozen` as `{ entries } | null` (the entries, so
 preset association survives), and everything reads
 `activeEntries = frozen ? frozen.entries : repoEntries`. Because both `repos` and `actionRepos` derive
-from it, freezing pins the panel *and* the action bar together. It pins the *directories*, not the
+from it, freezing pins the panel _and_ the action bar together. It pins the _directories_, not the
 content — watchers keep running.
 
 Clicking any `.actionbar-button` (but **not** the `.actionbar-freeze` toggle) hands focus back to the
@@ -840,7 +926,7 @@ each immediate child directory (capped at `maxDiscoveryChildren`) when `cwd` is 
 a repo.
 
 Only `rename` events are accepted: creating or deleting `.git` is always a `rename`, while `change`
-fires for every write *inside* it. On a repo cwd the filter narrows to `.git` itself; on a non-repo cwd
+fires for every write _inside_ it. On a repo cwd the filter narrows to `.git` itself; on a non-repo cwd
 any `rename` is accepted, since a fresh clone has an arbitrary name and needs a watcher of its own.
 
 Events are debounced and the handler broadcasts only when the discovered root list actually changes.
@@ -882,7 +968,7 @@ over 260 characters. **Worktree workflows hit it first** because promotion shift
 `len('-worktrees') + 1 + len(branch)`, so a repo comfortably under the limit at its own root can cross
 it purely by being promoted.
 
-The flag lifts the **total path** limit, not Windows' 255-character limit on a single path *component* —
+The flag lifts the **total path** limit, not Windows' 255-character limit on a single path _component_ —
 distinguishable by git's wording: `Filename too long` (total, fixed by the flag) versus
 `Invalid argument` (single name, unfixable).
 

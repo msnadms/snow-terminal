@@ -377,6 +377,47 @@ body {
   overflow-y: auto;
 }
 
+.picker-list,
+.home-theme-menu,
+.home-presets,
+.wfm-overlaps {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ui-border, #313244) transparent;
+}
+
+/* `width` sizes the vertical bar only - the horizontal one takes `height`. */
+.picker-list::-webkit-scrollbar,
+.home-theme-menu::-webkit-scrollbar,
+.wfm-overlaps::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.picker-list::-webkit-scrollbar-track,
+.home-theme-menu::-webkit-scrollbar-track,
+.wfm-overlaps::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.picker-list::-webkit-scrollbar-corner,
+.home-theme-menu::-webkit-scrollbar-corner,
+.wfm-overlaps::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.picker-list::-webkit-scrollbar-thumb,
+.home-theme-menu::-webkit-scrollbar-thumb,
+.wfm-overlaps::-webkit-scrollbar-thumb {
+  background: var(--ui-border, #313244);
+  border-radius: 3px;
+}
+
+.picker-list::-webkit-scrollbar-thumb:hover,
+.home-theme-menu::-webkit-scrollbar-thumb:hover,
+.wfm-overlaps::-webkit-scrollbar-thumb:hover {
+  background: var(--ui-border-hover, #45475a);
+}
+
 .picker-none {
   padding: 5px 8px;
   color: var(--ui-placeholder, #5d6f8f);
@@ -959,20 +1000,144 @@ button.wfm-inbox:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * One pill, segmented: each unit paints its own border and background, so the badge reads red then
+ * amber then green across a single continuous shape. Every tint is mixed from `currentColor`, which
+ * means the three verdict rules below only ever set `color` and the rest follows.
+ */
 .wfm-conflicts {
   flex: 0 0 auto;
-  color: var(--ui-warning, #f9e2af);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 5px;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: 9px;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.wfm-conflicts:focus-visible {
+  outline: 1px solid var(--ui-accent, #a6dcf0);
+  outline-offset: 1px;
+}
+
+/*
+ * Only the outer edge is drawn - the units carry top and bottom, and the two ends close it off.
+ * Segments meet on their backgrounds alone, so the color changes without a rule between them.
+ */
+.wfm-unit {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-top: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.wfm-unit:first-child {
+  border-left: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  border-top-left-radius: 9px;
+  border-bottom-left-radius: 9px;
+}
+
+.wfm-unit:last-child {
+  border-right: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  border-top-right-radius: 9px;
+  border-bottom-right-radius: 9px;
+}
+
+.wfm-conflicts:hover .wfm-unit {
+  border-color: color-mix(in srgb, currentColor 80%, transparent);
+}
+
+.wfm-conflicts[aria-expanded='true'] .wfm-unit {
+  background: color-mix(in srgb, currentColor 24%, transparent);
+}
+
+.wfm-unit-conflict {
+  color: var(--ui-danger, #f38ba8);
+}
+
+.wfm-unit-unproven {
+  color: var(--ui-warning, #f9e2af);
+}
+
+.wfm-unit-clean {
+  color: var(--ui-success, #a6e3a1);
 }
 
 .wfm-nerd {
   font-size: 20px;
+}
+
+.wfm-overlaps {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 6px 0;
+  padding: 6px 8px;
+  border-left: 2px solid var(--ui-border, #313244);
+  overflow-x: auto;
+}
+
+.wfm-overlap {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.wfm-overlap-path {
+  color: var(--ui-text, #cdd6f4);
+}
+
+.wfm-overlap-verdict {
+  flex: 0 0 auto;
+  color: var(--ui-muted-text, #a6adc8);
+}
+
+.wfm-overlap-detail {
+  color: var(--ui-muted-text, #a6adc8);
+}
+
+.wfm-overlap-detail::before {
+  content: '·';
+  margin-right: 6px;
+  color: var(--ui-faint-text, #6c7086);
+}
+
+.wfm-overlap-conflict .wfm-overlap-path,
+.wfm-overlap-conflict .wfm-overlap-verdict {
+  color: var(--ui-danger, #f38ba8);
+}
+
+.wfm-overlap-overlap .wfm-overlap-verdict {
+  color: var(--ui-warning, #f9e2af);
+}
+
+.wfm-overlap-clean .wfm-overlap-verdict {
+  color: var(--ui-success, #a6e3a1);
+}
+
+.wfm-overlap-clean .wfm-overlap-path,
+.wfm-overlap-clean .wfm-overlap-detail {
+  color: var(--ui-faint-text, #6c7086);
+}
+
+.wfm-overlap-more {
+  color: var(--ui-faint-text, #6c7086);
 }
 
 .wfm-parked {
@@ -1877,25 +2042,6 @@ button.wfm-inbox:focus-visible {
   max-height: 395px;
   overflow-y: auto;
   padding-right: 4px;
-  scrollbar-width: thin;
-  scrollbar-color: var(--ui-border, #313244) transparent;
-}
-
-.home-presets::-webkit-scrollbar {
-  width: 6px;
-}
-
-.home-presets::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.home-presets::-webkit-scrollbar-thumb {
-  background: var(--ui-border, #313244);
-  border-radius: 3px;
-}
-
-.home-presets::-webkit-scrollbar-thumb:hover {
-  background: var(--ui-border-hover, #45475a);
 }
 
 .home-preset {

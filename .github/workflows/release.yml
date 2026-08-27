@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   release:
     strategy:
@@ -24,3 +27,28 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --publish always ${{ matrix.os == 'windows-latest' && '--win' || matrix.os == 'macos-latest' && '--mac' || '--linux' }}
+
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve tag
+        id: rel
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="v$(node -p "require('./package.json').version")"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.rel.outputs.tag }}
+        run: |
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != "true" ]; then
+            echo "$TAG is already published"
+            exit 0
+          fi
+          gh release edit "$TAG" --draft=false --latest

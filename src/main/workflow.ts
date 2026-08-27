@@ -20,6 +20,8 @@ import {
   worktreeMap,
   type GitCheckoutResult
 } from './git'
+import type { StatusResult } from 'simple-git'
+import { conflictingPaths } from './mergeCheck'
 import { withSharedStashLock } from './stashLock'
 import { collapseHome, expandHome, samePath } from './config'
 import { closePtysInDirectory } from './pty'
@@ -48,6 +50,46 @@ export interface WorkflowReview {
   ahead: number | null
 }
 
+/** Where a workflow's displayed claim on a path comes from. */
+export type OverlapSource = 'committed' | 'working' | 'parked'
+
+/**
+ * `conflict` and `clean` are real `git merge-tree` verdicts, only reachable when every side has
+ * committed the path; `overlap` means the path is claimed twice and nothing could test it, which is
+ * "unknown" rather than "probably fine". Keeping all three apart is the point - a badge that reports
+ * every shared file as a conflict is lit permanently and stops being read, and one that reports an
+ * untested path as clean is worse.
+ */
+export type OverlapVerdict = 'conflict' | 'overlap' | 'clean'
+
+/**
+ * A workflow claiming the same path, and how. The source is what makes an `overlap` explain itself:
+ * a path this workflow committed still reads unproven when someone else's claim is uncommitted, and
+ * without naming whose claim that is the row looks self-contradictory.
+ *
+ * The default branch appears here like any other claimant, which is what keeps drift against it on
+ * the one pipeline - it sorts, caps, counts and renders as an ordinary conflict row rather than as a
+ * parallel channel every consumer has to special-case.
+ */
+export interface WorkflowClaimant {
+  branch: string
+  source: OverlapSource
+}
+
+export interface WorkflowOverlap {
+  path: string
+  verdict: OverlapVerdict
+  source: OverlapSource
+  branches: WorkflowClaimant[]
+}
+
+export interface WorkflowOverlapReport {
+  /** Capped rows, ordered from the most actionable verdict to the least. */
+  overlaps: WorkflowOverlap[]
+  /** The pre-cap count per verdict. */
+  overlapTotals: Record<OverlapVerdict, number>
+}
+
 export interface WorkflowEntry {
   branch: string
   current: boolean
@@ -57,8 +99,14 @@ export interface WorkflowEntry {
   worktreeExists?: boolean
   worktreeLinked?: boolean
   review?: WorkflowReview
-  /** Files also changed by at least one other workflow in this repository, from detail reads. */
-  conflicted?: number
+  /** Paths also claimed by another workflow in this repository, from detail reads. Capped. */
+  overlaps?: WorkflowOverlap[]
+  /**
+   * The pre-cap count per verdict. A breakdown rather than one total, because the badge reports the
+   * three verdicts separately and the capped `overlaps` array cannot be counted for them - the cap
+   * slices off the tail, which is exactly where the least alarming ones sort to.
+   */
+  overlapTotals?: Record<OverlapVerdict, number>
 }
 
 export interface WorkflowList {
@@ -78,7 +126,16 @@ export interface WorkflowRepo extends WorkflowList {
 
 export interface WorkflowOverview {
   repos: WorkflowRepo[]
+  /** Default-branch comparisons for open session directories, including unregistered repos. */
+  comparisons: WorkflowSessionComparison[]
   error: string | null
+}
+
+export interface WorkflowSessionComparison extends WorkflowOverlapReport {
+  directory: string
+  repo: string | null
+  branch: string | null
+  defaultBranch: string | null
 }
 
 export type WorkflowResult = GitCheckoutResult & { worktree?: string }
@@ -170,11 +227,55 @@ async function aheadOf(directory: string, bases: string[]): Promise<number | nul
  */
 interface WorkflowReviewState {
   review: WorkflowReview
-  files: string[]
+  claims: PathClaim[]
 }
 
-interface DescribedWorkflow extends WorkflowEntry {
-  changedFiles: string[]
+interface PathClaim {
+  path: string
+  source: OverlapSource
+}
+
+interface DescribedWorkflow {
+  entry: WorkflowEntry
+  claims: PathClaim[]
+  head: string | null
+}
+
+const sourceRank: Record<OverlapSource, number> = { committed: 2, working: 1, parked: 0 }
+
+function strongest(a: OverlapSource, b: OverlapSource): OverlapSource {
+  return sourceRank[a] >= sourceRank[b] ? a : b
+}
+
+interface ClaimProvenance {
+  committed: boolean
+  /** Dirty provenance is retained even when this path was also committed. */
+  dirty: Exclude<OverlapSource, 'committed'> | null
+}
+
+function addProvenance(
+  existing: ClaimProvenance | undefined,
+  source: OverlapSource
+): ClaimProvenance {
+  if (source === 'committed') return { committed: true, dirty: existing?.dirty ?? null }
+  const dirty = existing?.dirty === 'working' || source === 'working' ? 'working' : 'parked'
+  return { committed: existing?.committed ?? false, dirty }
+}
+
+function displayedSource(provenance: ClaimProvenance): OverlapSource {
+  return provenance.dirty ?? 'committed'
+}
+
+function claimsOf(paths: string[] | null | undefined, source: OverlapSource): PathClaim[] {
+  return (paths ?? []).map((path) => ({ path, source }))
+}
+
+/** Both sides of a rename are separate claims, which is what makes an unstaged rename collide. */
+function workingClaims(status: StatusResult): PathClaim[] {
+  return claimsOf(
+    status.files.flatMap((file) => [file.from, file.path].filter(Boolean) as string[]),
+    'working'
+  )
 }
 
 export function nameStatusPaths(raw: string): string[] {
@@ -193,20 +294,19 @@ export function nameStatusPaths(raw: string): string[] {
   return paths
 }
 
+async function rangePaths(directory: string, range: string): Promise<string[] | null> {
+  try {
+    const raw = await gitFor(directory).raw(['diff', '--name-status', '-z', '-M', range])
+    return nameStatusPaths(raw)
+  } catch {
+    return null
+  }
+}
+
 async function committedPaths(directory: string, bases: string[]): Promise<string[]> {
   for (const base of bases) {
-    try {
-      const raw = await gitFor(directory).raw([
-        'diff',
-        '--name-status',
-        '-z',
-        '-M',
-        `${base}...HEAD`
-      ])
-      return nameStatusPaths(raw)
-    } catch {
-      continue
-    }
+    const paths = await rangePaths(directory, `${base}...HEAD`)
+    if (paths) return paths
   }
   return []
 }
@@ -214,21 +314,427 @@ async function committedPaths(directory: string, bases: string[]): Promise<strin
 async function reviewOf(directory: string, bases: string[]): Promise<WorkflowReviewState | null> {
   try {
     const status = await gitFor(directory).status()
-    const committed = await committedPaths(directory, bases)
+    const [committed, ahead] = await Promise.all([
+      committedPaths(directory, bases),
+      aheadOf(directory, bases)
+    ])
     return {
       review: {
         changed: status.files.length,
         staged: status.files.filter((file) => isStaged(file.index)).length,
-        ahead: await aheadOf(directory, bases)
+        ahead
       },
-      files: [
-        ...committed,
-        ...status.files.flatMap((file) => [file.from, file.path].filter(Boolean) as string[])
-      ]
+      claims: [...claimsOf(committed, 'committed'), ...workingClaims(status)]
     }
   } catch {
     return null
   }
+}
+
+/**
+ * Uncommitted work in the repository's own checkout collides with every workspace just as hard as a
+ * registered one, so it joins the overlap comparison - but only as a participant. It gets no row of
+ * its own, because the manager lists what has been registered. Skipped when the current branch is
+ * already registered, where `reviewOf` covers the same directory.
+ */
+async function unregisteredClaims(
+  repo: string | null,
+  current: string | null,
+  registered: string[]
+): Promise<PathClaim[]> {
+  if (!repo || !current || registered.includes(current)) return []
+  try {
+    return workingClaims(await gitFor(repo).status())
+  } catch {
+    return []
+  }
+}
+
+async function branchHeads(cwd: string | undefined): Promise<Map<string, string>> {
+  try {
+    const raw = await gitFor(cwd).raw([
+      'for-each-ref',
+      '--format=%(refname:short)%09%(objectname)',
+      'refs/heads/'
+    ])
+    const heads = new Map<string, string>()
+    for (const line of raw.split('\n')) {
+      const [branch, sha] = line.trim().split('\t')
+      if (branch && sha) heads.set(branch, sha)
+    }
+    return heads
+  } catch {
+    return new Map()
+  }
+}
+
+async function resolveBase(cwd: string | undefined, bases: string[]): Promise<string | null> {
+  const resolved = await Promise.all(
+    bases.map(async (base) => {
+      try {
+        return (
+          await gitFor(cwd).raw(['rev-parse', '--verify', '--quiet', `${base}^{commit}`])
+        ).trim()
+      } catch {
+        return ''
+      }
+    })
+  )
+  return resolved.find(Boolean) ?? null
+}
+
+const overlapCap = 20
+
+const verdictRank: Record<OverlapVerdict, number> = { conflict: 0, overlap: 1, clean: 2 }
+
+function overlapReport(overlaps: WorkflowOverlap[]): WorkflowOverlapReport {
+  overlaps.sort((a, b) =>
+    a.verdict === b.verdict
+      ? a.path.localeCompare(b.path)
+      : verdictRank[a.verdict] - verdictRank[b.verdict]
+  )
+  const overlapTotals: Record<OverlapVerdict, number> = { conflict: 0, overlap: 0, clean: 0 }
+  for (const overlap of overlaps) overlapTotals[overlap.verdict]++
+  return { overlaps: overlaps.slice(0, overlapCap), overlapTotals }
+}
+
+function participantPair(a: number, b: number): string {
+  return a < b ? `${a}:${b}` : `${b}:${a}`
+}
+
+/**
+ * `git merge-tree` merges commits, so it can only answer for paths both sides have committed. That
+ * is the seam the two verdicts fall out of: a committed pair gets a real merge result, and every
+ * other shared path stays an unproven `overlap`. Path intersection is not the answer here, it is the
+ * prefilter deciding which pairs are worth a subprocess.
+ *
+ * The default branch is merged against every tip (O(n), not O(n^2)) and its conflicts are recorded
+ * through the same `noteConflict` as a sibling's, so drift lands in `overlaps` as ordinary rows. It
+ * is deliberately not a claim-bearing participant: it never contributes to path intersection, so it
+ * cannot manufacture an unproven overlap - only a real merge failure puts it on a row.
+ */
+async function resolveOverlaps(
+  cwd: string | undefined,
+  repo: string | null,
+  described: DescribedWorkflow[],
+  current: string | null,
+  bases: string[],
+  baseLabel: string | null
+): Promise<WorkflowEntry[]> {
+  const registered = described.map(({ entry }) => entry.branch)
+  const extra = await unregisteredClaims(repo, current, registered)
+  const participants = [
+    ...described.map(({ entry, claims }) => ({ label: entry.branch, claims })),
+    ...(extra.length && current ? [{ label: current, claims: extra }] : [])
+  ]
+
+  const owners = new Map<string, Map<number, ClaimProvenance>>()
+  participants.forEach(({ claims }, index) => {
+    for (const { path: file, source } of claims) {
+      const byOwner = owners.get(file) ?? new Map<number, ClaimProvenance>()
+      byOwner.set(index, addProvenance(byOwner.get(index), source))
+      owners.set(file, byOwner)
+    }
+  })
+
+  const pairs = new Map<string, [number, number]>()
+  const notePair = (a: number, b: number): void => {
+    if (a !== b) pairs.set(participantPair(a, b), [a, b])
+  }
+  for (const byOwner of owners.values()) {
+    const committed = [...byOwner.entries()]
+      .filter(([, provenance]) => provenance.committed)
+      .map(([index]) => index)
+    for (let x = 0; x < committed.length; x++)
+      for (let y = x + 1; y < committed.length; y++) notePair(committed[x], committed[y])
+  }
+  for (const [file, byOwner] of owners) {
+    let boundary = file.indexOf('/')
+    while (boundary !== -1) {
+      const parents = owners.get(file.slice(0, boundary))
+      if (parents)
+        for (const [child, childClaim] of byOwner)
+          if (childClaim.committed)
+            for (const [parent, parentClaim] of parents)
+              if (parentClaim.committed) notePair(child, parent)
+      boundary = file.indexOf('/', boundary + 1)
+    }
+  }
+
+  const root = repo ?? cwd ?? null
+  const [pairResults, baseConflicts] = await Promise.all([
+    Promise.all(
+      [...pairs.values()].map(async ([a, b]) => {
+        const headA = described[a]?.head
+        const headB = described[b]?.head
+        if (!root || !headA || !headB) return { a, b, paths: null }
+        return { a, b, paths: await conflictingPaths(root, headA, headB) }
+      })
+    ),
+    (root ? resolveBase(cwd, bases) : Promise.resolve(null)).then((baseSha) =>
+      Promise.all(
+        described.map(({ head }) =>
+          root && baseSha && head && head !== baseSha
+            ? conflictingPaths(root, head, baseSha)
+            : Promise.resolve(null)
+        )
+      )
+    )
+  ])
+
+  const conflictedWith = new Map<number, Map<string, Set<string>>>()
+  const noteConflict = (index: number, file: string, other: string): void => {
+    const byPath = conflictedWith.get(index) ?? new Map<string, Set<string>>()
+    const branches = byPath.get(file) ?? new Set<string>()
+    branches.add(other)
+    byPath.set(file, branches)
+    conflictedWith.set(index, byPath)
+  }
+  const evaluated = new Set<string>()
+  for (const { a, b, paths } of pairResults) {
+    if (!paths) continue
+    evaluated.add(participantPair(a, b))
+    for (const file of paths) {
+      noteConflict(a, file, participants[b].label)
+      noteConflict(b, file, participants[a].label)
+    }
+  }
+  if (baseLabel)
+    baseConflicts.forEach((paths, index) => {
+      for (const file of paths ?? []) noteConflict(index, file, baseLabel)
+    })
+
+  /**
+   * A path merges cleanly only when *every* claim on it was actually testable - both sides
+   * committed it and the pair evaluated. One untested claimant leaves the whole path unproven,
+   * because "we checked and it is fine" is a much stronger statement than "we could not check".
+   */
+  const provenClean = (file: string, index: number): boolean => {
+    const byOwner = owners.get(file)
+    const own = byOwner?.get(index)
+    if (!byOwner || !own?.committed || own.dirty) return false
+    const others = [...byOwner.keys()].filter((owner) => owner !== index)
+    if (!others.length) return false
+    return others.every((other) => {
+      const claim = byOwner.get(other)
+      return !!claim?.committed && !claim.dirty && evaluated.has(participantPair(index, other))
+    })
+  }
+
+  const sharedByOwner = new Map<number, string[]>()
+  for (const [file, byOwner] of owners) {
+    if (byOwner.size < 2) continue
+    for (const owner of byOwner.keys()) {
+      const files = sharedByOwner.get(owner) ?? []
+      files.push(file)
+      sharedByOwner.set(owner, files)
+    }
+  }
+
+  return described.map(({ entry }, index) => {
+    const conflicts = conflictedWith.get(index) ?? new Map<string, Set<string>>()
+    const shared = sharedByOwner.get(index) ?? []
+    const overlaps: WorkflowOverlap[] = [...new Set([...shared, ...conflicts.keys()])].map(
+      (file) => {
+        const byOwner = owners.get(file)
+        const own = byOwner?.get(index)
+        const others = new Map<string, OverlapSource>()
+        for (const [owner, provenance] of byOwner ?? [])
+          if (owner !== index) others.set(participants[owner].label, displayedSource(provenance))
+        // A path merge-tree named but intersection never saw (a rename/delete) has no recorded
+        // claim; the merge derived it from commits, so `committed` is the honest label.
+        for (const branch of conflicts.get(file) ?? [])
+          if (!others.has(branch)) others.set(branch, 'committed')
+        const verdict: OverlapVerdict = conflicts.has(file)
+          ? 'conflict'
+          : provenClean(file, index)
+            ? 'clean'
+            : 'overlap'
+        return {
+          path: file,
+          verdict,
+          source: own ? displayedSource(own) : 'committed',
+          branches: [...others]
+            .map(([branch, source]) => ({ branch, source }))
+            .sort((a, b) => a.branch.localeCompare(b.branch))
+        }
+      }
+    )
+    return { ...entry, ...overlapReport(overlaps) }
+  })
+}
+
+async function mergeBase(directory: string, a: string, b: string): Promise<string | null> {
+  try {
+    return (await gitFor(directory).raw(['merge-base', a, b])).trim() || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Compare an ordinary open session to both local and remote-tracking versions of its default
+ * branch. These sessions have no workflow record, so they cannot participate in the registered
+ * workflow matrix above, but drift from master/main is still the conflict most likely to matter
+ * when the session is handed back. The two refs are evaluated once when they point to the same
+ * commit and labelled separately when they diverge.
+ *
+ * Committed tips get a real merge verdict. Working-tree paths are marked `overlap` only when the
+ * default branch changed the same path since the merge base; without committing that work Git
+ * cannot prove whether it will merge, so calling it a conflict would overstate the result.
+ */
+export async function describeSessionComparison(
+  directory: string
+): Promise<WorkflowSessionComparison> {
+  const empty = (
+    repo: string | null,
+    branch: string | null = null,
+    defaultName: string | null = null
+  ): WorkflowSessionComparison => ({
+    directory,
+    repo,
+    branch,
+    defaultBranch: defaultName,
+    ...overlapReport([])
+  })
+
+  const repo = await mainWorktreeRoot(directory)
+  if (!repo) return empty(null)
+
+  try {
+    const [status, target, head] = await Promise.all([
+      gitFor(directory).status(),
+      defaultBranch(directory, false),
+      gitFor(directory)
+        .revparse(['--verify', 'HEAD'])
+        .then((value) => value.trim())
+    ])
+    const branch = status.current ?? null
+    if (!target || !head) return empty(repo, branch)
+
+    const refs = [
+      { ref: target.branch, label: `${target.branch} (local)` },
+      { ref: `${target.remote}/${target.branch}`, label: `${target.remote}/${target.branch}` }
+    ]
+    const resolved = (
+      await Promise.all(
+        refs.map(async (candidate) => ({
+          ...candidate,
+          sha: await resolveBase(directory, [candidate.ref])
+        }))
+      )
+    ).filter((candidate): candidate is (typeof refs)[number] & { sha: string } => !!candidate.sha)
+    if (!resolved.length) return empty(repo, branch, target.branch)
+
+    const uniqueBases = new Map<string, { sha: string; label: string }>()
+    for (const candidate of resolved) {
+      const existing = uniqueBases.get(candidate.sha)
+      if (existing) {
+        // Local and remote are in sync, so one generic label is clearer than two identical claims.
+        existing.label = target.branch
+      } else {
+        uniqueBases.set(candidate.sha, { sha: candidate.sha, label: candidate.label })
+      }
+    }
+
+    const working = new Map<string, OverlapSource>()
+    for (const claim of workingClaims(status)) {
+      const current = working.get(claim.path)
+      working.set(claim.path, current ? strongest(current, claim.source) : claim.source)
+    }
+
+    const results = await Promise.all(
+      [...uniqueBases.values()].map(async (base) => {
+        const [conflicts, common] = await Promise.all([
+          head === base.sha
+            ? Promise.resolve<string[] | null>([])
+            : conflictingPaths(repo, head, base.sha),
+          mergeBase(directory, head, base.sha)
+        ])
+        const [changedOnDefault, changedInSession] = common
+          ? await Promise.all([
+              rangePaths(directory, `${common}..${base.sha}`),
+              rangePaths(directory, `${common}..${head}`)
+            ])
+          : [null, null]
+        return { ...base, conflicts, changedOnDefault, changedInSession }
+      })
+    )
+
+    const byPath = new Map<string, WorkflowOverlap>()
+    const note = (
+      file: string,
+      verdict: Extract<OverlapVerdict, 'conflict' | 'overlap'>,
+      source: OverlapSource,
+      label: string
+    ): void => {
+      const existing = byPath.get(file)
+      if (!existing) {
+        byPath.set(file, {
+          path: file,
+          verdict,
+          source,
+          branches: [{ branch: label, source: 'committed' }]
+        })
+        return
+      }
+      if (verdict === 'conflict') {
+        existing.verdict = 'conflict'
+        existing.source = 'committed'
+      } else if (existing.verdict !== 'conflict') {
+        // For an unproven row, dirty provenance is the useful fact even if this path was committed.
+        existing.source =
+          existing.source === 'working' || source === 'working'
+            ? 'working'
+            : existing.source === 'parked' || source === 'parked'
+              ? 'parked'
+              : 'committed'
+      }
+      if (!existing.branches.some((claim) => claim.branch === label))
+        existing.branches.push({ branch: label, source: 'committed' })
+    }
+
+    for (const result of results) {
+      const conflicted = new Set(result.conflicts ?? [])
+      for (const file of conflicted) note(file, 'conflict', 'committed', result.label)
+      if (result.conflicts === null) {
+        const changedInSession = new Set(result.changedInSession ?? [])
+        for (const file of result.changedOnDefault ?? [])
+          if (changedInSession.has(file)) note(file, 'overlap', 'committed', result.label)
+      }
+      for (const file of result.changedOnDefault ?? []) {
+        const source = working.get(file)
+        if (source && !conflicted.has(file)) note(file, 'overlap', source, result.label)
+      }
+    }
+    const overlaps = [...byPath.values()].map((overlap) => ({
+      ...overlap,
+      branches: overlap.branches.sort((a, b) => a.branch.localeCompare(b.branch))
+    }))
+
+    return {
+      directory,
+      repo,
+      branch,
+      defaultBranch: target.branch,
+      ...overlapReport(overlaps)
+    }
+  } catch {
+    return empty(repo)
+  }
+}
+
+async function describeSessionComparisons(
+  directories: string[]
+): Promise<WorkflowSessionComparison[]> {
+  const unique = directories
+    .filter((directory): directory is string => typeof directory === 'string' && !!directory.trim())
+    .filter(
+      (directory, index, all) =>
+        all.findIndex((candidate) => samePath(candidate, directory)) === index
+    )
+    .slice(0, 100)
+  return Promise.all(unique.map(describeSessionComparison))
 }
 
 export async function describeWorkflows(
@@ -238,13 +744,14 @@ export async function describeWorkflows(
   error: string | null,
   detail = false
 ): Promise<WorkflowList> {
-  const [summary, entries, target, checkedOut] = await Promise.all([
+  const [summary, entries, target, checkedOut, heads] = await Promise.all([
     gitFor(cwd)
       .branchLocal()
       .catch(() => null),
     stashEntries(cwd),
     defaultBranch(cwd, false),
-    worktreeMap(cwd)
+    worktreeMap(cwd),
+    detail ? branchHeads(cwd) : new Map<string, string>()
   ])
   if (!summary) return emptyList(error, repo)
 
@@ -275,46 +782,33 @@ export async function describeWorkflows(
         detail && entry ? parkedFilePaths(cwd, entry.selector) : null
       ])
       return {
-        branch,
-        current: branch === current,
-        exists: summary.all.includes(branch),
-        parked: entry
-          ? {
-              files: detail
-                ? (parkedPaths?.length ?? null)
-                : await parkedFiles(cwd, entry.selector),
-              date: entry.date,
-              count: entries.filter((candidate) => candidate.branch === branch).length
-            }
-          : null,
-        worktree: absoluteWorktree,
-        worktreeExists,
-        worktreeLinked,
-        review: review?.review,
-        changedFiles: [...(review?.files ?? []), ...(parkedPaths ?? [])]
+        entry: {
+          branch,
+          current: branch === current,
+          exists: summary.all.includes(branch),
+          parked: entry
+            ? {
+                files: detail
+                  ? (parkedPaths?.length ?? null)
+                  : await parkedFiles(cwd, entry.selector),
+                date: entry.date,
+                count: entries.filter((candidate) => candidate.branch === branch).length
+              }
+            : null,
+          worktree: absoluteWorktree,
+          worktreeExists,
+          worktreeLinked,
+          review: review?.review
+        },
+        claims: [...(review?.claims ?? []), ...claimsOf(parkedPaths, 'parked')],
+        head: heads.get(branch) ?? null
       }
     })
   )
 
-  const owners = new Map<string, Set<number>>()
-  if (detail) {
-    described.forEach((entry, index) => {
-      for (const file of new Set(entry.changedFiles)) {
-        const current = owners.get(file) ?? new Set<number>()
-        current.add(index)
-        owners.set(file, current)
-      }
-    })
-  }
-  const workflows: WorkflowEntry[] = described.map(({ changedFiles, ...entry }) => ({
-    ...entry,
-    ...(detail
-      ? {
-          conflicted: [...new Set(changedFiles)].filter((file) => (owners.get(file)?.size ?? 0) > 1)
-            .length
-        }
-      : {})
-  }))
+  const workflows: WorkflowEntry[] = detail
+    ? await resolveOverlaps(cwd, repo, described, current, bases, target?.branch ?? null)
+    : described.map(({ entry }) => entry)
 
   return { repo, current, defaultBranch: target?.branch ?? null, workflows, error }
 }
@@ -355,9 +849,12 @@ export function registerWorkflowHandlers(): void {
 
   ipcMain.handle(
     'workflow:overview',
-    async (_event, detail?: boolean): Promise<WorkflowOverview> => {
+    async (_event, detail?: boolean, directories: string[] = []): Promise<WorkflowOverview> => {
       const { records, error } = readRecords()
-      if (error) return { repos: [], error }
+      const comparisons = detail
+        ? describeSessionComparisons(directories)
+        : Promise.resolve<WorkflowSessionComparison[]>([])
+      if (error) return { repos: [], comparisons: await comparisons, error }
 
       const roots: string[] = []
       for (const record of records) {
@@ -365,10 +862,15 @@ export function registerWorkflowHandlers(): void {
         if (!roots.some((known) => samePath(known, absolute))) roots.push(absolute)
       }
 
-      const repos = await Promise.all(
-        roots.map((root) => describeRepo(root, records, detail === true))
-      )
-      return { repos: repos.sort((a, b) => a.name.localeCompare(b.name)), error: null }
+      const [repos, compared] = await Promise.all([
+        Promise.all(roots.map((root) => describeRepo(root, records, detail === true))),
+        comparisons
+      ])
+      return {
+        repos: repos.sort((a, b) => a.name.localeCompare(b.name)),
+        comparisons: compared,
+        error: null
+      }
     }
   )
 
