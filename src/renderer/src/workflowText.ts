@@ -1,4 +1,5 @@
 import { isInside, normalizePath } from '@renderer/format'
+import type { AgentSession, AgentSummary } from '@renderer/useAgents'
 
 export type WorkflowList = Awaited<ReturnType<typeof window.api.workflow.list>>
 export type WorkflowEntry = WorkflowList['workflows'][number]
@@ -46,9 +47,12 @@ export function launchLabel(entry: WorkflowEntry): string {
 }
 
 export function stateLabel(entry: WorkflowEntry): string {
+  if (!usable(entry)) {
+    if (entry.worktree) return 'stale'
+    if (!entry.exists) return 'missing'
+  }
+  if (entry.merged === true) return 'merged'
   if (usable(entry)) return ''
-  if (entry.worktree) return 'stale'
-  if (!entry.exists) return 'missing'
   if (entry.current) return 'checked out'
   return ''
 }
@@ -248,4 +252,67 @@ export function parkedTitle(entry: WorkflowEntry): string {
     `An earlier restore on ${entry.branch} conflicted, so git kept its stash. snow restores the newest;`,
     'the older ones are still in `git stash list` under the same name.'
   ].join('\n')
+}
+
+export type WorkflowOrphan = NonNullable<WorkflowRepo['orphans']>[number]
+
+/**
+ * A workspace whose work has landed and which nothing is holding on to. Three shapes reach the same
+ * dialog: a live worktree, a record whose worktree git no longer links, and a linked worktree no
+ * record claims.
+ */
+export type CleanupKind = 'workspace' | 'stale' | 'orphan'
+
+type CleanupBase = {
+  repo: string
+  repoName: string
+  branch: string
+  reasons: string[]
+  /** Pre-checked in the dialog. A directory snow did not lay out is opt-in. */
+  suggested: boolean
+}
+
+export type CleanupTarget = CleanupBase &
+  (
+    | { kind: 'orphan'; directory: string }
+    | { kind: 'workspace' | 'stale'; directory: string | null }
+  )
+
+/**
+ * `merged === true` is the whole gate - `null` means nothing could tell and is never offered. The
+ * rest is about what would be destroyed rather than what has landed: parked work, uncommitted work,
+ * and a session that is still using the directory.
+ */
+export function cleanupCandidate(
+  entry: WorkflowEntry,
+  activity: { agents: AgentSession[]; summary: AgentSummary }
+): boolean {
+  return (
+    entry.merged === true &&
+    !entry.current &&
+    !entry.parked &&
+    (entry.review?.changed ?? 0) === 0 &&
+    activity.agents.length === 0 &&
+    activity.summary.waiting === 0 &&
+    activity.summary.working === 0
+  )
+}
+
+/** A record whose worktree git no longer links: bookkeeping, with nothing left to delete. */
+export function cleanupStale(entry: WorkflowEntry): boolean {
+  return !!entry.worktree && !usable(entry) && !entry.parked
+}
+
+export function cleanupOrphan(orphan: WorkflowOrphan): boolean {
+  return orphan.merged === true && orphan.changed === 0
+}
+
+export function cleanupReasons(entry: WorkflowEntry): string[] {
+  return entry.review ? ['merged', 'no changes', 'nothing parked'] : ['merged', 'nothing parked']
+}
+
+export function cleanupScope(kind: CleanupKind): string {
+  if (kind === 'stale') return 'Removes the workspace record. Nothing is on disk to delete.'
+  if (kind === 'orphan') return 'Removes the worktree directory. The branch stays.'
+  return 'Removes the worktree directory and the workspace record. The branch stays.'
 }

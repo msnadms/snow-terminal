@@ -18,6 +18,7 @@ const redactedChannels = new Set([
   'workflow:create',
   'workflow:promote',
   'workflow:demote',
+  'workflow:removeWorktree',
   'workflow:prune',
   'snowconfig:get',
   'snowconfig:addPreset',

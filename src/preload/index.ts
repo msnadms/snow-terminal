@@ -215,6 +215,8 @@ const workflow = {
     ipcRenderer.invoke('workflow:promote', cwd, branch),
   demote: (cwd: string | undefined, branch: string): Promise<WorkflowResult> =>
     ipcRenderer.invoke('workflow:demote', cwd, branch),
+  removeWorktree: (cwd: string | undefined, directory: string): Promise<WorkflowResult> =>
+    ipcRenderer.invoke('workflow:removeWorktree', cwd, directory),
   prune: (cwd?: string): Promise<WorkflowResult> => ipcRenderer.invoke('workflow:prune', cwd),
   onChanged: (callback: () => void): (() => void) => {
     const listener = (): void => callback()

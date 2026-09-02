@@ -2,6 +2,7 @@ import { execFile } from 'child_process'
 import os from 'os'
 import { promisify } from 'util'
 import { log } from './log'
+import { boundedCache } from './cache'
 
 const execFileAsync = promisify(execFile)
 
@@ -91,23 +92,13 @@ function mergeTreeSupported(repo: string): Promise<boolean> {
   return probe
 }
 
-const pairCache = new Map<string, string[] | null>()
+const pairCache = boundedCache<string[] | null>(maxCachedPairs)
 
 let mergeRunCount = 0
 
 /** How many merges have actually been evaluated, so a test can prove the cache is being hit. */
 export function mergeRuns(): number {
   return mergeRunCount
-}
-
-function remember(key: string, value: string[] | null): string[] | null {
-  pairCache.set(key, value)
-  while (pairCache.size > maxCachedPairs) {
-    const oldest = pairCache.keys().next()
-    if (oldest.done) break
-    pairCache.delete(oldest.value)
-  }
-  return value
 }
 
 function pairKey(repo: string, a: string, b: string): string {
@@ -134,7 +125,7 @@ export async function conflictingPaths(
   const cached = pairCache.get(key)
   if (cached !== undefined) return cached
 
-  if (!(await mergeTreeSupported(repo))) return remember(key, null)
+  if (!(await mergeTreeSupported(repo))) return pairCache.set(key, null)
 
   mergeRunCount++
   const { code, stdout } = await runGit(repo, [
@@ -145,11 +136,11 @@ export async function conflictingPaths(
     a,
     b
   ])
-  if (code === 0) return remember(key, [])
-  if (code !== 1) return remember(key, null)
+  if (code === 0) return pairCache.set(key, [])
+  if (code !== 1) return pairCache.set(key, null)
 
   const [, ...rest] = stdout.split('\0')
   const end = rest.indexOf('')
   const paths = end === -1 ? rest : rest.slice(0, end)
-  return remember(key, [...new Set(paths)])
+  return pairCache.set(key, [...new Set(paths)])
 }

@@ -785,8 +785,8 @@ deadlock.
 
 Results cache on the **pair of commit SHAs**, which is what makes this affordable: a detailed overview
 re-fires through a 100 ms debounce on every mutation in any open repo, and a workflow that has not
-committed since the last read costs zero subprocesses. The cache is bounded (oldest evicted) since SHA
-pairs never self-invalidate. Note `--write-tree` writes loose objects, so this is **not a pure read** —
+committed since the last read costs zero subprocesses. The cache is `boundedCache` (`src/main/cache.ts`,
+shared with `mergedInto`) — oldest evicted, since SHA pairs never self-invalidate. Note `--write-tree` writes loose objects, so this is **not a pure read** —
 they are unreferenced and collected by `git gc`, one write per never-before-seen pair.
 
 `-z` output is sectioned: tree OID, then the conflicted names, then an **empty NUL entry**, then
@@ -812,6 +812,46 @@ the git panel uses (which is why `App` reads `tabsRef` there and wraps it in `us
 review-mode diff tab, distinct from an ordinary cwd-deduplicated diff tab; opening it again refreshes
 and focuses the existing tab. Previous/next in `DiffScroll` update the review tab's cwd and branch in
 place, and the keyed `WorkingDiffView` remount resets scroll and watchers while the tab stays put.
+
+#### Clean up
+
+Workspaces accumulate, so **Clean up** proposes the ones whose work has landed and retires them in one
+sweep. It removes the worktree directory and the registry entry; the local branch and anything in the
+stash are never touched, so nothing it does is unrecoverable.
+
+`merged` on a `WorkflowEntry` is the whole gate, computed on `detail` reads by `mergedInto` against
+**refs from the repo root**, so a parked branch with no working tree answers too. Two tests, because a
+squash or rebase merge leaves no ancestry at all: `rev-list --count <base>..<branch>` is `0` for an
+ordinary merge, and otherwise the paths the branch committed (`rangePaths`, already used by
+`committedPaths`) are diffed `<base> <branch>` — an empty diff means the default branch already reads
+identically on every file the branch touched. The **count** is read rather than
+`merge-base --is-ancestor`'s exit code, for the reason `mergeCheck.ts` reaches for `execFile`:
+simple-git rejects on any non-zero exit and `GitError` carries no code, so "not an ancestor" and "the
+command failed" would arrive as the same rejection.
+
+The answer is a pure function of the base and branch commits, so it caches on that **pair of SHAs**
+exactly as `mergeCheck.ts` does — a detailed overview re-fires on every mutation in any open repo, and
+a branch that has not committed since the last read costs no subprocesses. The base is resolved **once
+per `describeWorkflows`** and threaded into `mergedInto`, `orphansOf`, and `resolveOverlaps`, rather
+than re-resolved per workflow.
+
+`null` is "could not tell" and is **never** offered; a later unrelated edit to a shared path reports
+`false`, which is the safe direction. Beyond `merged`, candidacy is about what would be destroyed —
+nothing parked, nothing uncommitted, no agent in the directory, and never the branch checked out in the
+main worktree.
+
+`WorkflowList.orphans` carries linked worktrees **no record claims** (`git worktree add` by hand, an
+agent harness cutting its own). They reach the same dialog through `workflow:removeWorktree`, which is
+separate from `demote` because an orphan has no record to update and no park to make — its uncommitted
+work is not snow's to move into a shared stash under a marker it never claimed, so a dirty tree is a
+refusal. `inContainer` (inside `<repo>-worktrees/`) decides only whether the row is **pre-checked**: a
+directory snow did not lay out is listed but opt-in. `worktreeMap` is keyed by branch and skips
+prunable entries, so a detached-HEAD worktree is not reported.
+
+Both handlers share `removeLinkedWorktree`, so the try-once-then-close-terminals retry cannot drift
+between them. The sweep itself is a renderer loop in the `launchAll` shape — one `action.run`, serial
+(every handler takes the repo lock anyway), failures collected into a single `FailureDialog`. Order is
+load-bearing: `unregister` refuses while the worktree is still linked, so `demote` lands first.
 
 `worktreeDirectory` replaces path-unsafe characters, which would collapse distinct branches onto one
 directory, so it appends a seven-character SHA-1 **only when sanitizing changed something**. Promoting

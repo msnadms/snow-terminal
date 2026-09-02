@@ -21,6 +21,7 @@ import {
   type GitCheckoutResult
 } from './git'
 import type { StatusResult } from 'simple-git'
+import { boundedCache } from './cache'
 import { conflictingPaths } from './mergeCheck'
 import { withSharedStashLock } from './stashLock'
 import { collapseHome, expandHome, samePath } from './config'
@@ -98,6 +99,11 @@ export interface WorkflowEntry {
   worktree?: string
   worktreeExists?: boolean
   worktreeLinked?: boolean
+  /**
+   * Whether the default branch already contains this branch's work, from detail reads. `null` means
+   * nothing could tell, which is deliberately not `false` - cleanup only ever offers a `true`.
+   */
+  merged?: boolean | null
   review?: WorkflowReview
   /** Paths also claimed by another workflow in this repository, from detail reads. Capped. */
   overlaps?: WorkflowOverlap[]
@@ -115,7 +121,23 @@ export interface WorkflowList {
   current: string | null
   defaultBranch: string | null
   workflows: WorkflowEntry[]
+  /** Linked worktrees no record claims. Detail reads only; absent otherwise. */
+  orphans?: WorkflowOrphan[]
   error: string | null
+}
+
+/**
+ * A linked worktree of this repository that no registry entry claims - `git worktree add` by hand,
+ * or an agent harness cutting its own isolated checkout. Listed only so cleanup can offer it; snow
+ * never adopts one on its own.
+ */
+export interface WorkflowOrphan {
+  branch: string
+  directory: string
+  merged: boolean | null
+  changed: number | null
+  /** Inside `<repo>-worktrees/`, i.e. laid out the way snow lays one out. */
+  inContainer: boolean
 }
 
 export interface WorkflowRepo extends WorkflowList {
@@ -209,13 +231,8 @@ function missingEntry({ branch, worktree }: WorkflowRecord): WorkflowEntry {
 
 async function aheadOf(directory: string, bases: string[]): Promise<number | null> {
   for (const base of bases) {
-    try {
-      const raw = await gitFor(directory).raw(['rev-list', '--count', `${base}..HEAD`])
-      const value = Number(raw.trim())
-      if (Number.isFinite(value)) return value
-    } catch {
-      continue
-    }
+    const value = await revCount(directory, `${base}..HEAD`)
+    if (value !== null) return value
   }
   return null
 }
@@ -294,7 +311,7 @@ export function nameStatusPaths(raw: string): string[] {
   return paths
 }
 
-async function rangePaths(directory: string, range: string): Promise<string[] | null> {
+async function rangePaths(directory: string | undefined, range: string): Promise<string[] | null> {
   try {
     const raw = await gitFor(directory).raw(['diff', '--name-status', '-z', '-M', range])
     return nameStatusPaths(raw)
@@ -309,6 +326,135 @@ async function committedPaths(directory: string, bases: string[]): Promise<strin
     if (paths) return paths
   }
   return []
+}
+
+async function revCount(cwd: string | undefined, range: string): Promise<number | null> {
+  try {
+    const value = Number((await gitFor(cwd).raw(['rev-list', '--count', range])).trim())
+    return Number.isFinite(value) ? value : null
+  } catch {
+    return null
+  }
+}
+
+const maxCachedMerges = 500
+const mergedCache = boundedCache<boolean | null>(maxCachedMerges)
+
+async function evaluateMerged(
+  cwd: string | undefined,
+  branch: string,
+  base: string
+): Promise<boolean | null> {
+  const ahead = await revCount(cwd, `${base}..${branch}`)
+  if (ahead === null) return null
+  if (ahead === 0) return true
+  const paths = await rangePaths(cwd, `${base}...${branch}`)
+  if (!paths) return null
+  if (paths.length === 0) return true
+  try {
+    const raw = await gitFor(cwd).raw(['diff', '--name-only', '-z', base, branch, '--', ...paths])
+    return raw.replace(/\0/g, '').length === 0
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Whether the default branch already contains everything this branch has to give. Runs against refs
+ * from the repository root, so a parked branch with no working tree of its own answers too.
+ *
+ * The count is read rather than `merge-base --is-ancestor`'s exit code, for the reason `mergeCheck.ts`
+ * uses `execFile`: simple-git rejects on any non-zero exit and `GitError` carries no code, so "not an
+ * ancestor" and "the command failed" would arrive as the same rejection. A squash or rebase merge
+ * leaves no ancestry at all, which is what the second test is for - if the default branch reads
+ * identically on every path the branch committed, the work landed under a different SHA.
+ *
+ * The answer is a pure function of the two commits, so it caches on that pair the way `mergeCheck.ts`
+ * does: a detailed overview re-fires on every mutation in any open repo, and a branch that has not
+ * committed since the last read costs nothing.
+ */
+async function mergedInto(
+  cwd: string | undefined,
+  branch: string,
+  base: string | null,
+  head: string | null
+): Promise<boolean | null> {
+  if (!base) return null
+  if (head === base) return true
+  if (!head) return evaluateMerged(cwd, branch, base)
+  const key = `${base}\0${head}`
+  const cached = mergedCache.get(key)
+  if (cached !== undefined) return cached
+  return mergedCache.set(key, await evaluateMerged(cwd, branch, base))
+}
+
+/**
+ * Removal deletes the directory whole, ignored files included, with or without --force; the renderer
+ * confirms that. The first --force covers what a park could not take. The second is required for
+ * explicitly locked worktrees (Claude Code creates these); the same confirmation also covers
+ * overriding that advisory lock.
+ *
+ * Run from the main worktree: invoking this from the target worktree itself also keeps that directory
+ * as Git's current working directory, which prevents its removal on Windows.
+ *
+ * Try once with the session still running. Killing the user's shells is the destructive part of
+ * removing a workspace and it is only needed on Windows, where an open shell holds the directory - so
+ * it is worth finding out whether removal needs it before paying it. A failure carries whether that
+ * price was paid, because a caller that has to unwind still needs to know.
+ */
+async function removeLinkedWorktree(
+  repo: string,
+  branch: string,
+  directory: string
+): Promise<void> {
+  try {
+    await gitFor(repo).raw(['worktree', 'remove', '--force', '--force', directory])
+  } catch (first) {
+    if (!(await stillLinked(repo, branch, directory))) throw first
+    await closePtysInDirectory(directory)
+    try {
+      await gitFor(repo).raw(['worktree', 'remove', '--force', '--force', directory])
+    } catch (second) {
+      throw Object.assign(second as object, { terminalsClosed: true })
+    }
+  }
+  if (samePath(path.dirname(directory), worktreeContainer(repo)))
+    await fs.promises.rmdir(worktreeContainer(repo)).catch(() => {})
+}
+
+function closedTerminals(error: unknown): boolean {
+  return !!error && typeof error === 'object' && 'terminalsClosed' in error
+}
+
+async function orphansOf(
+  cwd: string | undefined,
+  repo: string | null,
+  checkedOut: Map<string, string>,
+  claimed: Set<string>,
+  base: string | null,
+  heads: Map<string, string>
+): Promise<WorkflowOrphan[]> {
+  const container = repo ? worktreeContainer(repo) : null
+  return Promise.all(
+    [...checkedOut]
+      .filter(([branch, directory]) => !claimed.has(branch) && !(repo && samePath(directory, repo)))
+      .map(async ([branch, directory]) => {
+        const [merged, changed] = await Promise.all([
+          mergedInto(cwd, branch, base, heads.get(branch) ?? null),
+          gitFor(directory)
+            .status()
+            .then((status) => status.files.length)
+            .catch(() => null)
+        ])
+        return {
+          branch,
+          directory,
+          merged,
+          changed,
+          inContainer: !!container && samePath(path.dirname(directory), container)
+        }
+      })
+  )
 }
 
 async function reviewOf(directory: string, bases: string[]): Promise<WorkflowReviewState | null> {
@@ -418,7 +564,7 @@ async function resolveOverlaps(
   repo: string | null,
   described: DescribedWorkflow[],
   current: string | null,
-  bases: string[],
+  baseSha: string | null,
   baseLabel: string | null
 ): Promise<WorkflowEntry[]> {
   const registered = described.map(({ entry }) => entry.branch)
@@ -471,13 +617,11 @@ async function resolveOverlaps(
         return { a, b, paths: await conflictingPaths(root, headA, headB) }
       })
     ),
-    (root ? resolveBase(cwd, bases) : Promise.resolve(null)).then((baseSha) =>
-      Promise.all(
-        described.map(({ head }) =>
-          root && baseSha && head && head !== baseSha
-            ? conflictingPaths(root, head, baseSha)
-            : Promise.resolve(null)
-        )
+    Promise.all(
+      described.map(({ head }) =>
+        root && baseSha && head && head !== baseSha
+          ? conflictingPaths(root, head, baseSha)
+          : Promise.resolve(null)
       )
     )
   ])
@@ -757,6 +901,7 @@ export async function describeWorkflows(
 
   const current = summary.current || null
   const bases = target ? [`${target.remote}/${target.branch}`, target.branch] : []
+  const baseSha = detail && bases.length > 0 ? await resolveBase(cwd, bases) : null
   const described = await Promise.all(
     records.map(async ({ branch, worktree }): Promise<DescribedWorkflow> => {
       const entry = newestStash(entries, branch)
@@ -777,9 +922,12 @@ export async function describeWorkflows(
           : branch === current
             ? (repo ?? cwd ?? null)
             : null
-      const [review, parkedPaths] = await Promise.all([
+      const [review, parkedPaths, merged] = await Promise.all([
         detail && reviewDir ? reviewOf(reviewDir, bases) : null,
-        detail && entry ? parkedFilePaths(cwd, entry.selector) : null
+        detail && entry ? parkedFilePaths(cwd, entry.selector) : null,
+        detail && summary.all.includes(branch)
+          ? mergedInto(cwd, branch, baseSha, heads.get(branch) ?? null)
+          : null
       ])
       return {
         entry: {
@@ -798,6 +946,7 @@ export async function describeWorkflows(
           worktree: absoluteWorktree,
           worktreeExists,
           worktreeLinked,
+          merged,
           review: review?.review
         },
         claims: [...(review?.claims ?? []), ...claimsOf(parkedPaths, 'parked')],
@@ -806,11 +955,16 @@ export async function describeWorkflows(
     })
   )
 
-  const workflows: WorkflowEntry[] = detail
-    ? await resolveOverlaps(cwd, repo, described, current, bases, target?.branch ?? null)
-    : described.map(({ entry }) => entry)
+  const [workflows, orphans] = await Promise.all([
+    detail
+      ? resolveOverlaps(cwd, repo, described, current, baseSha, target?.branch ?? null)
+      : described.map(({ entry }) => entry),
+    detail
+      ? orphansOf(cwd, repo, checkedOut, new Set(records.map((r) => r.branch)), baseSha, heads)
+      : undefined
+  ])
 
-  return { repo, current, defaultBranch: target?.branch ?? null, workflows, error }
+  return { repo, current, defaultBranch: target?.branch ?? null, workflows, orphans, error }
 }
 
 async function describeRepo(
@@ -1078,7 +1232,6 @@ export function registerWorkflowHandlers(): void {
         const directory = record?.worktree ? expandHome(record.worktree) : null
         if (!record || !directory) return { ok: false, error: `${name} is not a worktree workflow` }
 
-        let terminalsClosed = false
         let parked = false
         try {
           const status = await gitFor(directory).status()
@@ -1095,28 +1248,9 @@ export function registerWorkflowHandlers(): void {
             )
             parked = true
           }
-          // Removal deletes the directory whole, ignored files included, with or without --force;
-          // the renderer confirms that. The first --force covers what the stash above could not
-          // take. The second is required for explicitly locked worktrees (Claude Code creates
-          // these); the same confirmation also covers overriding that advisory lock.
-          //
-          // Run from the main worktree: invoking this from the target worktree itself also keeps
-          // that directory as Git's current working directory, which prevents its removal on Windows.
-          //
-          // Try once with the session still running. Killing the user's shells is the destructive
-          // part of stopping a workflow and it is only needed on Windows, where an open shell holds
-          // the directory - so it is worth finding out whether removal needs it before paying it.
-          try {
-            await gitFor(repo).raw(['worktree', 'remove', '--force', '--force', directory])
-          } catch (first) {
-            if (!(await stillLinked(repo, name, directory))) throw first
-            await closePtysInDirectory(directory)
-            terminalsClosed = true
-            await gitFor(repo).raw(['worktree', 'remove', '--force', '--force', directory])
-          }
-          if (samePath(path.dirname(directory), worktreeContainer(repo)))
-            await fs.promises.rmdir(worktreeContainer(repo)).catch(() => {})
+          await removeLinkedWorktree(repo, name, directory)
         } catch (error) {
+          const terminalsClosed = closedTerminals(error)
           // `worktree remove` deletes its bookkeeping even when it cannot delete every file, and
           // says so: "there's no going back from here". Retrying then only ever reports "is not a
           // working tree", so the registry entry has to be cleared here or the workflow is stranded.
@@ -1173,6 +1307,76 @@ export function registerWorkflowHandlers(): void {
             worktree: directory
           }
         return { ok: true, branch: name, worktree: directory }
+      }).catch((error) => ({ ok: false, error: errorText(error), detail: errorDetail(error) }))
+    }
+  )
+
+  /**
+   * An orphan has no registry entry, so `workflow:demote` cannot reach it - and no park either: its
+   * uncommitted work is not snow's to move into a shared stash under a marker it never claimed. A
+   * dirty tree is therefore a refusal rather than something to rescue.
+   */
+  ipcMain.handle(
+    'workflow:removeWorktree',
+    async (_event, cwd: string | undefined, directory: string): Promise<WorkflowResult> => {
+      const target = (directory ?? '').trim()
+      if (!target) return { ok: false, error: 'Worktree required' }
+
+      return withRepoLock(cwd, async () => {
+        const repo = await mainWorktreeRoot(cwd)
+        if (!repo) return { ok: false, error: 'Not a git repository' }
+        if (samePath(target, repo))
+          return { ok: false, error: 'That is the repository itself, not a linked worktree' }
+
+        const { records, error } = recordsFor(repo)
+        if (error) return { ok: false, error: `Could not read ${workflowsPath()}`, detail: error }
+        const owner = records.find(
+          (record) => record.worktree && samePath(expandHome(record.worktree), target)
+        )
+        if (owner)
+          return {
+            ok: false,
+            error: `${owner.branch} is a registered workspace`,
+            detail: 'Remove its workspace instead, so its uncommitted work is parked first.'
+          }
+
+        const [worktrees, changed] = await Promise.all([
+          worktreeMap(repo),
+          gitFor(target)
+            .status()
+            .then((status) => status.files.length)
+            .catch(() => 0)
+        ])
+        const branch = [...worktrees].find(([, dir]) => samePath(dir, target))?.[0]
+        if (!branch)
+          return { ok: false, error: 'That directory is not a linked worktree of this repository' }
+
+        if (changed > 0)
+          return {
+            ok: false,
+            error: `${branch}'s worktree has uncommitted changes`,
+            detail: `${changed} changed file${changed === 1 ? '' : 's'} in ${collapseHome(target)}.\nsnow does not park work it was never asked to track - commit or discard it first.`
+          }
+
+        try {
+          await removeLinkedWorktree(repo, branch, target)
+        } catch (err) {
+          const terminalsClosed = closedTerminals(err)
+          return {
+            ok: false,
+            error: errorText(err),
+            detail: [
+              errorDetail(err),
+              terminalsClosed
+                ? `\nIts terminals were closed to try to free ${collapseHome(target)}.`
+                : ''
+            ]
+              .filter(Boolean)
+              .join('\n'),
+            worktree: terminalsClosed ? target : undefined
+          }
+        }
+        return { ok: true, branch, worktree: target }
       }).catch((error) => ({ ok: false, error: errorText(error), detail: errorDetail(error) }))
     }
   )

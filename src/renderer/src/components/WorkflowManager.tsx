@@ -1,4 +1,5 @@
 import { Fragment, memo, useEffect, useMemo, useRef, useState } from 'react'
+import CleanupDialog from './CleanupDialog'
 import ContextMenu from './ContextMenu'
 import FailureDialog from './FailureDialog'
 import RemoveWorkflowDialog from './RemoveWorkflowDialog'
@@ -11,6 +12,10 @@ import { useGitColors } from '@renderer/useGitColors'
 import { useUsage } from '@renderer/useUsage'
 import { agentSummary, type AgentSession, type AgentSummary } from '@renderer/useAgents'
 import {
+  cleanupCandidate,
+  cleanupOrphan,
+  cleanupReasons,
+  cleanupStale,
   inboxSignal,
   inScope,
   isRegistered,
@@ -29,6 +34,7 @@ import {
   stateSlug,
   usable,
   needsOperator,
+  type CleanupTarget,
   type InboxSignal,
   type WorkflowComparison,
   type WorkflowEntry,
@@ -252,6 +258,7 @@ function WorkflowManager({
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [removing, setRemoving] = useState<Targeted | null>(null)
   const [demoting, setDemoting] = useState<Targeted | null>(null)
+  const [cleaning, setCleaning] = useState(false)
   const [failure, setFailure] = useState<Failure | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const [repoDrag, setRepoDrag] = useState<RepoDrag | null>(null)
@@ -683,21 +690,30 @@ function WorkflowManager({
     )
   }
 
+  const demoteOne = async (repo: string, branch: string): Promise<Failure | null> => {
+    const result = await window.api.workflow.demote(repo, branch)
+    if (result.worktree) onCloseWorktree?.(result.worktree)
+    return result.ok ? null : failureOf(result)
+  }
+
   const demote = (): void => {
     const target = demoting
     setDemoting(null)
     if (!target || action.pending) return
     action.run(async () => {
-      const result = await window.api.workflow.demote(target.repo.repo, target.entry.branch)
-      if (result.worktree) onCloseWorktree?.(result.worktree)
-      return result
+      const failed = await demoteOne(target.repo.repo, target.entry.branch)
+      return failed ? { ok: false, error: failed.title, detail: failed.detail } : { ok: true }
     }, 'Removing workspace…')
   }
 
   const orderedRepos = orderRepos(overview?.repos ?? [], workspaceOrder)
 
-  const rowsFor = (repo: WorkflowRepo): WorkflowRow[] =>
-    repo.workflows
+  const rowCache = new Map<string, WorkflowRow[]>()
+
+  const rowsFor = (repo: WorkflowRepo): WorkflowRow[] => {
+    const cached = rowCache.get(repo.repo)
+    if (cached) return cached
+    const rows = repo.workflows
       .map((entry, order) => {
         const dir = openDir(repo, entry)
         const indexed = dir ? indexedFor(dir) : { activity: emptyActivity, cost: 0 }
@@ -719,6 +735,9 @@ function WorkflowManager({
         (left, right) =>
           right.signal.tier - left.signal.tier || right.cost - left.cost || left.order - right.order
       )
+    rowCache.set(repo.repo, rows)
+    return rows
+  }
 
   const reviewTargets = orderedRepos.flatMap((repo) =>
     rowsFor(repo).flatMap(({ entry, dir, signal }) =>
@@ -729,6 +748,85 @@ function WorkflowManager({
         : []
     )
   )
+
+  const cleanupTargets: CleanupTarget[] = orderedRepos.flatMap((repo) => {
+    if (repo.unreachable) return []
+    const workspaces = rowsFor(repo).flatMap(({ entry, activity }): CleanupTarget[] => {
+      const shape = cleanupCandidate(entry, activity)
+        ? {
+            kind: 'workspace' as const,
+            directory: usable(entry) ? (entry.worktree ?? null) : null,
+            reasons: cleanupReasons(entry)
+          }
+        : cleanupStale(entry)
+          ? {
+              kind: 'stale' as const,
+              directory: entry.worktree ?? null,
+              reasons: ['no longer linked']
+            }
+          : null
+      if (!shape) return []
+      return [
+        { repo: repo.repo, repoName: repo.name, branch: entry.branch, suggested: true, ...shape }
+      ]
+    })
+    const orphans = (repo.orphans ?? []).filter(cleanupOrphan).map((orphan): CleanupTarget => ({
+      repo: repo.repo,
+      repoName: repo.name,
+      kind: 'orphan',
+      branch: orphan.branch,
+      directory: orphan.directory,
+      reasons: ['merged', 'no changes'],
+      suggested: orphan.inContainer
+    }))
+    return [...workspaces, ...orphans]
+  })
+
+  const cleanupOne = async (target: CleanupTarget): Promise<Failure | null> => {
+    if (target.kind === 'orphan') {
+      const result = await window.api.workflow.removeWorktree(target.repo, target.directory)
+      if (result.worktree) onCloseWorktree?.(result.worktree)
+      return result.ok ? null : failureOf(result)
+    }
+    if (target.kind === 'workspace' && target.directory) {
+      const stopped = await demoteOne(target.repo, target.branch)
+      if (stopped) return stopped
+    }
+    const dropped = await window.api.workflow.unregister(target.repo, target.branch)
+    return dropped.ok ? null : failureOf(dropped)
+  }
+
+  /**
+   * One `action.run` for the whole sweep, in the shape `launchAll` established: a serial loop
+   * collecting failures into a single dialog rather than firing one per target. Serial because every
+   * one of these handlers takes the repo lock anyway, and it keeps the failure list in row order.
+   *
+   * `unregister` refuses while the worktree is still linked, so demote has to land first.
+   */
+  const cleanup = (selected: CleanupTarget[]): void => {
+    setCleaning(false)
+    if (selected.length === 0 || action.pending) return
+    const staleRepos = new Set(
+      selected.filter((target) => target.kind === 'stale').map((target) => target.repo)
+    )
+    action.run(async () => {
+      const failed: string[] = []
+      for (const target of selected) {
+        const problem = await cleanupOne(target)
+        if (problem)
+          failed.push(
+            `${target.branch}: ${problem.title}${problem.detail ? `\n${indent(problem.detail)}` : ''}`
+          )
+      }
+      for (const repo of staleRepos) await window.api.workflow.prune(repo)
+      if (failed.length === 0) return { ok: true }
+      return {
+        ok: false,
+        error: `Cleaned up ${selected.length - failed.length} of ${selected.length} workspaces`,
+        detail: failed.join('\n\n')
+      }
+    }, 'Cleaning up…')
+  }
 
   const saveRepoOrder = (next: string[]): void => {
     void onWorkspaceOrderChange(next).then((result) => {
@@ -1204,6 +1302,19 @@ function WorkflowManager({
         >
           Review all{reviewTargets.length > 0 ? ` (${reviewTargets.length})` : ''}
         </button>
+        <button
+          type="button"
+          className="wfm-clean-up"
+          disabled={cleanupTargets.length === 0 || action.pending}
+          onClick={() => setCleaning(true)}
+          title={
+            cleanupTargets.length === 0
+              ? 'Nothing has landed on a default branch yet'
+              : `Retire ${cleanupTargets.length} workspace${cleanupTargets.length === 1 ? '' : 's'} whose work is already merged`
+          }
+        >
+          Clean up{cleanupTargets.length > 0 ? ` (${cleanupTargets.length})` : ''}
+        </button>
       </div>
       <div className="wfm-grid">{body()}</div>
       {workflowMenu && (
@@ -1254,6 +1365,13 @@ function WorkflowManager({
             Remove from workflows…
           </button>
         </ContextMenu>
+      )}
+      {cleaning && cleanupTargets.length > 0 && (
+        <CleanupDialog
+          targets={cleanupTargets}
+          onCancel={() => setCleaning(false)}
+          onConfirm={cleanup}
+        />
       )}
       {removing && (
         <RemoveWorkflowDialog
