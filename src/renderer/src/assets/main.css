@@ -1921,6 +1921,12 @@ button.wfm-inbox:focus-visible {
   cursor: default;
 }
 
+.context-menu-icon {
+  display: inline-block;
+  font-size: 16px;
+  vertical-align: -3px;
+}
+
 .context-menu-empty {
   padding: 6px 10px;
   font-size: 12px;
@@ -2486,6 +2492,44 @@ body.resizing-y * {
 .browser-address:focus {
   outline: none;
   border-color: var(--ui-border-strong, #585b70);
+}
+
+.browser-ports {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 40%;
+  overflow-x: auto;
+}
+
+.browser-ports-label {
+  color: var(--ui-success, #a6e3a1);
+  font-family: 'Hack Nerd Font Mono', monospace;
+  font-size: 11px;
+}
+
+.browser-port {
+  -webkit-app-region: no-drag;
+  height: 26px;
+  padding: 0 8px;
+  color: var(--ui-muted-text, #a6adc8);
+  background: var(--ui-surface, #1e1e2e);
+  border: 1px solid var(--ui-border, #313244);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.browser-port:hover {
+  color: var(--ui-text, #cdd6f4);
+  border-color: var(--ui-border-hover, #45475a);
+}
+
+.browser-port-active {
+  color: var(--ui-accent, #89b4fa);
+  border-color: var(--ui-accent, #89b4fa);
 }
 
 .browser-viewport {

@@ -27,6 +27,8 @@ interface TabBarProps {
   onOpenWorkflows: () => void
   onSplit: () => void
   onSplitWithPreset: (preset: Preset) => void
+  onSplitWithBrowser: () => void
+  getSplitMenuPosition: (button: DOMRect) => { x: number; y: number }
   onToggleCommand: (item: CommandItem) => void
   onAddCommand?: (command: string) => void
   onRemoveCommand: (item: CommandItem) => void
@@ -52,6 +54,8 @@ function TabBar({
   onOpenWorkflows,
   onSplit,
   onSplitWithPreset,
+  onSplitWithBrowser,
+  getSplitMenuPosition,
   onToggleCommand,
   onAddCommand,
   onRemoveCommand,
@@ -432,8 +436,7 @@ function TabBar({
         onContextMenu={(e) => {
           e.preventDefault()
           if (!canSplit) return
-          const r = e.currentTarget.getBoundingClientRect()
-          setSplitMenu({ x: r.left, y: r.bottom + 4 })
+          setSplitMenu(getSplitMenuPosition(e.currentTarget.getBoundingClientRect()))
         }}
         disabled={!canSplit}
         title="Split terminal (right-click for presets)"
@@ -486,6 +489,15 @@ function TabBar({
       )}
       {splitMenu && (
         <ContextMenu x={splitMenu.x} y={splitMenu.y} onClose={() => setSplitMenu(null)}>
+          <button
+            className="context-menu-item context-menu-item--action"
+            onClick={() => {
+              onSplitWithBrowser()
+              setSplitMenu(null)
+            }}
+          >
+            <span className="context-menu-icon"></span> Split with browser
+          </button>
           {presets.map((preset, i) => (
             <button
               key={i}

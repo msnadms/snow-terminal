@@ -39,7 +39,10 @@ type AppPage = Extract<ActiveId, string>
 const GIT_MIN = 220
 const GIT_COLLAPSE = 120
 
-export type Split = { kind: 'commit'; cwd: string; hash: string } | { kind: 'diff'; cwd: string }
+export type Split =
+  | { kind: 'commit'; cwd: string; hash: string }
+  | { kind: 'diff'; cwd: string }
+  | { kind: 'browser'; id: number; url: string }
 
 export type Pane = { id: number; cwd?: string; startupCommand?: string; presetName?: string }
 
@@ -126,6 +129,7 @@ function App(): React.JSX.Element {
   const [interruptedTerminals, setInterruptedTerminals] = useState<Record<number, number>>({})
   const [frozen, setFrozen] = useState<{ entries: RepoEntry[] } | null>(null)
   const [tourDismissed, setTourDismissed] = useState(false)
+  const gitPanelRef = useRef<HTMLDivElement>(null)
   const nextIdRef = useRef(1)
   const tabsRef = useRef(tabs)
   const activeIdRef = useRef(activeId)
@@ -723,6 +727,28 @@ function App(): React.JSX.Element {
     openSplit({ kind: 'diff', cwd })
   }
 
+  const openBrowserSplit = (): void => {
+    const id = nextIdRef.current++
+    openSplit({ kind: 'browser', id, url: 'https://www.google.com' })
+  }
+
+  const hasBrowserSplit =
+    activeTab?.kind === 'shell' && splits[activeTab.id]?.kind === 'browser'
+
+  // A WebContentsView composites above the DOM, so a context menu anchored under the split
+  // button would render underneath an open browser split rather than on top of it. Only then
+  // fall back to a spot the browser view can't cover; otherwise anchor at the button as usual.
+  const getSplitMenuPosition = useCallback(
+    (button: DOMRect): { x: number; y: number } => {
+      if (hasBrowserSplit) {
+        const panel = gitPanelRef.current?.getBoundingClientRect()
+        if (panel) return { x: panel.left, y: panel.top }
+      }
+      return { x: button.left, y: button.bottom + 4 }
+    },
+    [hasBrowserSplit]
+  )
+
   const closeSplit = useCallback((sessionId: number): void => {
     setSplits((prev) => {
       if (!(sessionId in prev)) return prev
@@ -1015,6 +1041,8 @@ function App(): React.JSX.Element {
             onSplit={splitActiveBlank}
             presets={visiblePresets}
             onSplitWithPreset={splitActive}
+            onSplitWithBrowser={openBrowserSplit}
+            getSplitMenuPosition={getSplitMenuPosition}
             onToggleCommand={toggleCommand}
             onAddCommand={managePresetIndex >= 0 ? addCommand : undefined}
             onRemoveCommand={removeCommand}
@@ -1130,6 +1158,7 @@ function App(): React.JSX.Element {
           width={gitPane.size}
           collapsed={gitPane.collapsed}
           gradients={gradients}
+          panelRef={gitPanelRef}
           onOpenCommit={openCommit}
           onOpenCommitSplit={activeTab?.kind === 'shell' ? openCommitSplit : undefined}
           onOpenDiff={openDiff}

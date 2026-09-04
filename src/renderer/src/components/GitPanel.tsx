@@ -555,6 +555,7 @@ interface GitPanelProps {
   width?: number
   collapsed?: boolean
   gradients?: boolean
+  panelRef?: React.RefObject<HTMLDivElement | null>
   onOpenCommit?: OpenCommit
   onOpenCommitSplit?: OpenCommit
   onOpenDiff?: OpenDiff
@@ -566,6 +567,7 @@ function GitPanel({
   width,
   collapsed = false,
   gradients = true,
+  panelRef,
   onOpenCommit,
   onOpenCommitSplit,
   onOpenDiff,
@@ -579,11 +581,11 @@ function GitPanel({
       ? { flexBasis: width }
       : undefined
 
-  if (!repos) return <div className="git-panel" style={style} />
+  if (!repos) return <div className="git-panel" style={style} ref={panelRef} />
 
   if (repos.length === 0) {
     return (
-      <div className="git-panel" style={style}>
+      <div className="git-panel" style={style} ref={panelRef}>
         <div className="git-empty">Not a git repository</div>
       </div>
     )
@@ -600,7 +602,7 @@ function GitPanel({
   const grouped = groups.some(([, group]) => group.length > 1)
 
   return (
-    <div className="git-panel" style={style}>
+    <div className="git-panel" style={style} ref={panelRef}>
       <div className="git-scroll">
         {groups.map(([common, group]) => {
           const title = grouped && (

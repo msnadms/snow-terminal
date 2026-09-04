@@ -121,6 +121,7 @@ const browser = {
   destroy: (id: number): void => {
     ipcRenderer.send('browser:destroy', { id })
   },
+  scanLocalhost: (): Promise<number[]> => ipcRenderer.invoke('localhost:scan'),
   onState: (id: number, callback: (state: BrowserState) => void): (() => void) =>
     onBrowserState(id, callback)
 }

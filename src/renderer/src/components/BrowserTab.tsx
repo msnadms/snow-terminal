@@ -4,7 +4,8 @@ interface BrowserTabProps {
   id: number
   initialUrl: string
   active: boolean
-  onTitle: (title: string) => void
+  onTitle?: (title: string) => void
+  onClose?: () => void
 }
 
 function normalizeUrl(input: string): string {
@@ -14,7 +15,23 @@ function normalizeUrl(input: string): string {
   return `https://${value}`
 }
 
-function BrowserTab({ id, initialUrl, active, onTitle }: BrowserTabProps): React.JSX.Element {
+function localhostPort(input: string): number | null {
+  try {
+    const url = new URL(normalizeUrl(input))
+    if (url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') return null
+    return url.port ? Number(url.port) : null
+  } catch {
+    return null
+  }
+}
+
+function BrowserTab({
+  id,
+  initialUrl,
+  active,
+  onTitle,
+  onClose
+}: BrowserTabProps): React.JSX.Element {
   const viewportRef = useRef<HTMLDivElement>(null)
   const activeRef = useRef(active)
   const editingRef = useRef(false)
@@ -22,6 +39,7 @@ function BrowserTab({ id, initialUrl, active, onTitle }: BrowserTabProps): React
   const lastTitleRef = useRef<string | null>(null)
   const [address, setAddress] = useState(initialUrl === 'about:blank' ? '' : initialUrl)
   const [nav, setNav] = useState({ canGoBack: false, canGoForward: false, loading: false })
+  const [ports, setPorts] = useState<number[]>([])
 
   useEffect(() => {
     onTitleRef.current = onTitle
@@ -54,7 +72,7 @@ function BrowserTab({ id, initialUrl, active, onTitle }: BrowserTabProps): React
       const title = state.title || state.url
       if (title !== lastTitleRef.current) {
         lastTitleRef.current = title
-        onTitleRef.current(title)
+        onTitleRef.current?.(title)
       }
       if (!editingRef.current && state.url && state.url !== 'about:blank') setAddress(state.url)
     })
@@ -70,6 +88,23 @@ function BrowserTab({ id, initialUrl, active, onTitle }: BrowserTabProps): React
     }
   }, [id, initialUrl, pushBounds])
 
+  useEffect(() => {
+    if (!active) return
+    let cancelled = false
+    const scan = (): void => {
+      window.api.browser
+        .scanLocalhost()
+        .then((open) => {
+          if (!cancelled) setPorts(open)
+        })
+        .catch(() => undefined)
+    }
+    scan()
+    return () => {
+      cancelled = true
+    }
+  }, [active])
+
   useLayoutEffect(() => {
     activeRef.current = active
     if (!active) {
@@ -79,6 +114,15 @@ function BrowserTab({ id, initialUrl, active, onTitle }: BrowserTabProps): React
     const raf = requestAnimationFrame(() => pushBounds())
     return () => cancelAnimationFrame(raf)
   }, [active, id, pushBounds])
+
+  const currentPort = localhostPort(address)
+
+  const goToPort = (port: number): void => {
+    const url = `http://localhost:${port}`
+    setAddress(url)
+    editingRef.current = false
+    window.api.browser.navigate(id, url)
+  }
 
   const submit = (e: React.FormEvent): void => {
     e.preventDefault()
@@ -125,6 +169,30 @@ function BrowserTab({ id, initialUrl, active, onTitle }: BrowserTabProps): React
             onBlur={() => (editingRef.current = false)}
           />
         </form>
+        {ports.length > 0 && (
+          <div className="browser-ports">
+            <span className="browser-ports-label"></span>
+            {ports.map((port) => (
+              <button
+                key={port}
+                className={`browser-port${port === currentPort ? ' browser-port-active' : ''}`}
+                onClick={() => goToPort(port)}
+                title={`http://localhost:${port}`}
+              >
+                {port}
+              </button>
+            ))}
+          </div>
+        )}
+        {onClose && (
+          <button
+            className="terminal-close commit-close-button"
+            title="Close browser"
+            onClick={onClose}
+          >
+            
+          </button>
+        )}
       </div>
       <div className="browser-viewport" ref={viewportRef} />
     </div>

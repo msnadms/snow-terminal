@@ -5,6 +5,7 @@ import { optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerPtyHandlers, disposeAllPty } from './pty'
 import { registerBrowserHandlers, disposeAllBrowser } from './browser'
+import { registerLocalhostHandlers } from './localhost'
 import { registerGitHandlers, disposeGitWatchers } from './git'
 import { registerWorkflowHandlers } from './workflow'
 import { initRegistry, disposeRegistryWatcher } from './registry'
@@ -100,6 +101,9 @@ app.whenReady().then(() => {
 
   // Register embedded-browser (WebContentsView) IPC handlers.
   registerBrowserHandlers()
+
+  // Probe common dev-server ports so the browser can offer what is listening locally.
+  registerLocalhostHandlers()
 
   // Load ~/.config/snow/.snowworkflows and watch it for edits. Before the git handlers, which
   // consult the registry to decide whether a branch switch parks its changes.

@@ -2,6 +2,7 @@ import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { Pane, SessionStatus, Split } from '../App'
 import { useKeybinds } from '../keybinds'
 import { useCollapsiblePane } from '../useCollapsiblePane'
+import BrowserTab from './BrowserTab'
 import CommitView from './CommitView'
 import PanelRestore from './PanelRestore'
 import ResizeHandle from './ResizeHandle'
@@ -38,6 +39,38 @@ interface SessionProps {
 
 function focusPane(container: Element | null | undefined): void {
   container?.querySelector<HTMLElement>('.xterm-helper-textarea')?.focus()
+}
+
+function renderSplit(
+  split: Split,
+  active: boolean,
+  onOpenCommit: (cwd: string, hash: string) => void,
+  onClose: () => void
+): React.JSX.Element {
+  switch (split.kind) {
+    case 'commit':
+      return (
+        <CommitView
+          active={active}
+          cwd={split.cwd}
+          hash={split.hash}
+          onOpenCommit={onOpenCommit}
+          onClose={onClose}
+        />
+      )
+    case 'diff':
+      return (
+        <WorkingDiffView
+          active={active}
+          cwd={split.cwd}
+          focusKey={0}
+          onOpenCommit={onOpenCommit}
+          onClose={onClose}
+        />
+      )
+    case 'browser':
+      return <BrowserTab id={split.id} initialUrl={split.url} active={active} onClose={onClose} />
+  }
 }
 
 function Session({
@@ -264,23 +297,7 @@ function Session({
               onEnd={persistRatios}
             />
             <div className="terminal-diff-split" style={{ flexGrow: growValues['diff'] }}>
-              {split.kind === 'commit' ? (
-                <CommitView
-                  active={active}
-                  cwd={split.cwd}
-                  hash={split.hash}
-                  onOpenCommit={onOpenCommit}
-                  onClose={() => onCloseSplit(id)}
-                />
-              ) : (
-                <WorkingDiffView
-                  active={active}
-                  cwd={split.cwd}
-                  focusKey={0}
-                  onOpenCommit={onOpenCommit}
-                  onClose={() => onCloseSplit(id)}
-                />
-              )}
+              {renderSplit(split, active, onOpenCommit, () => onCloseSplit(id))}
             </div>
           </>
         )}
