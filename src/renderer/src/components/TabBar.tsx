@@ -3,7 +3,7 @@ import ContextMenu from './ContextMenu'
 import { repoColor } from '@renderer/repoColor'
 import { groupSlotAllowed, slotAllowed } from '@renderer/tabGroups'
 import { useGitColors } from '@renderer/useGitColors'
-import type { CommandItem, SessionStatus } from '../App'
+import type { CommandItem, SessionStatus } from '../appModel'
 import type { Preset } from '../useSnowconfig'
 
 type TabSession = { id: number; group: string | null; preset?: Preset }

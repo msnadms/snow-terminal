@@ -7,10 +7,6 @@ interface RemoveWorkflowDialogProps {
   onConfirm: () => void
 }
 
-/**
- * A live parallel session is the one case `workflow:unregister` refuses, so say so here instead of
- * promising a removal and answering with a failure dialog.
- */
 function RemoveWorkflowDialog({
   entry,
   onCancel,

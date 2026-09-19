@@ -18,10 +18,6 @@ const kindLabel: Record<CleanupTarget['kind'], string> = {
   orphan: 'not registered'
 }
 
-/**
- * The headline is derived rather than fixed: a stale record is offered on bookkeeping grounds alone,
- * so claiming every row has landed on its default branch would be false for one of the three kinds.
- */
 function headline(targets: CleanupTarget[]): { title: string; detail: string } {
   const count = `${targets.length} workspace${targets.length === 1 ? '' : 's'}`
   const landed = targets.filter((target) => target.kind !== 'stale').length

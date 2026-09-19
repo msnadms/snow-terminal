@@ -1,5 +1,5 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Pane, SessionStatus, Split } from '../App'
+import type { Pane, SessionStatus, Split } from '../appModel'
 import { useKeybinds } from '../keybinds'
 import { useCollapsiblePane } from '../useCollapsiblePane'
 import BrowserTab from './BrowserTab'

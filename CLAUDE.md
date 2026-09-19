@@ -16,8 +16,21 @@ alongside a git view.
 - `npm run lint` / `npm run format` — ESLint (cached) / Prettier.
 - `npm run start` — preview the last production build.
 - `npm run build:win` / `build:mac` / `build:linux` — package via electron-builder.
+- `npm test` / `npm run test:watch` — Vitest unit tests in `tests/`.
+- `npm run test:agent-status` / `test:workflow-review` — end-to-end simulations against real git and
+  the real hook script, bundled with esbuild and an Electron façade.
 
-There is no test runner configured.
+CI (`.github/workflows/ci.yml`, on `master`) runs lint, typecheck, all three test commands, and build.
+
+### Tests
+
+Vitest runs in Node. `vitest.config.ts` aliases `electron` and `node-pty` to stubs in
+`tests/support/`, so main-process modules import without an Electron runtime. Tests cover **pure
+functions only** — parsers and derivations are exported from their modules for that reason
+(`parseNumstat`, `parseWorktreeList`, `parseStashList`, `parseConflictedNames`, `webUrl`, …), and
+`tests/agentHook.test.ts` drives the real hook script as a child process against a scratch
+`XDG_CONFIG_HOME`. Tests that import renderer code live in `tests/renderer/` and typecheck under
+`tsconfig.web.json`; the rest typecheck under `tsconfig.node.json`.
 
 ## Architecture
 
@@ -30,6 +43,50 @@ Electron's three-process split, each with its own tsconfig and build target:
 
 New privileged capabilities follow the same pattern: `ipcMain` handler in main, wrapper in preload's
 `api`, never direct Node access in the renderer.
+
+### Git module layout (main)
+
+Shared result types live in `gitTypes.ts` (what preload imports). The rest is layered so nothing
+imports upward:
+
+- `gitCore.ts` — `gitFor`, error helpers, `worktreeRoot`/`mainWorktreeRoot`/`worktreeMap`,
+  `remoteName`, `defaultBranch`.
+- `watchRegistry.ts` — the refcounted `WatcherRegistry` and its two instances; `repoLock.ts` —
+  `withRepoLock`, which notifies `contentWatchers` on unlock.
+- `gitWatch.ts` — discovery plus `git:watch` / `git:watchRepos` / `git:discover` / `git:mainRoot`.
+- `gitHistory.ts` — log layout, show, diff, review diff, blame.
+- `commitMessage.ts` — the commit-message agents; `forge.ts` — PR URL shapes.
+- `park.ts` — stash parking (see _Workspaces_).
+- `git.ts` — status, branch, sync, commit, and per-file handlers; `registerGitHandlers` also
+  registers the history and watch handlers.
+
+Workflows split the same way: `workflowTypes.ts` (types), `worktrees.ts` (paths, range helpers,
+`mergedInto`, removal), `overlaps.ts` (claims, verdicts, session comparisons), `workflowDescribe.ts`
+(`describeWorkflows`), and `workflow.ts` (handlers only).
+
+### Renderer layout
+
+`App.tsx` keeps state and callbacks; the tab model and every pure derivation live in `appModel.ts`
+(`Tab`, `Pane`, `Split`, `CommandItem`, repo entries, labels, statuses, tab moves), and effects that
+own their own state are hooks (`useRepoDiscovery`, `useTabGroups`, `useRunningCommands`,
+`useAppNotices`). `WorkflowManager.tsx` likewise delegates to `workflowRows.ts` (pure row/activity
+indexing), `useWorkflowOverview`, `useRepoOrder`, `WorkflowRepoCard`, `WorkflowSessionsSection`, and
+`OverlapBadge`.
+
+Every top-level surface is wrapped in `PaneBoundary`, an error boundary that renders a reload card in
+place of the crashed pane (only while that pane is `active`, since hidden panes are `display:none`)
+and logs through `console.error`, which `watchRenderer` forwards to `snow.log`. A crash in the git
+panel or workspace manager therefore never unmounts a terminal.
+
+`assets/main.css` is only `@import`s plus the root rules; component styles live in
+`assets/styles/*.css`, imported in the original cascade order.
+
+### Embedded browser
+
+`browser.ts` hosts pages in `WebContentsView`s on the `persist:browser` partition.
+`restrictPermissions()` installs request and check handlers on that session that grant only
+`fullscreen` and `clipboard-sanitized-write` — Electron's default is to grant everything, including
+camera, microphone and geolocation. Denials are logged.
 
 ### Terminal data flow
 
@@ -101,11 +158,12 @@ because the tools row's width changes with the find bar and `↑ Top`.
 
 `useFind` (`src/renderer/src/useFind.ts`) gives every `DiffScroll` pane a find bar. It never touches
 the DOM: matches are `Range`s handed to the CSS Custom Highlight API, styled by
-`::highlight(snow-find)` / `::highlight(snow-find-current)` in `main.css`. The scan concatenates the
-pane's text nodes into one string with a `\n` between block ancestors, so a match may span
-syntax-highlight `<span>`s but never two diff lines. Text directly inside `td.diff-gutter` is skipped.
-Because the highlight registry is global, the module tracks which pane owns the two names. Results
-recompute on a debounced `MutationObserver` that ignores mutations inside `.commit-tools`.
+`::highlight(snow-find)` / `::highlight(snow-find-current)` in `assets/styles/diff.css`. The scan
+concatenates the pane's text nodes into one string with a `\n` between block ancestors, so a match
+may span syntax-highlight `<span>`s but never two diff lines. Text directly inside `td.diff-gutter`
+is skipped. Because the highlight registry is global, the module tracks which pane owns the two
+names. Results recompute on a debounced `MutationObserver` that ignores mutations inside
+`.commit-tools`.
 
 ### Pull requests
 
@@ -323,9 +381,10 @@ because cost is observed after the fact. Agent status is hook-fed.
 
 ### AI commit messages
 
-`git:generateCommitMessage` builds prompt and diff, then hands them to `runCommitAgent(agent, input)`.
-Per-agent differences live in one `commitAgentSpecs` table (`command`, `timeoutMs`, `args`, `read`);
-error strings interpolate `spec.command`.
+`git:generateCommitMessage` builds the diff, then hands it to `generateCommitMessage(agent, diff)` in
+`commitMessage.ts`, which adds the prompt, truncates, runs the CLI, and cleans the result. Per-agent
+differences live in one `commitAgentSpecs` table (`command`, `timeoutMs`, `args`, `read`); error
+strings interpolate `spec.command`.
 
 - **claude** — `claude -p --disallowedTools …`, message read from **stdout**.
 - **codex** — `codex exec … -`, message read from the file passed to `--output-last-message`; stdout
@@ -590,11 +649,12 @@ public UI says "workspace" to mark the boundary: Snow owns isolated Git context 
 an agent dispatcher owns task planning and agent lifecycle. Internal file and IPC names remain
 `workflow`.
 
-Three modules in a strict one-way chain — `registry.ts` ← `git.ts` ← `workflow.ts`:
+Modules in a strict one-way chain — `registry.ts` ← `gitCore.ts` ← `park.ts` ← `workflow.ts`:
 
 - `src/main/registry.ts` — the `.snowworkflows` file. Imports nothing from git.
-- `src/main/git.ts` — park machinery (`parkOnLeave`, `restoreOnEnter`, `rollbackPark`, `switchBranch`)
-  over the git primitives.
+- `src/main/park.ts` — park machinery (`parkOnLeave`, `restoreOnEnter`, `rollbackPark`,
+  `switchBranch`) over the git primitives in `gitCore.ts`. `git.ts` routes its branch handlers
+  through it.
 - `src/main/workflow.ts` — the `workflow:*` handlers.
 
 **Registration is the opt-in.** The dropdown never enumerates branches — only registered ones, via
@@ -647,7 +707,8 @@ shared-stash commands_).
 dirty**, refusing a tree with conflicts. `restoreOnEnter()` is its mirror and is likewise gated on
 registration — a marker stash on a since-unregistered branch is never silently restored. `switchBranch()`
 composes the two around an arbitrary checkout closure, so every switch path shares the same semantics.
-`switchBranch` is the only park entry point `git.ts` exports (plus `unparkBranch`, which
+`switchBranch` is the park entry point `park.ts` exports, alongside `carryToNewBranch` (the
+`carry: true` path of `git:createBranch`), `parkPreview`, and `unparkBranch` (which
 `workflow:demote` needs to undo its own park).
 
 **Every restore goes through `popStash`, which uses `--index` first** — a plain restore reinstates
@@ -905,7 +966,7 @@ worktree's own top level whenever the git dir _is_ the common dir, falling back 
 only for a linked worktree (taking `dirname` unconditionally names an unrelated directory under
 `--separate-git-dir`).
 
-`App` resolves the key per distinct tab cwd through `git:mainRoot` and caches it by cwd, because
+`useTabGroups` resolves the key per distinct tab cwd through `git:mainRoot` and caches it by cwd, because
 discovery only runs for the **active** tab. The cache is dropped on `git:reposChanged`; the effect keys
 on the joined cwd list plus that epoch and reads the cache through a ref so it never re-runs on its own
 writes.

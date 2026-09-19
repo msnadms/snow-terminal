@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ActionBar from './components/ActionBar'
 import CommitView from './components/CommitView'
-import GitPanel, { type GitRepo } from './components/GitPanel'
+import GitPanel from './components/GitPanel'
 import Session from './components/Session'
 import BrowserTab from './components/BrowserTab'
 import TabBar from './components/TabBar'
@@ -9,110 +9,55 @@ import HomePage from './components/HomePage'
 import ResizeHandle from './components/ResizeHandle'
 import PanelRestore from './components/PanelRestore'
 import Tour from './components/Tour'
-import WorkflowManager, { type WorkflowReviewTarget } from './components/WorkflowManager'
+import WorkflowManager from './components/WorkflowManager'
 import WorkingDiffView from './components/WorkingDiffView'
 import FailureDialog from './components/FailureDialog'
-import { basename, failureOf, isInside, normalizePath, shortHash, uniqueBy } from './format'
-import type { Failure } from './format'
+import PaneBoundary from './components/PaneBoundary'
+import { normalizePath } from './format'
 import { nextTerminalId } from './terminalId'
 import { regroupTabs } from './tabGroups'
 import { useKeybinds, usePresetDigitKeybind } from './keybinds'
 import { useAgents, type AgentSession } from './useAgents'
+import { useAppNotices } from './useAppNotices'
 import { useCollapsiblePane } from './useCollapsiblePane'
+import { useRepoDiscovery } from './useRepoDiscovery'
+import { useRunningCommands } from './useRunningCommands'
 import { useSnowconfig, visiblePresetEntries, type Preset } from './useSnowconfig'
-import type { ThemeInstallResult } from '../../main/themeInstall'
-import type { HooksResult } from '../../main/hooks'
+import { useTabGroups } from './useTabGroups'
+import type { WorkflowReviewTarget } from './workflowRows'
+import {
+  actionReposOf,
+  commandItemsOf,
+  commandPresetsOf,
+  inheritedPreset,
+  moveTab,
+  moveTabGroup,
+  openSessionsOf,
+  presetIndexFor,
+  repoEntriesOf,
+  sessionStatusesOf,
+  shellTerminals,
+  tabCwdOf,
+  tabLabels,
+  type ActiveId,
+  type AppPage,
+  type CommandItem,
+  type Pane,
+  type RepoEntry,
+  type Split,
+  type Tab,
+  type TerminalStatuses
+} from './appModel'
 import {
   agentDirsOf,
-  tabStatusFrom,
   terminalAgentsOf,
   visibleAgentSessions,
   workflowSessionsOf,
   type SessionStatus
 } from './agentStatus'
 
-export type { SessionStatus } from './agentStatus'
-
-type ActiveId = number | 'home' | 'workflows'
-type AppPage = Extract<ActiveId, string>
-
 const GIT_MIN = 220
 const GIT_COLLAPSE = 120
-
-export type Split =
-  | { kind: 'commit'; cwd: string; hash: string }
-  | { kind: 'diff'; cwd: string }
-  | { kind: 'browser'; id: number; url: string }
-
-export type Pane = { id: number; cwd?: string; startupCommand?: string; presetName?: string }
-
-type Tab =
-  | {
-      kind: 'shell'
-      id: number
-      cwd?: string
-      startupCommand?: string
-      presetName?: string
-      bottomTerminalId: number
-    }
-  | { kind: 'commit'; id: number; cwd: string; hash: string }
-  | {
-      kind: 'diff'
-      id: number
-      cwd: string
-      branch: string
-      focus?: string
-      focusKey: number
-      review?: { targets: WorkflowReviewTarget[]; index: number }
-    }
-  | { kind: 'browser'; id: number; url: string }
-
-type RepoEntry = { cwd: string; presetCwd?: string; presetName?: string }
-
-export type CommandItem = {
-  presetIndex: number
-  presetName: string
-  cwd: string
-  command: string
-  index: number
-  runKey: string
-}
-
-function presetIndexFor(presets: Preset[], entry?: Partial<RepoEntry>): number {
-  if (entry?.presetName != null) return presets.findIndex((p) => p.name === entry.presetName)
-  if (entry?.presetCwd != null) return presets.findIndex((p) => p.cwd === entry.presetCwd)
-  return -1
-}
-
-const byCwdLength =
-  (dir: 1 | -1) =>
-  (a: Preset, b: Preset): number =>
-    dir * (normalizePath(a.cwd).length - normalizePath(b.cwd).length)
-
-/**
- * The preset a worktree's tab should inherit its startup command from: the shortest-cwd preset
- * rooted in `repo` when a repo is given (launched from the workflow manager, root wins), otherwise
- * the active tab's own preset if it has one, falling back to the longest (most specific) preset
- * containing its parent cwd.
- */
-function inheritedPreset(
-  presets: Preset[],
-  repo: string | undefined,
-  current: Tab | undefined,
-  parentCwd: string | undefined
-): Preset | undefined {
-  if (repo)
-    return presets
-      .filter((preset) => isInside(normalizePath(preset.cwd), normalizePath(repo)))
-      .sort(byCwdLength(1))[0]
-  if (current?.kind === 'shell' && current.presetName) {
-    const named = presets.find((preset) => preset.name === current.presetName)
-    if (named) return named
-  }
-  return presets
-    .filter((preset) => parentCwd && isInside(normalizePath(parentCwd), normalizePath(preset.cwd)))
-    .sort(byCwdLength(-1))[0]
-}
 
 function App(): React.JSX.Element {
   const [tabs, setTabs] = useState<Tab[]>([])
@@ -120,15 +65,15 @@ function App(): React.JSX.Element {
   const [cwds, setCwds] = useState<Record<number, string | undefined>>({})
   const [panes, setPanes] = useState<Record<number, Pane[]>>({})
   const [splits, setSplits] = useState<Record<number, Split>>({})
-  const [running, setRunning] = useState<Record<string, number>>({})
   const [browserTitles, setBrowserTitles] = useState<Record<number, string>>({})
-  const [terminalStatuses, setTerminalStatuses] = useState<
-    Record<number, Record<number, SessionStatus>>
-  >({})
+  const [terminalStatuses, setTerminalStatuses] = useState<TerminalStatuses>({})
   const [titles, setTitles] = useState<Record<number, string>>({})
   const [interruptedTerminals, setInterruptedTerminals] = useState<Record<number, number>>({})
   const [frozen, setFrozen] = useState<{ entries: RepoEntry[] } | null>(null)
   const [tourDismissed, setTourDismissed] = useState(false)
+  const [pickedRepo, setPickedRepo] = useState<string | null>(null)
+  const [notice, setNotice] = useAppNotices()
+  const { running, toggleCommand } = useRunningCommands()
   const gitPanelRef = useRef<HTMLDivElement>(null)
   const nextIdRef = useRef(1)
   const tabsRef = useRef(tabs)
@@ -176,67 +121,20 @@ function App(): React.JSX.Element {
     activeTab && (activeTab.kind === 'commit' || activeTab.kind === 'diff')
       ? activeTab.cwd
       : cwds[activeTab?.id ?? -1]
-  const repoEntries = useMemo<RepoEntry[]>(() => {
-    if (!activeTab) return cwd != null ? [{ cwd }] : []
-    if (activeTab.kind === 'commit' || activeTab.kind === 'diff')
-      return [{ cwd: activeTab.cwd, presetCwd: activeTab.cwd }]
-    if (activeTab.kind === 'browser') return []
-    const sessionPanes = panes[activeTab.id] ?? []
-    const base = activeTab.cwd ?? cwds[activeTab.id]
-    const pairs: RepoEntry[] = []
-    if (base != null)
-      pairs.push({ cwd: base, presetCwd: activeTab.cwd, presetName: activeTab.presetName })
-    for (const pane of sessionPanes) {
-      if (pane.cwd != null)
-        pairs.push({ cwd: pane.cwd, presetCwd: pane.cwd, presetName: pane.presetName })
-    }
-    return uniqueBy(pairs, (entry) => entry.cwd)
-  }, [activeTab, cwd, cwds, panes])
+  const repoEntries = useMemo(
+    () => repoEntriesOf(activeTab, cwd, cwds, panes),
+    [activeTab, cwd, cwds, panes]
+  )
 
   const activeEntries = frozen ? frozen.entries : repoEntries
   const discoverKey = activeEntries.map((entry) => entry.cwd).join('\n')
+  const repos = useRepoDiscovery(discoverKey)
 
-  const [repos, setRepos] = useState<GitRepo[] | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    const cwds: (string | undefined)[] = discoverKey ? discoverKey.split('\n') : [undefined]
-    const load = (): void => {
-      Promise.all(cwds.map((cwd) => window.api.git.discover(cwd).catch(() => [])))
-        .then((results) => {
-          if (!cancelled) setRepos(uniqueBy(results.flat(), (repo) => repo.path))
-        })
-        .catch(() => {
-          if (!cancelled) setRepos([])
-        })
-    }
-    load()
-    for (const cwd of cwds) window.api.git.watchRepos(cwd)
-    const offRepos = window.api.git.onReposChanged(() => load())
-    return () => {
-      cancelled = true
-      offRepos()
-      for (const cwd of cwds) window.api.git.unwatchRepos(cwd)
-    }
-  }, [discoverKey])
+  const actionRepos = useMemo(
+    () => actionReposOf(repos ?? [], activeEntries, presets),
+    [repos, activeEntries, presets]
+  )
 
-  const actionRepos = useMemo(() => {
-    return (repos ?? []).map((repo) => {
-      const root = normalizePath(repo.path)
-      const owner = activeEntries.find((entry) => isInside(normalizePath(entry.cwd), root))
-      const adopted =
-        presetIndexFor(presets, owner) >= 0
-          ? undefined
-          : presets.find((p) => isInside(normalizePath(p.cwd), root))
-      return {
-        cwd: repo.path,
-        name: repo.name,
-        presetCwd: owner?.presetCwd,
-        presetName: owner?.presetName ?? adopted?.name
-      }
-    })
-  }, [repos, activeEntries, presets])
-
-  const [pickedRepo, setPickedRepo] = useState<string | null>(null)
   const repoIndex = Math.max(
     0,
     actionRepos.findIndex((e) => e.cwd === pickedRepo)
@@ -250,196 +148,59 @@ function App(): React.JSX.Element {
 
   const repoPresetName = activeRepo?.presetName
   const repoPresetCwd = activeRepo?.presetCwd
-  const commandPresets = useMemo(() => {
-    const indices = activeEntries.map((entry) => presetIndexFor(presets, entry))
-    indices.push(presetIndexFor(presets, { presetName: repoPresetName, presetCwd: repoPresetCwd }))
-    return uniqueBy(
-      indices.filter((index) => presets[index] != null),
-      String
-    )
-  }, [presets, activeEntries, repoPresetName, repoPresetCwd])
-
-  const commandItems = useMemo<CommandItem[]>(
+  const commandPresets = useMemo(
     () =>
-      commandPresets.flatMap((presetIndex) => {
-        const preset = presets[presetIndex]
-        return (preset.commands ?? []).map((command, index) => ({
-          presetIndex,
-          presetName: preset.name,
-          cwd: preset.cwd,
-          command,
-          index,
-          runKey: `${preset.name}\n${command}`
-        }))
+      commandPresetsOf(presets, activeEntries, {
+        presetName: repoPresetName,
+        presetCwd: repoPresetCwd
       }),
+    [presets, activeEntries, repoPresetName, repoPresetCwd]
+  )
+
+  const commandItems = useMemo(
+    () => commandItemsOf(presets, commandPresets),
     [presets, commandPresets]
   )
 
   const managePresetIndex = commandPresets[0] ?? -1
 
-  const tabCwd = useCallback(
-    (tab: Tab): string | undefined => {
-      if (tab.kind === 'shell') return cwds[tab.id] ?? tab.cwd
-      if (tab.kind === 'commit' || tab.kind === 'diff') return tab.cwd
-      return undefined
-    },
-    [cwds]
-  )
+  const tabCwd = useCallback((tab: Tab): string | undefined => tabCwdOf(tab, cwds), [cwds])
 
   const agentSessions = useAgents()
   const statusAgentSessions = useMemo(
     () => visibleAgentSessions(agentSessions, interruptedTerminals),
     [agentSessions, interruptedTerminals]
   )
-  const workflowAgentSessions = useMemo<AgentSession[]>(() => {
-    const terminals = tabs.flatMap((tab) => {
-      if (tab.kind !== 'shell') return []
-      const sessionPanes = panes[tab.id] ?? []
-      const sessionTerminals = terminalStatuses[tab.id] ?? {}
-      return [
-        ...sessionPanes.map((pane, index) => ({
-          terminalId: pane.id,
-          cwd: pane.cwd ?? tab.cwd,
-          state: sessionTerminals[pane.id],
-          detail: index === 0 ? titles[tab.id] : undefined
-        })),
-        {
-          terminalId: tab.bottomTerminalId,
-          cwd: tabCwd(tab),
-          state: sessionTerminals[tab.bottomTerminalId]
-        }
-      ]
-    })
-    return workflowSessionsOf(statusAgentSessions, terminals)
-  }, [statusAgentSessions, tabs, panes, terminalStatuses, titles, tabCwd])
+  const workflowAgentSessions = useMemo<AgentSession[]>(
+    () =>
+      workflowSessionsOf(
+        statusAgentSessions,
+        shellTerminals(tabs, panes, terminalStatuses, titles, tabCwd)
+      ),
+    [statusAgentSessions, tabs, panes, terminalStatuses, titles, tabCwd]
+  )
 
-  /**
-   * Two agents in one directory are one row on screen, so the loudest state wins rather than the
-   * newest: an agent waiting on a permission prompt is the thing worth surfacing even while its
-   * neighbour keeps working.
-   */
-  const agentDirs = useMemo(() => {
-    return agentDirsOf(statusAgentSessions, {})
-  }, [statusAgentSessions])
+  const agentDirs = useMemo(() => agentDirsOf(statusAgentSessions, {}), [statusAgentSessions])
   const terminalAgents = useMemo(
     () => terminalAgentsOf(statusAgentSessions, {}),
     [statusAgentSessions]
   )
 
-  /**
-   * A hook-reported state always beats the PTY byte heuristic, which stays as the floor for panes
-   * no agent reports - a bottom shell, an `npm run dev` split, a session with no hooks installed.
-   * A directory with no tab is folded in only while its agent is working or waiting: an `idle`
-   * record there is as likely to be a session killed without a SessionEnd as a live one, and
-   * nothing on screen distinguishes the two.
-   *
-   * Tab dots are session-specific: only hook records bound to one of the tab's terminals can
-   * override its own byte heuristic. Directory identity is a separate workflow-manager rollup, so
-   * two tabs opened in the same folder retain independent dots while both contribute to that
-   * folder's aggregate activity.
-   */
-  const { sessionDirStatuses, sessionDirTitles, tabStatuses } = useMemo(() => {
-    const sessionDirStatuses: Record<string, SessionStatus> = {}
-    const sessionDirTitles: Record<string, string> = {}
-    const tabStatuses: Record<number, SessionStatus> = {}
-    const rank: Record<SessionStatus, number> = { attention: 2, busy: 1, idle: 0 }
-    const addDirectoryStatus = (
-      dir: string | undefined,
-      status: SessionStatus | undefined,
-      title?: string
-    ): void => {
-      if (!dir || !status) return
-      const key = normalizePath(dir)
-      const current = sessionDirStatuses[key]
-      if (!current || rank[status] > rank[current]) sessionDirStatuses[key] = status
-      if (title && !sessionDirTitles[key]) sessionDirTitles[key] = title
-    }
-
-    for (const tab of tabs) {
-      if (tab.kind !== 'shell') continue
-      const dir = tabCwd(tab)
-      const sessionPanes = panes[tab.id] ?? []
-      const sessionTerminals = terminalStatuses[tab.id] ?? {}
-      const status = tabStatusFrom(
-        terminalAgents,
-        [tab.bottomTerminalId, ...sessionPanes.map((pane) => pane.id)],
-        sessionTerminals
-      )
-      if (status) tabStatuses[tab.id] = status
-
-      for (const [index, pane] of sessionPanes.entries()) {
-        addDirectoryStatus(
-          pane.cwd ?? tab.cwd,
-          sessionTerminals[pane.id],
-          index === 0 ? titles[tab.id] : undefined
-        )
-      }
-      addDirectoryStatus(dir, sessionTerminals[tab.bottomTerminalId])
-    }
-    for (const [dir, agent] of Object.entries(agentDirs)) {
-      // An idle record is useful only where a visible terminal already establishes a live session.
-      if (agent.state === 'idle' && !(dir in sessionDirStatuses)) continue
-      // Hook state is authoritative for its directory; the byte heuristic is only its fallback.
-      sessionDirStatuses[dir] = agent.state
-      if (agent.detail && !sessionDirTitles[dir]) sessionDirTitles[dir] = agent.detail
-    }
-    return { sessionDirStatuses, sessionDirTitles, tabStatuses }
-  }, [tabs, tabCwd, panes, terminalStatuses, titles, agentDirs, terminalAgents])
-
-  const [roots, setRoots] = useState<Record<string, string | null>>({})
-  const [rootsEpoch, setRootsEpoch] = useState(0)
-  const rootsRef = useRef(roots)
-  useEffect(() => {
-    rootsRef.current = roots
-  }, [roots])
-  const rootsKey = useMemo(
+  const { sessionDirStatuses, sessionDirTitles, tabStatuses } = useMemo(
     () =>
-      uniqueBy(
-        tabs.map(tabCwd).filter((dir): dir is string => dir != null),
-        (dir) => dir
-      ).join('\n'),
-    [tabs, tabCwd]
-  )
-
-  useEffect(
-    () =>
-      window.api.git.onReposChanged(() => {
-        setRoots({})
-        setRootsEpoch((epoch) => epoch + 1)
+      sessionStatusesOf({
+        tabs,
+        panes,
+        terminalStatuses,
+        titles,
+        tabCwd,
+        agentDirs,
+        terminalAgents
       }),
-    []
+    [tabs, tabCwd, panes, terminalStatuses, titles, agentDirs, terminalAgents]
   )
 
-  useEffect(() => {
-    let cancelled = false
-    const dirs = (rootsKey ? rootsKey.split('\n') : []).filter((dir) => !(dir in rootsRef.current))
-    if (dirs.length === 0) return
-    Promise.all(
-      dirs.map(async (dir) => {
-        const owner = (repos ?? []).find((repo) =>
-          isInside(normalizePath(dir), normalizePath(repo.path))
-        )
-        const root = owner ? owner.common : await window.api.git.mainRoot(dir)
-        return [dir, root] as const
-      })
-    ).then((resolved) => {
-      if (!cancelled) setRoots((prev) => ({ ...prev, ...Object.fromEntries(resolved) }))
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [rootsKey, rootsEpoch, repos])
-
-  const tabGroups = useMemo(() => {
-    const result: Record<number, string | null> = {}
-    for (const tab of tabs) {
-      const dir = tabCwd(tab)
-      const root = dir ? roots[dir] : null
-      const presetName = tab.kind === 'shell' ? tab.presetName : undefined
-      result[tab.id] = root || (presetName ? `preset:${presetName}` : null)
-    }
-    return result
-  }, [tabs, tabCwd, roots])
+  const tabGroups = useTabGroups(tabs, tabCwd, repos)
 
   const groupsRef = useRef(tabGroups)
   useEffect(() => {
@@ -468,50 +229,10 @@ function App(): React.JSX.Element {
     [orderedTabs, presets, tabGroups]
   )
 
-  const labels = useMemo(() => {
-    const result: Record<number, string> = {}
-    for (const tab of tabs) {
-      if (tab.kind === 'commit') {
-        result[tab.id] = shortHash(tab.hash)
-        continue
-      }
-      if (tab.kind === 'diff') {
-        result[tab.id] = tab.review
-          ? `Review ${tab.review.index + 1}/${tab.review.targets.length}`
-          : `${tab.branch} ✎`
-        continue
-      }
-      if (tab.kind === 'browser') {
-        result[tab.id] = browserTitles[tab.id] ?? 'Browser'
-        continue
-      }
-      const dir = cwds[tab.id]
-      if (dir) result[tab.id] = basename(dir)
-    }
-    return result
-  }, [tabs, cwds, browserTitles])
+  const labels = useMemo(() => tabLabels(tabs, cwds, browserTitles), [tabs, cwds, browserTitles])
 
   const openSessions = useMemo(
-    () =>
-      tabs.flatMap((tab) => {
-        if (tab.kind !== 'shell') return []
-        const sessionPanes = panes[tab.id] ?? []
-        const directories = [
-          tabCwd(tab),
-          ...sessionPanes.map((pane) => pane.cwd ?? tab.cwd)
-        ].filter((dir): dir is string => !!dir)
-        return [
-          {
-            id: tab.id,
-            dir: tabCwd(tab),
-            directories,
-            label: labels[tab.id] ?? `Session ${tab.id}`,
-            status: tabStatuses[tab.id],
-            title: titles[tab.id],
-            terminalIds: [tab.bottomTerminalId, ...sessionPanes.map((pane) => pane.id)]
-          }
-        ]
-      }),
+    () => openSessionsOf(tabs, panes, tabCwd, labels, tabStatuses, titles),
     [tabs, panes, tabCwd, labels, tabStatuses, titles]
   )
 
@@ -566,99 +287,78 @@ function App(): React.JSX.Element {
     return window.api.cli.onOpen(open)
   }, [presets])
 
-  const [notice, setNotice] = useState<Failure | null>(null)
-
-  useEffect(() => {
-    const installed = (result: ThemeInstallResult): void => {
-      if (result.error) setNotice(failureOf({ error: result.error, detail: result.detail }))
-    }
-    void window.api.theme.pendingInstall().then((result) => {
-      if (result) installed(result)
-    })
-    return window.api.theme.onInstalled(installed)
+  const openTab = useCallback((tab: Tab): void => {
+    setTabs((prev) => [...prev, tab])
+    setActiveId(tab.id)
   }, [])
 
-  useEffect(() => {
-    const ran = (result: HooksResult): void => {
-      setNotice(
-        result.error
-          ? failureOf({ error: result.error, detail: result.detail })
-          : { title: result.message, detail: result.detail }
+  const openCommit = useCallback(
+    (cwd: string, hash: string): void => {
+      const existing = tabsRef.current.find(
+        (t) => t.kind === 'commit' && t.cwd === cwd && t.hash === hash
       )
-    }
-    void window.api.hooks.pending().then((result) => {
-      if (result) ran(result)
-    })
-    return window.api.hooks.onChanged(ran)
-  }, [])
+      if (existing) {
+        setActiveId(existing.id)
+        return
+      }
+      openTab({ kind: 'commit', id: nextIdRef.current++, cwd, hash })
+    },
+    [openTab]
+  )
 
-  const openCommit = useCallback((cwd: string, hash: string): void => {
-    const existing = tabsRef.current.find(
-      (t) => t.kind === 'commit' && t.cwd === cwd && t.hash === hash
-    )
-    if (existing) {
-      setActiveId(existing.id)
-      return
-    }
-    const id = nextIdRef.current++
-    setTabs((prev) => [...prev, { kind: 'commit', id, cwd, hash }])
-    setActiveId(id)
-  }, [])
-
-  const openDiff = useCallback((cwd: string, branch: string, file?: string): void => {
-    const existing = tabsRef.current.find((t) => t.kind === 'diff' && !t.review && t.cwd === cwd)
-    if (existing) {
-      setTabs((prev) =>
-        prev.map((t) =>
-          t.id === existing.id && t.kind === 'diff'
-            ? { ...t, branch, focus: file, focusKey: t.focusKey + 1 }
-            : t
+  const openDiff = useCallback(
+    (cwd: string, branch: string, file?: string): void => {
+      const existing = tabsRef.current.find((t) => t.kind === 'diff' && !t.review && t.cwd === cwd)
+      if (existing) {
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.id === existing.id && t.kind === 'diff'
+              ? { ...t, branch, focus: file, focusKey: t.focusKey + 1 }
+              : t
+          )
         )
-      )
-      setActiveId(existing.id)
-      return
-    }
-    const id = nextIdRef.current++
-    setTabs((prev) => [...prev, { kind: 'diff', id, cwd, branch, focus: file, focusKey: 0 }])
-    setActiveId(id)
-  }, [])
+        setActiveId(existing.id)
+        return
+      }
+      openTab({ kind: 'diff', id: nextIdRef.current++, cwd, branch, focus: file, focusKey: 0 })
+    },
+    [openTab]
+  )
 
-  const openReview = useCallback((targets: WorkflowReviewTarget[]): void => {
-    if (targets.length === 0) return
-    const current = targets[0]
-    const existing = tabsRef.current.find((tab) => tab.kind === 'diff' && tab.review)
-    if (existing) {
-      setTabs((prev) =>
-        prev.map((tab) =>
-          tab.id === existing.id && tab.kind === 'diff'
-            ? {
-                ...tab,
-                cwd: current.cwd,
-                branch: current.branch,
-                focus: undefined,
-                focusKey: tab.focusKey + 1,
-                review: { targets, index: 0 }
-              }
-            : tab
+  const openReview = useCallback(
+    (targets: WorkflowReviewTarget[]): void => {
+      if (targets.length === 0) return
+      const current = targets[0]
+      const existing = tabsRef.current.find((tab) => tab.kind === 'diff' && tab.review)
+      if (existing) {
+        setTabs((prev) =>
+          prev.map((tab) =>
+            tab.id === existing.id && tab.kind === 'diff'
+              ? {
+                  ...tab,
+                  cwd: current.cwd,
+                  branch: current.branch,
+                  focus: undefined,
+                  focusKey: tab.focusKey + 1,
+                  review: { targets, index: 0 }
+                }
+              : tab
+          )
         )
-      )
-      setActiveId(existing.id)
-      return
-    }
-    const id = nextIdRef.current++
-    setTabs((prev) => [
-      ...prev,
-      {
+        setActiveId(existing.id)
+        return
+      }
+      openTab({
         kind: 'diff',
-        id,
+        id: nextIdRef.current++,
         cwd: current.cwd,
         branch: current.branch,
         focusKey: 0,
         review: { targets, index: 0 }
-      }
-    ])
-    setActiveId(id)
-  }, [])
+      })
+    },
+    [openTab]
+  )
 
   const moveReview = useCallback((id: number, offset: -1 | 1): void => {
     setTabs((prev) =>
@@ -682,11 +382,12 @@ function App(): React.JSX.Element {
     )
   }, [])
 
-  const openBrowser = useCallback((url = 'https://www.google.com'): void => {
-    const id = nextIdRef.current++
-    setTabs((prev) => [...prev, { kind: 'browser', id, url }])
-    setActiveId(id)
-  }, [])
+  const openBrowser = useCallback(
+    (url = 'https://www.google.com'): void => {
+      openTab({ kind: 'browser', id: nextIdRef.current++, url })
+    },
+    [openTab]
+  )
 
   const openBlankBrowser = useCallback(() => {
     openBrowser()
@@ -732,12 +433,8 @@ function App(): React.JSX.Element {
     openSplit({ kind: 'browser', id, url: 'https://www.google.com' })
   }
 
-  const hasBrowserSplit =
-    activeTab?.kind === 'shell' && splits[activeTab.id]?.kind === 'browser'
+  const hasBrowserSplit = activeTab?.kind === 'shell' && splits[activeTab.id]?.kind === 'browser'
 
-  // A WebContentsView composites above the DOM, so a context menu anchored under the split
-  // button would render underneath an open browser split rather than on top of it. Only then
-  // fall back to a spot the browser view can't cover; otherwise anchor at the button as usual.
   const getSplitMenuPosition = useCallback(
     (button: DOMRect): { x: number; y: number } => {
       if (hasBrowserSplit) {
@@ -801,25 +498,6 @@ function App(): React.JSX.Element {
     [presets]
   )
 
-  const toggleCommand = useCallback(
-    (item: CommandItem): void => {
-      const existing = running[item.runKey]
-      if (existing != null) {
-        window.api.terminal.kill(existing)
-        setRunning((prev) => {
-          const next = { ...prev }
-          delete next[item.runKey]
-          return next
-        })
-        return
-      }
-      const id = nextTerminalId()
-      window.api.terminal.spawn(id, 80, 24, item.cwd, `${item.command}; exit`)
-      setRunning((prev) => ({ ...prev, [item.runKey]: id }))
-    },
-    [running]
-  )
-
   const addCommand = useCallback(
     (command: string): void => {
       window.api.snowconfig.addCommand(managePresetIndex, command)
@@ -829,18 +507,6 @@ function App(): React.JSX.Element {
 
   const removeCommand = useCallback((item: CommandItem): void => {
     window.api.snowconfig.removeCommand(item.presetIndex, item.index)
-  }, [])
-
-  useEffect(() => {
-    return window.api.terminal.onExit(null, (id) => {
-      setRunning((prev) => {
-        const command = Object.keys(prev).find((key) => prev[key] === id)
-        if (command === undefined) return prev
-        const next = { ...prev }
-        delete next[command]
-        return next
-      })
-    })
   }, [])
 
   const showTour =
@@ -931,36 +597,26 @@ function App(): React.JSX.Element {
   }, [])
 
   const reorderTab = useCallback((from: number, to: number): void => {
-    setTabs((prev) => {
-      const ordered = regroupTabs(prev, (tab) => groupsRef.current[tab.id] ?? null)
-      const target = to > from ? to - 1 : to
-      if (from < 0 || from >= ordered.length || target < 0 || target >= ordered.length) return prev
-      if (target === from) return prev
-      const next = [...ordered]
-      next.splice(target, 0, next.splice(from, 1)[0])
-      return next
-    })
+    setTabs(
+      (prev) =>
+        moveTab(
+          regroupTabs(prev, (tab) => groupsRef.current[tab.id] ?? null),
+          from,
+          to
+        ) ?? prev
+    )
   }, [])
 
   const reorderTabGroup = useCallback((from: number, count: number, to: number): void => {
-    setTabs((prev) => {
-      const ordered = regroupTabs(prev, (tab) => groupsRef.current[tab.id] ?? null)
-      if (
-        from < 0 ||
-        count < 1 ||
-        from + count > ordered.length ||
-        to < 0 ||
-        to > ordered.length ||
-        (to >= from && to <= from + count)
-      ) {
-        return prev
-      }
-      const next = [...ordered]
-      const moved = next.splice(from, count)
-      const target = to > from ? to - count : to
-      next.splice(target, 0, ...moved)
-      return next
-    })
+    setTabs(
+      (prev) =>
+        moveTabGroup(
+          regroupTabs(prev, (tab) => groupsRef.current[tab.id] ?? null),
+          from,
+          count,
+          to
+        ) ?? prev
+    )
   }, [])
 
   const cycleTab = (delta: number): void => {
@@ -1008,20 +664,22 @@ function App(): React.JSX.Element {
 
   return (
     <div className="app">
-      <ActionBar
-        cwd={actionCwd}
-        repoName={activeRepo?.name}
-        repoCount={actionRepos.length}
-        onSwitchRepo={switchRepo}
-        frozen={frozen !== null}
-        onFreeze={(on) => setFrozen(on ? { entries: repoEntries } : null)}
-        onOpenPullRequest={(url) => openBrowser(url)}
-        onOpenWorktree={openWorktree}
-        onCloseWorktree={closeWorktree}
-        onManageWorkflows={openWorkflows}
-        agentSessions={workflowAgentSessions}
-        keybinds={keybinds}
-      />
+      <PaneBoundary label="Action bar" className="pane-error-bar">
+        <ActionBar
+          cwd={actionCwd}
+          repoName={activeRepo?.name}
+          repoCount={actionRepos.length}
+          onSwitchRepo={switchRepo}
+          frozen={frozen !== null}
+          onFreeze={(on) => setFrozen(on ? { entries: repoEntries } : null)}
+          onOpenPullRequest={(url) => openBrowser(url)}
+          onOpenWorktree={openWorktree}
+          onCloseWorktree={closeWorktree}
+          onManageWorkflows={openWorkflows}
+          agentSessions={workflowAgentSessions}
+          keybinds={keybinds}
+        />
+      </PaneBoundary>
       <div className="content">
         <div className="terminal-area">
           <TabBar
@@ -1051,96 +709,107 @@ function App(): React.JSX.Element {
             canSplit={activeTab?.kind === 'shell'}
           />
           <div className="terminal-stack">
-            <HomePage
-              active={activeId === 'home'}
-              presets={presets}
-              name={configName}
-              theme={themeName ?? 'theme'}
-              error={presetsError}
-              hooksPrompted={hooksPrompted}
-              onOpenPreset={addSession}
-            />
-            <WorkflowManager
-              active={activeId === 'workflows'}
-              onLaunch={openWorktree}
-              onSelectSession={setActiveId}
-              onCloseSession={closeSession}
-              onOpenDiff={openDiff}
-              onReviewAll={openReview}
-              onCloseWorktree={closeWorktree}
-              sessionStatuses={sessionDirStatuses}
-              sessionTitles={sessionDirTitles}
-              agentSessions={workflowAgentSessions}
-              openSessions={openSessions}
-              workspaceOrder={workspaceOrder}
-              onWorkspaceOrderChange={setWorkspaceOrder}
-            />
+            <PaneBoundary label="Home" active={activeId === 'home'}>
+              <HomePage
+                active={activeId === 'home'}
+                presets={presets}
+                name={configName}
+                theme={themeName ?? 'theme'}
+                error={presetsError}
+                hooksPrompted={hooksPrompted}
+                onOpenPreset={addSession}
+              />
+            </PaneBoundary>
+            <PaneBoundary label="Workspaces" active={activeId === 'workflows'}>
+              <WorkflowManager
+                active={activeId === 'workflows'}
+                onLaunch={openWorktree}
+                onSelectSession={setActiveId}
+                onCloseSession={closeSession}
+                onOpenDiff={openDiff}
+                onReviewAll={openReview}
+                onCloseWorktree={closeWorktree}
+                sessionStatuses={sessionDirStatuses}
+                sessionTitles={sessionDirTitles}
+                agentSessions={workflowAgentSessions}
+                openSessions={openSessions}
+                workspaceOrder={workspaceOrder}
+                onWorkspaceOrderChange={setWorkspaceOrder}
+              />
+            </PaneBoundary>
             {mountedTabs.map((tab) => {
+              const active = activeId === tab.id
               if (tab.kind === 'commit')
                 return (
-                  <CommitView
-                    key={tab.id}
-                    active={activeId === tab.id}
-                    cwd={tab.cwd}
-                    hash={tab.hash}
-                    onOpenCommit={openCommit}
-                  />
+                  <PaneBoundary key={tab.id} label="Commit" active={active}>
+                    <CommitView
+                      active={active}
+                      cwd={tab.cwd}
+                      hash={tab.hash}
+                      onOpenCommit={openCommit}
+                    />
+                  </PaneBoundary>
                 )
               if (tab.kind === 'diff')
                 return (
-                  <WorkingDiffView
-                    key={`${tab.id}:${tab.cwd}`}
-                    active={activeId === tab.id}
-                    cwd={tab.cwd}
-                    focus={tab.focus}
-                    focusKey={tab.focusKey}
-                    review={
-                      tab.review
-                        ? {
-                            index: tab.review.index,
-                            total: tab.review.targets.length,
-                            onPrevious: () => moveReview(tab.id, -1),
-                            onNext: () => moveReview(tab.id, 1)
-                          }
-                        : undefined
-                    }
-                    onOpenCommit={openCommit}
-                  />
+                  <PaneBoundary key={`${tab.id}:${tab.cwd}`} label="Diff" active={active}>
+                    <WorkingDiffView
+                      active={active}
+                      cwd={tab.cwd}
+                      focus={tab.focus}
+                      focusKey={tab.focusKey}
+                      review={
+                        tab.review
+                          ? {
+                              index: tab.review.index,
+                              total: tab.review.targets.length,
+                              onPrevious: () => moveReview(tab.id, -1),
+                              onNext: () => moveReview(tab.id, 1)
+                            }
+                          : undefined
+                      }
+                      onOpenCommit={openCommit}
+                    />
+                  </PaneBoundary>
                 )
               if (tab.kind === 'browser')
                 return (
-                  <BrowserTab
-                    key={tab.id}
-                    id={tab.id}
-                    initialUrl={tab.url}
-                    active={activeId === tab.id}
-                    onTitle={(title) => setBrowserTitles((prev) => ({ ...prev, [tab.id]: title }))}
-                  />
+                  <PaneBoundary key={tab.id} label="Browser" active={active}>
+                    <BrowserTab
+                      id={tab.id}
+                      initialUrl={tab.url}
+                      active={active}
+                      onTitle={(title) =>
+                        setBrowserTitles((prev) => ({ ...prev, [tab.id]: title }))
+                      }
+                    />
+                  </PaneBoundary>
                 )
               return (
-                <Session
-                  key={tab.id}
-                  id={tab.id}
-                  bottomTerminalId={tab.bottomTerminalId}
-                  active={activeId === tab.id}
-                  cwd={tab.cwd}
-                  panes={panes[tab.id] ?? []}
-                  startupCommand={tab.startupCommand ?? startupCommand ?? 'claude'}
-                  split={splits[tab.id]}
-                  keybinds={keybinds}
-                  savedBottomHeight={layout.bottomHeight}
-                  savedBottomCollapsed={layout.bottomCollapsed}
-                  savedPaneRatios={presets.find((p) => p.name === tab.presetName)?.paneRatios}
-                  onBottomLayout={handleBottomLayout}
-                  onPaneRatios={handlePaneRatios}
-                  onCloseSplit={closeSplit}
-                  onOpenCommit={openCommit}
-                  onClosePane={closePane}
-                  onCwd={handleSessionCwd}
-                  onStatus={handleSessionStatus}
-                  onTitle={handleSessionTitle}
-                  onInterrupt={handleSessionInterrupt}
-                />
+                <PaneBoundary key={tab.id} label="Session" active={active}>
+                  <Session
+                    id={tab.id}
+                    bottomTerminalId={tab.bottomTerminalId}
+                    active={active}
+                    cwd={tab.cwd}
+                    panes={panes[tab.id] ?? []}
+                    startupCommand={tab.startupCommand ?? startupCommand ?? 'claude'}
+                    split={splits[tab.id]}
+                    keybinds={keybinds}
+                    savedBottomHeight={layout.bottomHeight}
+                    savedBottomCollapsed={layout.bottomCollapsed}
+                    savedPaneRatios={presets.find((p) => p.name === tab.presetName)?.paneRatios}
+                    onBottomLayout={handleBottomLayout}
+                    onPaneRatios={handlePaneRatios}
+                    onCloseSplit={closeSplit}
+                    onOpenCommit={openCommit}
+                    onClosePane={closePane}
+                    onCwd={handleSessionCwd}
+                    onStatus={handleSessionStatus}
+                    onTitle={handleSessionTitle}
+                    onInterrupt={handleSessionInterrupt}
+                  />
+                </PaneBoundary>
               )
             })}
           </div>
@@ -1153,21 +822,28 @@ function App(): React.JSX.Element {
             onEnd={gitPane.onEnd}
           />
         )}
-        <GitPanel
-          repos={repos}
-          width={gitPane.size}
-          collapsed={gitPane.collapsed}
-          gradients={gradients}
-          panelRef={gitPanelRef}
-          onOpenCommit={openCommit}
-          onOpenCommitSplit={activeTab?.kind === 'shell' ? openCommitSplit : undefined}
-          onOpenDiff={openDiff}
-          onOpenDiffSplit={activeTab?.kind === 'shell' ? openDiffSplit : undefined}
-        />
+        <PaneBoundary
+          label="Git panel"
+          active={!gitPane.collapsed}
+          className="git-panel"
+          style={{ flexBasis: gitPane.size }}
+        >
+          <GitPanel
+            repos={repos}
+            width={gitPane.size}
+            collapsed={gitPane.collapsed}
+            gradients={gradients}
+            panelRef={gitPanelRef}
+            onOpenCommit={openCommit}
+            onOpenCommitSplit={activeTab?.kind === 'shell' ? openCommitSplit : undefined}
+            onOpenDiff={openDiff}
+            onOpenDiffSplit={activeTab?.kind === 'shell' ? openDiffSplit : undefined}
+          />
+        </PaneBoundary>
         {gitPane.collapsed && (
           <PanelRestore
             className="panel-restore-git"
-            label="󰞗"
+            label={'\u{f0797}'}
             title="Show git panel"
             onClick={gitPane.restore}
           />

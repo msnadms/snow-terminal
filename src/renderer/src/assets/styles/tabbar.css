@@ -1,0 +1,360 @@
+.content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+}
+
+.terminal-area {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tabbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  height: 38px;
+  padding: 0 6px;
+  background: var(--ui-chrome, #11111b);
+  border-bottom: 1px solid var(--ui-border, #313244);
+  font-family: 'Hack Nerd Font Mono', monospace;
+  font-size: 12px;
+}
+
+.tab-home,
+.tab,
+.tab-add,
+.tab-workflows,
+.tab-command-add,
+.tab-split {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  align-self: center;
+  flex: 0 0 auto;
+  color: var(--ui-muted-text, #a6adc8);
+  background: var(--ui-surface, #1e1e2e);
+  border: 1px solid var(--ui-border, #313244);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.tab-home,
+.tab-add,
+.tab-workflows,
+.tab-command-add,
+.tab-split {
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 20px;
+  font-family: 'Hack Nerd Font Mono', monospace;
+}
+
+.tab-list {
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  align-self: center;
+  gap: 4px;
+  height: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.tab-list::-webkit-scrollbar {
+  display: none;
+}
+
+.tab-workflows {
+  font-size: 16px;
+}
+
+.tab-command-add {
+  margin-left: auto;
+}
+
+.tab-command-add:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.tab-split {
+  font-size: 15px;
+}
+
+.tab-split:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.tabbar-divider {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 1px;
+  height: 22px;
+  margin: 0 2px;
+  background: var(--ui-border, #313244);
+}
+
+.tab-command-divider {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 1px;
+  height: 14px;
+  margin: 0 4px;
+  background: var(--ui-border-hover, #45475a);
+}
+
+.tab-command-form {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+
+.tab-command-input {
+  -webkit-app-region: no-drag;
+  align-self: center;
+  width: 160px;
+  height: 26px;
+  padding: 0 8px;
+  color: var(--ui-text, #cdd6f4);
+  background: var(--ui-background, #181825);
+  border: 1px solid var(--ui-border-hover, #45475a);
+  border-radius: 4px;
+  font-family: 'Hack Nerd Font Mono', monospace;
+  font-size: 12px;
+  outline: none;
+}
+
+.tab-command {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  align-self: center;
+  flex: 0 0 auto;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--ui-muted-text, #a6adc8);
+  background: var(--ui-surface, #1e1e2e);
+  border: 1px solid var(--ui-border, #313244);
+  border-radius: 4px;
+  font-family: 'Hack Nerd Font Mono', monospace;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tab {
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px 0 12px;
+  min-width: 120px;
+  max-width: 260px;
+}
+
+.tab-group {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  align-self: center;
+  height: 28px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--tab-group, var(--ui-border, #313244)) 45%, transparent);
+  border-radius: 4px;
+}
+
+.tab-group .tab {
+  border: none;
+  border-radius: 0;
+  min-width: 100px;
+}
+
+.tab-group-toggle {
+  -webkit-app-region: no-drag;
+  flex: 0 0 auto;
+  width: 10px;
+  padding: 0;
+  border: none;
+  background: color-mix(in srgb, var(--tab-group) 30%, transparent);
+  cursor: grab;
+}
+
+.tab-group-item-divider {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 1px;
+  background: color-mix(
+    in srgb,
+    var(--tab-group, var(--ui-border-hover, #45475a)) 45%,
+    transparent
+  );
+}
+
+.tab-group-collapsed {
+  -webkit-app-region: no-drag;
+  flex: 0 0 auto;
+  align-self: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--tab-group, var(--ui-border, #313244)) 45%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--tab-group) 30%, transparent);
+  cursor: grab;
+}
+
+.tab-group-toggle:active,
+.tab-group-collapsed:active {
+  cursor: grabbing;
+}
+
+.tab-group-divider {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 1px;
+  height: 22px;
+  margin: 0 3px;
+  background: var(--ui-border-hover, #45475a);
+}
+
+.tab-dragging {
+  opacity: 0.4;
+}
+
+.tab-drop-before,
+.tab-drop-after {
+  position: relative;
+}
+
+.tab-drop-before::before,
+.tab-drop-after::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--ui-accent, #a6dcf0);
+}
+
+.tab-drop-before::before {
+  left: -3px;
+}
+
+.tab-drop-after::after {
+  right: -3px;
+}
+
+.tab-group.tab-drop-before::before {
+  left: 0;
+  z-index: 1;
+}
+
+.tab-group.tab-drop-after::after {
+  right: 0;
+  z-index: 1;
+}
+
+.tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-status {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.tab-status-attention {
+  background: var(--ui-success, #a6e3a1);
+}
+
+.tab-status-busy {
+  background: var(--ui-accent, #a6dcf0);
+  animation: tab-status-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes tab-status-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.tab-close {
+  -webkit-app-region: no-drag;
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  color: var(--ui-faint-text, #6c7086);
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  font-size: 14px;
+  font-family: 'Hack Nerd Font Mono', monospace;
+  cursor: pointer;
+}
+
+.tab-close:hover {
+  color: var(--ui-text, #cdd6f4);
+  background: var(--ui-surface-hover, #313244);
+}
+
+.tab-home:hover,
+.tab:hover,
+.tab-add:hover,
+.tab-workflows:hover,
+.tab-command-add:not(:disabled):hover,
+.tab-split:not(:disabled):hover {
+  border-color: var(--ui-border-hover, #45475a);
+  color: var(--ui-text, #cdd6f4);
+}
+
+.tab-command:hover {
+  color: var(--ui-success, #a6e3a1);
+  border-color: var(--ui-success, #a6e3a1);
+}
+
+.tab-command-active {
+  color: var(--ui-danger, #f38ba8);
+  border-color: var(--ui-danger, #f38ba8);
+}
+
+.tab-command-active:hover {
+  color: #f25481;
+  border-color: #f25481;
+}
+
+.tab-active {
+  color: var(--ui-accent, #a6dcf0);
+  border-color: var(--ui-border-hover, #45475a);
+}
+
+.tab-group .tab:hover {
+  background: var(--ui-surface-hover, #313244);
+}
+
+.tab-group .tab.tab-active {
+  background: var(--ui-surface-hover, #313244);
+}

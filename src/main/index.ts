@@ -24,7 +24,6 @@ if (!startCli()) app.exit(0)
 initLogging()
 
 function createWindow(): void {
-  // Create the browser window.
   const mainWindow = new BrowserWindow({
     width: 900,
     height: 670,
@@ -54,8 +53,6 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  // HMR for renderer base on electron-vite cli.
-  // Load the remote URL for development or the local html file for production.
   const devUrl = is.dev ? process.env['ELECTRON_RENDERER_URL'] : undefined
   const appOrigin = devUrl ? new URL(devUrl).origin : null
 
@@ -82,60 +79,26 @@ function createWindow(): void {
   }
 }
 
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
-  // Default open or close DevTools by F12 in development
-  // and ignore CommandOrControl + R in production.
-  // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // IPC test
   ipcMain.on('ping', () => console.log('pong'))
 
-  // Register pseudo-terminal (node-pty) IPC handlers.
   registerPtyHandlers()
-
-  // Register embedded-browser (WebContentsView) IPC handlers.
   registerBrowserHandlers()
-
-  // Probe common dev-server ports so the browser can offer what is listening locally.
   registerLocalhostHandlers()
-
-  // Load ~/.config/snow/.snowworkflows and watch it for edits. Before the git handlers, which
-  // consult the registry to decide whether a branch switch parks its changes.
   initRegistry()
-
-  // Register git info IPC handlers; each call carries the repo cwd.
   registerGitHandlers()
-
-  // Register workflow IPC handlers.
   registerWorkflowHandlers()
-
-  // Load ~/.config/snow/theme.json and watch it for edits.
   registerThemeHandlers()
-
-  // Load ~/.config/snow/.snowignore and watch it for edits.
   registerSnowignoreHandlers()
-
-  // Load ~/.config/snow/.snowconfig and watch it for edits.
   registerSnowconfigHandlers()
-
-  // Watch ~/.claude/projects for Claude Code session logs to tally daily/weekly cost.
   registerUsageHandlers()
-
-  // Watch ~/.config/snow/agents for the status records installed Claude Code/Codex hooks write.
   registerAgentHandlers()
-
-  // Refresh installed hooks and carry an existing Claude hook installation forward to Codex.
   refreshHooks()
   registerHooksHandlers()
-
-  // Resolve a folder passed on the command line into a preset; after the snowconfig
-  // handlers, which seed the file this writes to.
   registerCliHandlers()
 
   log('info', 'app', 'ready', { log: logPath(), config: configDir() })
@@ -143,22 +106,16 @@ app.whenReady().then(() => {
   createWindow()
 
   app.on('activate', function () {
-    // On macOS it's common to re-create a window in the app when the
-    // dock icon is clicked and there are no other windows open.
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
 
-// Quit when all windows are closed, except on macOS. There, it's common
-// for applications and their menu bar to stay active until the user quits
-// explicitly with Cmd + Q.
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
 })
 
-// Ensure all PTY processes are terminated when the app quits.
 app.on('will-quit', () => {
   disposeAllPty()
   disposeAllBrowser()
@@ -171,6 +128,3 @@ app.on('will-quit', () => {
   disposeAgentWatcher()
   closeLogging()
 })
-
-// In this file you can include the rest of your app's specific main process
-// code. You can also put them in separate files and require them here.

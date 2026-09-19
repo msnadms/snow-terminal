@@ -3,7 +3,6 @@ import { useEffect, useRef } from 'react'
 interface GitDialogProps {
   title: React.ReactNode
   detail?: string
-  /** Rendered between the detail and the actions, for a dialog that asks rather than only tells. */
   body?: React.ReactNode
   dismissOnEnter?: boolean
   onDismiss: () => void

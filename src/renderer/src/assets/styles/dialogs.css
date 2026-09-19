@@ -1,0 +1,71 @@
+.git-dialog-backdrop {
+  -webkit-app-region: no-drag;
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 96px;
+  background: rgba(17, 17, 27, 0.6);
+}
+
+.git-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(520px, calc(100vw - 64px));
+  padding: 16px;
+  text-align: left;
+  background: var(--ui-background, #181825);
+  border: 1px solid var(--ui-border, #313244);
+  border-radius: 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+.git-dialog-title {
+  color: var(--ui-text, #cdd6f4);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.git-dialog-detail {
+  max-height: 220px;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  font: inherit;
+  color: var(--ui-muted-text, #a6adc8);
+  background: var(--ui-surface, #1e1e2e);
+  border: 1px solid var(--ui-border, #313244);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.git-dialog-detail::-webkit-scrollbar {
+  width: 8px;
+}
+
+.git-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.git-dialog-button {
+  height: 24px;
+  padding: 0 14px;
+  font: inherit;
+  color: var(--ui-text, #cdd6f4);
+  background: var(--ui-surface, #1e1e2e);
+  border: 1px solid var(--ui-border-hover, #45475a);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.git-dialog-button:hover {
+  color: var(--ui-accent, #a6dcf0);
+  border-color: var(--ui-border-strong, #585b70);
+}

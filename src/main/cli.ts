@@ -42,10 +42,6 @@ function presetFor(args: string[], cwd: string): Preset | null {
   return preset
 }
 
-/**
- * A verb only shadows a directory of the same name when it carries its own argument, so `snow theme`
- * and `snow hooks` still open `./theme` and `./hooks`.
- */
 function runArgs(argv: string[], cwd: string, retainResult = false): Preset | null {
   const args = positionalArgs(argv, cwd)
   if (args.length < 2) return presetFor(args, cwd)

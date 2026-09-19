@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain, WebContents, WebContentsView } from 'electron'
+import { BrowserWindow, ipcMain, session, WebContents, WebContentsView } from 'electron'
 import { isExternalUrl } from './external'
 import { log } from './log'
 
@@ -26,9 +26,6 @@ export interface BrowserState {
 const views = new Map<number, BrowserView>()
 const destroyHooked = new WeakSet<WebContents>()
 
-// Bounds concurrent popups per top-level browser view — an auth flow needs a handful (a
-// blank popup, an account chooser, a consent screen) but a page must never be able to spawn
-// windows without limit.
 const maxPopupsPerView = 6
 const popupCounts = new Map<number, number>()
 
@@ -45,9 +42,6 @@ function withWc(id: number, fn: (wc: WebContents) => void): void {
   if (wc) fn(wc)
 }
 
-// Auth SDKs commonly open a blank popup first, then navigate it once the auth URL is ready, and
-// that popup may itself chain into further popups (an account chooser, a consent screen) — so the
-// same allow/deny policy applies recursively to every popup a popup opens, not just the first.
 function attachPopupHandlers(wc: WebContents, parent: BrowserWindow, id: number): void {
   wc.setWindowOpenHandler(({ url: target }) => {
     if (target !== '' && target !== 'about:blank' && !isExternalUrl(target)) {
@@ -71,8 +65,6 @@ function attachPopupHandlers(wc: WebContents, parent: BrowserWindow, id: number)
   wc.on('did-create-window', (popup) => {
     popupCounts.set(id, (popupCounts.get(id) ?? 0) + 1)
     log('info', 'browser', 'popup opened', { id, url: popup.webContents.getURL() })
-    // overrideBrowserWindowOptions alone doesn't reliably raise/focus the popup above the
-    // host window, which otherwise reads as the auth flow silently doing nothing.
     popup.show()
     popup.focus()
     attachPopupHandlers(popup.webContents, popup, id)
@@ -85,7 +77,23 @@ function attachPopupHandlers(wc: WebContents, parent: BrowserWindow, id: number)
   })
 }
 
+const browserPartition = 'persist:browser'
+const grantedPermissions = new Set(['fullscreen', 'clipboard-sanitized-write'])
+
+function restrictPermissions(): void {
+  const ses = session.fromPartition(browserPartition)
+  ses.setPermissionRequestHandler((_wc, permission, callback, details) => {
+    const granted = grantedPermissions.has(permission)
+    if (!granted) {
+      log('warn', 'browser', 'denied permission', { permission, url: details.requestingUrl })
+    }
+    callback(granted)
+  })
+  ses.setPermissionCheckHandler((_wc, permission) => grantedPermissions.has(permission))
+}
+
 export function registerBrowserHandlers(): void {
+  restrictPermissions()
   ipcMain.on('browser:create', (event, { id, url }: { id: number; url: string }) => {
     views.get(id)?.view.webContents.close()
 
@@ -94,7 +102,7 @@ export function registerBrowserHandlers(): void {
     if (!win) return
 
     const view = new WebContentsView({
-      webPreferences: { sandbox: true, partition: 'persist:browser' }
+      webPreferences: { sandbox: true, partition: browserPartition }
     })
     const wc = view.webContents
 
@@ -108,7 +116,7 @@ export function registerBrowserHandlers(): void {
       try {
         owner.send('browser:state', payload)
       } catch {
-        // frame torn down mid-send
+        return
       }
     }
 

@@ -39,7 +39,6 @@ function visible(session: StatusSession, interruptedTerminals: Record<number, nu
   return session.updated > (interruptedTerminals[session.terminalId] ?? 0)
 }
 
-/** Apply terminal-specific interruption tombstones before any tab or workflow consumes records. */
 export function visibleAgentSessions<T extends StatusSession>(
   sessions: T[],
   interruptedTerminals: Record<number, number>
@@ -47,12 +46,6 @@ export function visibleAgentSessions<T extends StatusSession>(
   return sessions.filter((session) => visible(session, interruptedTerminals))
 }
 
-/**
- * Keep hook records authoritative per terminal, but represent a busy terminal with no record so
- * workflow counts do not blink out when the tab dot falls back to byte activity. Heuristic
- * `attention` means only that output stopped while the tab was inactive; it cannot assert that an
- * agent requested input, so only a real hook record may contribute that state to a workflow chip.
- */
 export function workflowSessionsOf<T extends WorkflowStatusSession>(
   sessions: T[],
   terminals: TerminalStatusFallback[]
@@ -83,7 +76,6 @@ function statusOf(session: StatusSession): AgentDir {
   return { state: session.state, detail: session.detail, updated: session.updated }
 }
 
-/** Collapse all live records in one directory to the state most worth surfacing. */
 export function agentDirsOf(
   sessions: StatusSession[],
   interruptedTerminals: Record<number, number>
@@ -98,12 +90,6 @@ export function agentDirsOf(
   return result
 }
 
-/**
- * Resolve a tab from the terminals it owns. Hook state overrides the byte heuristic only for the
- * terminal that reported it; the loudest resulting terminal wins the tab dot. Cwd deliberately
- * plays no part: several tabs may start in the same directory, and an external agent there belongs
- * to the workflow rollup rather than to an arbitrary Snow tab.
- */
 export function tabStatusIn(
   sessions: StatusSession[],
   interruptedTerminals: Record<number, number>,
@@ -117,7 +103,6 @@ export function tabStatusIn(
   )
 }
 
-/** Index the best hook report for each terminal once before resolving multiple tabs. */
 export function terminalAgentsOf(
   sessions: StatusSession[],
   interruptedTerminals: Record<number, number>
@@ -132,7 +117,6 @@ export function terminalAgentsOf(
   return agents
 }
 
-/** Resolve a tab from a pre-indexed terminal map. */
 export function tabStatusFrom(
   agents: ReadonlyMap<number, AgentDir>,
   terminalIds: number[],

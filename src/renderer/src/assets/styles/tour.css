@@ -1,0 +1,117 @@
+.tour {
+  -webkit-app-region: no-drag;
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  font-family: 'Hack Nerd Font Mono', monospace;
+}
+
+.tour-backdrop {
+  position: fixed;
+  inset: 0;
+}
+
+.tour-spotlight {
+  position: fixed;
+  pointer-events: none;
+  border: 1px solid #6fb2f0;
+  border-radius: 6px;
+  box-shadow:
+    0 0 0 9999px rgba(17, 17, 27, 0.72),
+    0 0 12px rgba(111, 178, 240, 0.5);
+  transition:
+    top 0.18s ease,
+    left 0.18s ease,
+    width 0.18s ease,
+    height 0.18s ease;
+}
+
+.tour-card {
+  position: fixed;
+  z-index: 52;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 320px;
+  padding: 14px 16px;
+  background: var(--ui-background, #181825);
+  border: 1px solid var(--ui-border, #313244);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  transition:
+    top 0.18s ease,
+    left 0.18s ease;
+}
+
+.tour-card-step {
+  color: var(--ui-faint-text, #6c7086);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tour-card-title {
+  color: var(--ui-text, #cdd6f4);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tour-card-body {
+  color: var(--ui-muted-text, #a6adc8);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.tour-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+
+.tour-nav {
+  display: flex;
+  gap: 8px;
+}
+
+.tour-button {
+  height: 24px;
+  padding: 0 14px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ui-text, #cdd6f4);
+  background: var(--ui-surface, #1e1e2e);
+  border: 1px solid var(--ui-border-hover, #45475a);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.tour-button:hover {
+  color: var(--ui-accent, #a6dcf0);
+  border-color: var(--ui-border-strong, #585b70);
+}
+
+.tour-button-primary {
+  color: var(--ui-chrome, #11111b);
+  background: #6fb2f0;
+  border-color: #6fb2f0;
+}
+
+.tour-button-primary:hover {
+  color: var(--ui-chrome, #11111b);
+  background: #8bc4f5;
+  border-color: #8bc4f5;
+}
+
+.tour-skip {
+  padding: 0;
+  font: inherit;
+  font-size: 11px;
+  color: var(--ui-faint-text, #6c7086);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.tour-skip:hover {
+  color: var(--ui-muted-text, #a6adc8);
+}

@@ -15,6 +15,8 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "test:agent-status": "node scripts/simulate-agent-status.mjs",
     "test:workflow-review": "node scripts/simulate-workflow-review.mjs",
     "start": "electron-vite preview",
@@ -58,6 +60,7 @@
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "typescript": "^5.9.3",
-    "vite": "^7.2.6"
+    "vite": "^7.2.6",
+    "vitest": "^5.0.1"
   }
 }

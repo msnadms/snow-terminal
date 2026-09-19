@@ -6,12 +6,6 @@ interface HooksPromptProps {
   prompted: boolean
 }
 
-/**
- * The offer snow makes exactly once. `snow hooks install` stays the real entry point - this only
- * fixes its discoverability, since nothing in the UI would otherwise say the feature exists. The
- * answer is recorded either way: the flag means "asked", not "declined", so a later `snow hooks
- * remove` does not bring the offer back.
- */
 function HooksPrompt({ prompted }: HooksPromptProps): React.JSX.Element | null {
   const [state, setState] = useState<HooksState | null>(null)
   const [busy, setBusy] = useState(false)

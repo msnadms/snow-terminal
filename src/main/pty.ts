@@ -45,12 +45,6 @@ function isInside(child: string, parent: string): boolean {
 // eslint-disable-next-line no-control-regex -- an OSC sequence is delimited by ESC and BEL by definition
 const osc7 = /\u001b]7;file:\/\/[^/]*([^\u0007\u001b]*)(?:\u0007|\u001b\\)/g
 
-/**
- * Track the shell's live directory from the OSC 7 reports `shellSpec` makes every prompt. The
- * spawn cwd alone is not enough for `closePtysInDirectory`: a shell started elsewhere that `cd`s
- * into a worktree holds that directory open just as firmly, and is exactly what makes
- * `git worktree remove` fail on Windows.
- */
 function trackCwd(id: number, data: string): void {
   const session = sessions.get(id)
   if (!session) return
@@ -63,24 +57,16 @@ function trackCwd(id: number, data: string): void {
     reports += 1
   }
   if (!latest) return
-  // Snow's shell integration emits OSC 7 from the prompt. The first report belongs to the shell
-  // starting up; any later report means its foreground command (including Claude) has exited. A
-  // force-killed Claude cannot fire SessionEnd, so retire the record tied to this exact terminal.
   session.promptReports += reports
   if (session.promptReports > 1) retireTerminal(session.agentTerminal)
   try {
     const decoded = decodeURIComponent(latest)
-    // A Windows report is `/C:/path`; POSIX reports are already absolute.
     session.cwd = path.resolve(/^\/[A-Za-z]:/.test(decoded) ? decoded.slice(1) : decoded)
   } catch {
-    // a partially received escape sequence is not worth acting on
+    return
   }
 }
 
-/**
- * Stop terminals rooted in a worktree before Git removes it. Windows cannot delete a directory
- * while a shell (or Git itself) has that directory as its current working directory.
- */
 export async function closePtysInDirectory(directory: string): Promise<void> {
   const targets = [...sessions.values()].filter((session) => isInside(session.cwd, directory))
   for (const session of targets) releaseTerminal(session.agentTerminal)
@@ -133,8 +119,6 @@ export function registerPtyHandlers(): void {
       if (existing) killSession(id, existing)
 
       const spec = shellSpec()
-      // Per spawn, not per id: a respawn of the same pane must not inherit the token whose records
-      // the outgoing pty's own exit is about to delete.
       const agentTerminal = randomUUID()
       retainTerminal(agentTerminal, ownerId ?? id)
       let pty: IPty
@@ -178,7 +162,7 @@ export function registerPtyHandlers(): void {
         try {
           webContents.send(channel, payload)
         } catch {
-          // frame torn down mid-send
+          return
         }
       }
 
@@ -228,8 +212,6 @@ export function registerPtyHandlers(): void {
   ipcMain.on('pty:write', (_event, { id, data }: { id: number; data: string }) => {
     const session = sessions.get(id)
     if (!session) return
-    // Ctrl+C and Escape are the two interruption keys the renderer recognizes. Persist the same
-    // decision here so a stale busy record cannot reappear after the renderer or app restarts.
     if (data === '\u0003' || data === '\x1b') retireTerminal(session.agentTerminal)
     session.pty.write(data)
   })
@@ -251,8 +233,6 @@ export function registerPtyHandlers(): void {
 }
 
 export function disposeAllPty(): void {
-  // `will-quit` beats every asynchronous exit event, so releasing here rather than leaving it to
-  // `onExit` is what keeps the next launch from seeing this run's records as live.
   for (const { pty, agentTerminal } of sessions.values()) {
     pty.kill()
     releaseTerminal(agentTerminal)

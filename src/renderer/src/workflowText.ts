@@ -18,10 +18,6 @@ export function parkedStay(files: number | null): string {
   return `Its ${files} parked file${files === 1 ? '' : 's'} ${files === 1 ? 'stays' : 'stay'} in the stash.`
 }
 
-/**
- * Every directory whose git activity can change this repo's workflows. The stash is shared across
- * a repository, so a linked worktree's writes matter here even though it lives outside the root.
- */
 export function repoScope(repo: string | null, workflows: WorkflowEntry[]): string[] {
   const dirs = workflows.map((entry) => entry.worktree).filter((dir): dir is string => !!dir)
   return (repo ? [repo, ...dirs] : dirs).map(normalizePath)
@@ -57,12 +53,10 @@ export function stateLabel(entry: WorkflowEntry): string {
   return ''
 }
 
-/** A label with a space in it would otherwise emit two class names, one of them stray. */
 export function stateSlug(state: string): string {
   return state.replace(/\s+/g, '-')
 }
 
-/** The `● N` badge, with a multiplier when earlier parks were kept by a conflicting pop. */
 export function parkedBadge(parked: NonNullable<WorkflowEntry['parked']>): string {
   return `● ${parked.files ?? '?'}${parked.count > 1 ? ` ×${parked.count}` : ''}`
 }
@@ -77,13 +71,6 @@ export interface OverlapCounts {
   total: number
 }
 
-/**
- * Counted per verdict, because one number cannot carry them: a workspace whose every shared path
- * merges cleanly would otherwise wear the same warning badge as one nothing could prove. Totals come
- * from the pre-cap `overlapTotals` so the badge reports the workspace rather than however much of it
- * the panel can show. Drift against the default branch needs no special case here - main reports it
- * as ordinary `conflict` rows.
- */
 export function overlapCounts(entry: WorkflowOverlapReport): OverlapCounts {
   const totals = entry.overlapTotals ?? { conflict: 0, overlap: 0, clean: 0 }
   return {
@@ -112,7 +99,6 @@ function overlapPhrases(
     .map(([key, phrase]) => render(counts[key], phrase))
 }
 
-/** How many claimed paths the capped `overlaps` array leaves unshown. */
 export function overlapHidden(entry: WorkflowOverlapReport): number {
   return overlapCounts(entry).total - (entry.overlaps?.length ?? 0)
 }
@@ -142,11 +128,6 @@ const verdictLabel: Record<WorkflowOverlap['verdict'], string> = {
   clean: 'merges cleanly'
 }
 
-/**
- * The verdict half of a row, rendered in its own span so color can carry the distinction - three
- * greys would not. When every claim *was* committed and the verdict is still unproven, the merge
- * itself failed to evaluate, which is a different thing to say than "someone has work in flight".
- */
 export function overlapVerdict(overlap: WorkflowOverlap): string {
   const allCommitted =
     overlap.source === 'committed' && overlap.branches.every((c) => c.source === 'committed')
@@ -157,11 +138,6 @@ export function overlapVerdict(overlap: WorkflowOverlap): string {
   return overlap.source === 'committed' ? label : `${label} (${sourceLabel[overlap.source]})`
 }
 
-/**
- * `fix-login (uncommitted)`. An unproven path this workspace committed reads as a contradiction
- * unless the row says whose claim could not be merged, so every claimant carries its own source and
- * only a committed one goes unlabelled.
- */
 export function overlapClaimants(overlap: WorkflowOverlap): string {
   return overlap.branches
     .map((c) => (c.source === 'committed' ? c.branch : `${c.branch} (${sourceLabel[c.source]})`))
@@ -170,7 +146,6 @@ export function overlapClaimants(overlap: WorkflowOverlap): string {
 
 type Review = NonNullable<WorkflowEntry['review']>
 
-/** `3 ~ 1 + ↑2`: changed files, staged files, commits ahead of the default branch. */
 export function reviewBadge(review: Review): string {
   const parts = [`${review.changed} ~`]
   if (review.staged > 0) parts.push(`${review.staged} +`)
@@ -196,12 +171,6 @@ export interface InboxSignal {
   slug: string
 }
 
-/**
- * One ordering for the whole screen, most blocking to the operator first. The evaluation order is
- * deliberately not the sort order: an agent still working suppresses "ready to review", because a
- * tree being edited is not a tree to review - but a branch that IS ready outranks one that is
- * merely working, since fan-out runs itself and fan-in is what waits on a human.
- */
 export function inboxSignal(
   entry: WorkflowEntry,
   agents: { waiting: number; working: number },
@@ -229,7 +198,6 @@ export function inboxSignal(
   return { tier: 0, label: '', slug: '' }
 }
 
-/** The rows worth a glance: an agent is blocked, or there is work to fan back in. */
 export function needsOperator(signal: InboxSignal): boolean {
   return signal.tier >= 3
 }
@@ -256,11 +224,6 @@ export function parkedTitle(entry: WorkflowEntry): string {
 
 export type WorkflowOrphan = NonNullable<WorkflowRepo['orphans']>[number]
 
-/**
- * A workspace whose work has landed and which nothing is holding on to. Three shapes reach the same
- * dialog: a live worktree, a record whose worktree git no longer links, and a linked worktree no
- * record claims.
- */
 export type CleanupKind = 'workspace' | 'stale' | 'orphan'
 
 type CleanupBase = {
@@ -268,7 +231,6 @@ type CleanupBase = {
   repoName: string
   branch: string
   reasons: string[]
-  /** Pre-checked in the dialog. A directory snow did not lay out is opt-in. */
   suggested: boolean
 }
 
@@ -278,11 +240,6 @@ export type CleanupTarget = CleanupBase &
     | { kind: 'workspace' | 'stale'; directory: string | null }
   )
 
-/**
- * `merged === true` is the whole gate - `null` means nothing could tell and is never offered. The
- * rest is about what would be destroyed rather than what has landed: parked work, uncommitted work,
- * and a session that is still using the directory.
- */
 export function cleanupCandidate(
   entry: WorkflowEntry,
   activity: { agents: AgentSession[]; summary: AgentSummary }
@@ -298,7 +255,6 @@ export function cleanupCandidate(
   )
 }
 
-/** A record whose worktree git no longer links: bookkeeping, with nothing left to delete. */
 export function cleanupStale(entry: WorkflowEntry): boolean {
   return !!entry.worktree && !usable(entry) && !entry.parked
 }

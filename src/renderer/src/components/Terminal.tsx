@@ -92,9 +92,6 @@ function Terminal({
     const container = containerRef.current
     if (!container) return
 
-    // The pane id is stable so agent records can remain attached to their owning tab. IPC events
-    // need a fresh id for every PTY incarnation, though: data and exit from a killed process may
-    // already be queued when this effect respawns it.
     const id = nextTerminalId()
 
     const term = new XTerm({
@@ -191,7 +188,7 @@ function Terminal({
         window.api.terminal.resize(id, term.cols, term.rows)
         bumpQuiet()
       } catch {
-        // fit() can throw on a detached element
+        return
       }
     }
     const resizeObserver = new ResizeObserver(resize)
@@ -241,7 +238,7 @@ function Terminal({
         quietUntilRef.current = Date.now() + QUIET_MS
         if (focusOnActivate) term.focus()
       } catch {
-        // pane detached
+        return
       }
     })
     return () => cancelAnimationFrame(raf)

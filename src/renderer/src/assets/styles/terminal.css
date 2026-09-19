@@ -1,0 +1,82 @@
+.terminal-wrap {
+  position: relative;
+  height: 100%;
+  width: 100%;
+}
+
+.terminal-pane {
+  height: 100%;
+  width: 100%;
+}
+
+.terminal-search {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: var(--ui-background, #181825);
+  border: 1px solid var(--ui-border, #313244);
+  border-radius: 5px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.terminal-search-input {
+  width: 150px;
+  padding: 2px 4px;
+  color: var(--ui-text, #cdd6f4);
+  background: var(--ui-surface, #1e1e2e);
+  border: 1px solid var(--ui-border-hover, #45475a);
+  border-radius: 3px;
+  font-size: 12px;
+  font-family: 'Hack Nerd Font Mono', monospace;
+  outline: none;
+}
+
+.terminal-search-input:focus {
+  border-color: var(--ui-border-hover, #89b4fa);
+}
+
+.terminal-search-count {
+  min-width: 34px;
+  color: var(--ui-faint-text, #6c7086);
+  font-size: 11px;
+  text-align: center;
+}
+
+.terminal-search-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: var(--ui-faint-text, #6c7086);
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.terminal-search-nav:hover {
+  color: var(--ui-text, #cdd6f4);
+  background: var(--ui-surface-hover, #313244);
+}
+
+.terminal-pane .xterm,
+.terminal-pane .xterm-viewport {
+  height: 100%;
+}
+
+.terminal-pane .xterm .xterm-viewport {
+  background-color: var(--ui-terminal-background, #1e1e2e);
+  scrollbar-width: none;
+}
+
+.terminal-pane .xterm .xterm-viewport::-webkit-scrollbar {
+  display: none;
+}

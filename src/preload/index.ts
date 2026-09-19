@@ -18,9 +18,9 @@ import type {
   GitUndoResult,
   GitUpdateDefaultResult,
   GitWorkingDiff
-} from '../main/git'
+} from '../main/gitTypes'
 import type { BrowserBounds, BrowserState } from '../main/browser'
-import type { WorkflowList, WorkflowOverview, WorkflowResult } from '../main/workflow'
+import type { WorkflowList, WorkflowOverview, WorkflowResult } from '../main/workflowTypes'
 import type { ThemeResult } from '../main/theme'
 import type { ThemeInstallResult } from '../main/themeInstall'
 import type { AgentsResult } from '../main/agents'

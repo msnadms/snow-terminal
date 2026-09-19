@@ -1,7 +1,3 @@
-/**
- * A map bounded by insertion order, for answers that are pure functions of commit SHAs: they never
- * self-invalidate, so nothing but the bound ever evicts them.
- */
 export interface BoundedCache<T> {
   get(key: string): T | undefined
   set(key: string, value: T): T

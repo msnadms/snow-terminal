@@ -10,7 +10,6 @@ export type UsageAgent = 'claude' | 'codex'
 export interface UsageResult {
   session: number
   agents: Record<UsageAgent, number>
-  /** Cost per working directory, so a workflow can be asked what it has spent. */
   byDirectory: Record<string, number>
   error: string | null
 }
@@ -101,11 +100,6 @@ interface CachedFile {
   state: ParserState
 }
 
-/**
- * Both CLIs record the session's own working directory, so nothing has to decode
- * `~/.claude/projects/<dashed-cwd>/` - an encoding that maps separators and dots onto the same
- * character and cannot be reversed.
- */
 function normalizeDir(raw: unknown): string {
   if (typeof raw !== 'string' || !raw) return ''
   return path.resolve(raw).split(path.sep).join('/').replace(/\/+$/, '')
@@ -168,8 +162,6 @@ function parseCodexLines(lines: string[], state: ParserState): Entry[] {
     }
     const payload = entry.payload
     if (!payload) continue
-    // A rollout tags its opening record on the envelope, while every event tags itself on the
-    // payload - so `session_meta` is read from `entry.type`, not from `payload.type`.
     if (entry.type === 'session_meta') {
       state.dir = normalizeDir(payload.cwd)
       continue
@@ -182,8 +174,6 @@ function parseCodexLines(lines: string[], state: ParserState): Entry[] {
     if (Number.isNaN(ts)) continue
     entries.push({ key: ':', ts, cost: codexCost(state.model, usage), dir: state.dir })
   }
-  // A rollout's cwd normally arrives first. Preserve the old repair behavior for an unusual chunk
-  // where metadata and usage were observed in the opposite order.
   return state.dir
     ? entries.map((entry) => (entry.dir ? entry : { ...entry, dir: state.dir }))
     : entries
@@ -265,8 +255,6 @@ async function updateFile(source: Source, full: string): Promise<void> {
           pending = complete
         }
 
-        // Parsing stays in the main process, but yielding between bounded chunks keeps terminal IPC
-        // responsive during the one-time read of an already-large active session.
         await new Promise<void>((resolve) => setImmediate(resolve))
       }
     } catch {
@@ -275,8 +263,6 @@ async function updateFile(source: Source, full: string): Promise<void> {
       await handle.close().catch(() => undefined)
     }
 
-    // Advance only through complete JSONL records. If a watcher observes a partial append, the
-    // unfinished bytes are read again after the writer terminates the line.
     fileCache.set(full, {
       mtimeMs: stat.mtimeMs,
       size: stat.size,
@@ -384,8 +370,6 @@ function initialUsage(): Promise<UsageResult> {
 async function refreshChangedUsage(): Promise<UsageResult> {
   await initialUsage()
   return enqueueRefresh(async () => {
-    // A source error from the previous full scan may be transient. Retry every source on the next
-    // watcher event so a normal named-file update can clear the error and restore the usage meter.
     const rescan = fullRefreshNeeded || lastUsage.error !== null
     fullRefreshNeeded = false
     const files = [...changedFiles]

@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import { broadcast, configDir, expandHome, samePath } from './config'
-import { mainWorktreeRoot, worktreeMap } from './git'
+import { mainWorktreeRoot, worktreeMap } from './gitCore'
 import { log } from './log'
 import { addRecord, recordsFor, workflowsPath } from './registry'
 
@@ -26,13 +26,6 @@ export interface AgentsResult {
   error: string | null
 }
 
-/**
- * A record is self-healing: every hook event rewrites it, so expiring one early costs at most a
- * missing badge until the session's next event. Expiring one late is the worse error - it invents
- * a fleet of agents that finished hours ago. `attention` is the exception in both directions,
- * because it is the one state where nothing further happens until a human acts, so no event will
- * arrive to refresh it and a short window would retire the signal most worth surfacing.
- */
 const staleMs: Record<AgentState, number> = {
   attention: 12 * 60 * 60 * 1000,
   busy: 30 * 60 * 1000,
@@ -41,7 +34,6 @@ const staleMs: Record<AgentState, number> = {
 const debounceMs = 150
 const states: AgentState[] = ['busy', 'attention', 'idle']
 
-/** Distinguishes terminal bindings owned by concurrently running Snow main processes. */
 export const agentOwner = randomUUID()
 
 export function agentsDir(): string {
@@ -88,45 +80,12 @@ function listRecords(dir: string): { names: string[]; error: NodeJS.ErrnoExcepti
   }
 }
 
-/**
- * A record carrying a terminal token is Snow's to account for, and this map is the whole of that
- * accounting: the token is minted per spawn and inherited by the hook, so such a record is
- * meaningful only while that PTY is alive and only from the moment the terminal last became the
- * agent's. Each value carries the renderer's PTY id and that ownership moment - a spawn sets both,
- * an interruption or a returning shell prompt bumps the moment, and death drops the token. Every
- * teardown path used to restate the rule by sweeping the directory itself, which is what let a path
- * be forgotten (a phantom `busy` agent) and put a synchronous readdir of every record on the
- * keystroke and shell-prompt paths; they are all one map write now, and `readAgents` applies the
- * rule in the pass it already makes. The id is the stable pane ownership id, deliberately distinct
- * from the per-spawn transport id used to route PTY events.
- *
- * A record with no token belongs to a Claude session started outside Snow and is never touched.
- * Owner ids keep concurrently running Snow processes from retiring one another's terminals. On a
- * normal shutdown `disposeAgentWatcher` removes this process's records synchronously, since no
- * Snow-owned PTY can outlive its main process.
- */
 type LiveTerminal = { id: number; since: number }
 
 const live = new Map<string, LiveTerminal>()
 
-/**
- * The tokens the last read actually reported. A terminal with no agent in it - a bottom shell, an
- * `npm run dev` split - is the common case, and both calls below run on paths as hot as a keypress,
- * so a token that is not on screen retires silently: there is nothing for a renderer to redraw.
- * A record written since that read has already announced itself through the directory watcher.
- */
 const reported = new Set<string>()
 
-/**
- * Agent-created worktrees arrive outside Snow's workflow handlers. The activity-directory contract
- * is the common point shared by Claude Code and any other dispatcher that reports sessions to Snow,
- * so use each reported cwd to discover the repository's linked worktrees and adopt them. Scanning
- * the whole repository (rather than only the reporting session's directory) matters for an
- * orchestrator that stays in the primary checkout while creating worktrees for its teammates.
- *
- * Keep reconciliation serial and coalesced so bursts of hook events cannot run Git scans and
- * registry updates out of order or grow an unbounded queue behind the active pass.
- */
 let workflowRegistration: Promise<void> | null = null
 let pendingWorkflowRegistration: AgentSession[] | null = null
 let acceptingWorkflowRegistrations = false
@@ -157,8 +116,6 @@ export async function registerAgentWorktrees(sessions: AgentSession[]): Promise<
     }
 
     for (const [branch, directory] of linked) {
-      // The primary checkout is not evidence of a workflow: an ordinary Claude/Codex session on
-      // main must not opt that branch into Snow's parking behavior. A secondary worktree is.
       if (samePath(directory, repo)) continue
       const existing = records.find((record) => record.branch === branch)
       if (existing?.worktree && samePath(expandHome(existing.worktree), directory)) continue
@@ -185,19 +142,15 @@ export async function registerAgentWorktrees(sessions: AgentSession[]): Promise<
 
 function scheduleWorkflowRegistration(sessions: AgentSession[]): void {
   if (!acceptingWorkflowRegistrations) return
-  // An empty latest read cancels a trailing scan that has not started yet.
   if (sessions.length === 0) {
     pendingWorkflowRegistration = null
     return
   }
-  // Snapshot this read: later cleanup mutates files on disk, not these values.
   pendingWorkflowRegistration = sessions.map((session) => ({ ...session }))
   if (workflowRegistration) return
 
   workflowRegistration = (async () => {
     try {
-      // Reads arriving during a pass replace the trailing snapshot. That retains the post-tool
-      // rescan needed to see a newly created worktree without queueing every intermediate event.
       while (acceptingWorkflowRegistrations && pendingWorkflowRegistration) {
         const snapshot = pendingWorkflowRegistration
         pendingWorkflowRegistration = null
@@ -221,7 +174,6 @@ export function retainTerminal(token: string, id: number): void {
   live.set(token, { id, since: Date.now() })
 }
 
-/** The terminal is still alive, but the agent that was running in it is not. */
 export function retireTerminal(token: string): void {
   const terminal = live.get(token)
   if (!terminal) return
@@ -236,8 +188,6 @@ export function releaseTerminal(token: string): void {
 
 function orphaned(session: AgentSession): boolean {
   if (!session.terminal) return false
-  // A binding owned by another running Snow is valid, but cannot claim one of this window's tabs.
-  // Treat it like an external session and leave cleanup to its owner (or ordinary staleness).
   if (session.terminalOwner && session.terminalOwner !== agentOwner) return false
   const terminal = live.get(session.terminal)
   return terminal === undefined || session.updated < terminal.since
@@ -255,7 +205,6 @@ export function readAgents(): AgentsResult {
     const full = path.join(dir, name)
     const session = parseSession(full)
     if (!session) continue
-    // A session killed at the terminal never fires SessionEnd, so nothing else deletes its file.
     if (orphaned(session) || session.updated < now - staleMs[session.state]) {
       try {
         fs.rmSync(full, { force: true })
@@ -281,11 +230,6 @@ export function readAgents(): AgentsResult {
 let watcher: fs.FSWatcher | null = null
 let timer: NodeJS.Timeout | null = null
 
-/**
- * Retaining and releasing a token changes what `readAgents` reports without touching the directory,
- * so the registry has to announce itself; the watcher cannot. Sharing one debounce is what keeps a
- * window of panes closing at once - and the file deletions that pass then makes - to one reload.
- */
 function scheduleBroadcast(): void {
   if (timer) clearTimeout(timer)
   timer = setTimeout(() => {
@@ -317,9 +261,6 @@ export function disposeAgentWatcher(): void {
   if (timer) clearTimeout(timer)
   timer = null
 
-  // Releasing PTYs normally announces a debounced read, but will-quit tears this watcher down
-  // before that timer can fire. Remove only this process's records now; another Snow instance may
-  // be using the same agents directory and remains responsible for records carrying its owner id.
   const dir = agentsDir()
   const { names, error } = listRecords(dir)
   if (error) {

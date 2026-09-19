@@ -102,11 +102,6 @@ async function release(lock: StashLock): Promise<void> {
   await fs.promises.rmdir(lock.directory).catch(() => undefined)
 }
 
-/**
- * `refs/stash` and its reflog are shared by every linked worktree. Keep every Snow operation that
- * resolves and then consumes a marker stash in one cross-process critical section, so a concurrent
- * workspace cannot shift a `stash@{n}` selector between those two steps.
- */
 export async function withSharedStashLock<T>(
   cwd: string | undefined,
   op: () => Promise<T>

@@ -499,8 +499,8 @@ try {
             `
           )
           facade(
-            /^\.\/git$/,
-            'git',
+            /^\.\/gitCore$/,
+            'gitCore',
             `
               const state = globalThis.__snowAgentRegistrationTest;
               export async function mainWorktreeRoot(cwd) {

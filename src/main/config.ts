@@ -39,7 +39,7 @@ export function writeDefaultConfig(file: string, contents: string): void {
     fs.mkdirSync(path.dirname(file), { recursive: true })
     fs.writeFileSync(file, contents, { flag: 'wx' })
   } catch {
-    /* already exists */
+    return
   }
 }
 

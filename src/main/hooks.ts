@@ -19,7 +19,6 @@ export interface HooksResult {
 }
 
 export interface HooksState {
-  /** Whether a supported agent is on this machine at all; nothing is worth offering otherwise. */
   available: boolean
   installed: boolean
   stashProtection: WorkflowStashProtection
@@ -90,25 +89,11 @@ function helperShimFile(): string {
   return path.join(hooksDir(), process.platform === 'win32' ? `${helperMarker}.cmd` : helperMarker)
 }
 
-/**
- * What goes in settings.json, and it is **not** the bare path. Claude Code runs a hook command
- * through a shell - bash even on Windows - so an unquoted `C:\Users\…` arrives with every backslash
- * eaten as an escape and the hook fails with "command not found". Quoting also covers the ordinary
- * case of a space in the path. Forward slashes are what make the quoting sufficient rather than
- * merely usual: inside double quotes bash still unescapes `\$` and `\\`, which a directory starting
- * with `$` or a UNC home would otherwise hit. Git Bash runs a `.cmd` addressed this way happily.
- */
 function shimCommand(agent: HookAgent): string {
   const file = shimFile()
   return `"${process.platform === 'win32' ? file.split(path.sep).join('/') : file}" ${agent}`
 }
 
-/**
- * Codex runs Windows hooks through cmd.exe. A quoted path works in a terminal but can be
- * reinterpreted by Codex's own outer command quoting and make every hook exit before the shim
- * starts. Keep the command line itself quote-free and put the path-safe invocation in PowerShell's
- * UTF-16LE encoded payload instead.
- */
 function codexWindowsCommand(agent: HookAgent): string {
   const file = shimFile().replaceAll("'", "''")
   const payload = `& '${file}' '${agent}'; exit $LASTEXITCODE`
@@ -159,19 +144,11 @@ function hookTargets(): HookTarget[] {
   ]
 }
 
-/** Install into agents present on this machine; retain Claude as the no-agent fallback for the
- * existing CLI behavior, where `snow hooks install` may prepare hooks before Claude's first run. */
 function installTargets(): HookTarget[] {
   const available = hookTargets().filter((target) => fs.existsSync(target.directory))
   return available.length > 0 ? available : [hookTargets()[0]]
 }
 
-/**
- * The shim exists so settings.json can hold a path snow owns and keeps current, rather than one
- * that breaks the next time the app moves or updates - an AppImage's execPath is a temporary mount
- * that is gone by the next boot. Electron run as node is the fallback rather than the default
- * because it costs an extra ~60 ms of startup on every single tool call.
- */
 function shim(): string {
   const script = scriptFile()
   const binary = process.env.APPIMAGE || process.execPath
@@ -252,8 +229,6 @@ function snowGroup(event: string, agent: HookAgent): HookGroup {
       {
         type: 'command',
         command,
-        // PostToolUse also refreshes status. Keep it ordered with Stop/SessionEnd so a late
-        // completion cannot restore `busy` after the turn has already ended.
         ...(agent === 'codex' && process.platform === 'win32'
           ? { commandWindows: codexWindowsCommand(agent) }
           : {})
@@ -262,12 +237,6 @@ function snowGroup(event: string, agent: HookAgent): HookGroup {
   }
 }
 
-/**
- * The whole of what being installed means, expressed once: snow's own entries out, exactly one
- * group per supported event back in. `install` and `repairSettings` both reconcile to this, so
- * repair cannot drift into a weaker second installer - an event added to either product's set, a
- * changed tool matcher, or a duplicated handler is fixed by the same pass either way.
- */
 function withSnowHooks(
   raw: unknown,
   agent: HookAgent,
@@ -280,10 +249,6 @@ function withSnowHooks(
   return hooks
 }
 
-/**
- * Snow's own entries come out; everything else in the user's hooks block - including groups that
- * merely shared an event with snow's - goes back untouched.
- */
 function withoutSnow(raw: unknown): { hooks: Record<string, HookGroup[]>; removed: number } {
   const hooks: Record<string, HookGroup[]> = {}
   let removed = 0
@@ -503,13 +468,6 @@ function isInstalled(raw: unknown): boolean {
   )
 }
 
-/**
- * Reconciles an already-installed hooks block back to what `install` would write. This is
- * maintenance of something the user asked for, not a fresh install: an entry in either agent config
- * has to prove the user still wants it. Those entries are the half of the install a shim refresh
- * cannot reach - a stale command path written by an older snow, an event this version added, or
- * another supported agent is only fixable from here.
- */
 function repairSettings(): void {
   const targets = hookTargets()
   const configs = targets.map((target) => ({ target, ...readSettings(target) }))
@@ -518,8 +476,6 @@ function repairSettings(): void {
   const installedForClaude = installed.some(({ target }) => target.agent === 'claude')
 
   for (const { target, settings, error } of configs) {
-    // A Claude installation is explicit opt-in to Snow's agent integration. Carry that opt-in
-    // forward to Codex even when Codex has not created ~/.codex yet; writeSettings creates it.
     if (!fs.existsSync(target.directory) && !(target.agent === 'codex' && installedForClaude))
       continue
     if (error) {
@@ -542,11 +498,6 @@ function repairSettings(): void {
   }
 }
 
-/**
- * The shim names a specific app binary, so an update would otherwise leave it dangling. A hook
- * entry, rather than the shim itself, proves the user installed Snow's integration. This also lets
- * startup recover a missing runtime and migrate an existing Claude installation to Codex.
- */
 export function refreshHooks(): void {
   const installed = hookTargets().some((target) => {
     if (!fs.existsSync(target.file)) return false

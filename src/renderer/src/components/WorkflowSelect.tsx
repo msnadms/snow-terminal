@@ -64,8 +64,6 @@ function WorkflowSelect({
     }
 
     load()
-    // Describing a workflow list costs two git processes per entry, so it is worth knowing whether
-    // the repo that changed is one this dropdown is showing before paying for it again.
     const offGit = window.api.git.onChanged((changedCwd) => {
       const current = listRef.current
       if (!current || inScope(changedCwd, repoScope(current.repo, current.workflows))) load()

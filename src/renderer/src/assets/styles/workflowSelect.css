@@ -1,0 +1,126 @@
+.workflow-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.workflow-item {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.workflow-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workflow-parked {
+  flex: 0 0 auto;
+  color: var(--ui-accent, #a6dcf0);
+  font-size: 11px;
+}
+
+.workflow-live {
+  flex: 0 0 auto;
+  color: var(--ui-success, #a6e3a1);
+  font-size: 11px;
+}
+
+.git-worktree-group-title {
+  padding: 7px 12px 3px;
+  color: var(--ui-muted, #a6adc8);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.workflow-missing {
+  color: var(--ui-placeholder, #5d6f8f);
+  cursor: default;
+}
+
+.workflow-missing:hover {
+  color: var(--ui-placeholder, #5d6f8f);
+  background: transparent;
+}
+
+.workflow-drop {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font: inherit;
+  font-size: 11px;
+  color: var(--ui-placeholder, #5d6f8f);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.workflow-drop:hover {
+  color: var(--ui-danger, #f38ba8);
+  background: var(--ui-surface-hover, #313244);
+}
+
+.workflow-base {
+  padding: 4px 8px 0;
+  color: var(--ui-placeholder, #5d6f8f);
+  font-size: 11px;
+}
+
+.workflow-unregistered {
+  color: var(--ui-faint-text, #6c7086);
+}
+
+.workflow-error {
+  padding: 4px 8px 6px;
+  color: var(--ui-danger, #f38ba8);
+  font-size: 11px;
+  white-space: pre-line;
+}
+
+.workflow-register {
+  flex: 0 0 auto;
+  height: 22px;
+  margin-top: 4px;
+  padding: 0 8px;
+  font: inherit;
+  color: var(--ui-muted-text, #a6adc8);
+  background: var(--ui-surface, #1e1e2e);
+  border: 1px solid var(--ui-border, #313244);
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.workflow-register:hover {
+  border-color: var(--ui-border-hover, #45475a);
+  color: var(--ui-accent, #a6dcf0);
+}
+
+.workflow-manage {
+  flex: 0 0 auto;
+  height: 22px;
+  margin-top: 4px;
+  padding: 0 8px;
+  font: inherit;
+  text-align: left;
+  color: var(--ui-muted-text, #a6adc8);
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--ui-border, #313244);
+  cursor: pointer;
+}
+
+.workflow-manage:hover {
+  color: var(--ui-accent, #a6dcf0);
+}

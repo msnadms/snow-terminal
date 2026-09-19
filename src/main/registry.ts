@@ -14,7 +14,6 @@ import { log } from './log'
 export interface WorkflowRecord {
   repo: string
   branch: string
-  /** An absolute linked-worktree path when this workflow runs in parallel. */
   worktree?: string
 }
 
@@ -75,11 +74,6 @@ export function recordsFor(repo: string): { records: WorkflowRecord[]; error: st
   return { records: filterByRepo(records, repo), error }
 }
 
-/**
- * The park-mode branches of `repo`, plus the branch that owns `worktree` when that directory is
- * itself a workflow's parallel session. One read answers both, because every branch switch needs
- * to know whether it may park *and* whether it is standing in a worktree it must not leave.
- */
 export function branchesFor(
   repo: string,
   worktree: string | null

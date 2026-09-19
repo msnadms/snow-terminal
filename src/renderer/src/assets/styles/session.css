@@ -1,0 +1,282 @@
+.terminal-host {
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--ui-terminal-background, #1e1e2e);
+}
+
+.resize-handle {
+  flex: 0 0 0;
+  position: relative;
+  z-index: 5;
+  align-self: stretch;
+}
+
+.resize-handle-x {
+  cursor: col-resize;
+}
+
+.resize-handle-y {
+  cursor: row-resize;
+}
+
+.resize-handle-x + .terminal-split,
+.resize-handle-x + .terminal-diff-split {
+  border-left: 1px solid var(--git-border, #28334c);
+}
+
+.resize-handle-y + .terminal-secondary {
+  border-top: 1px solid var(--git-border, #28334c);
+}
+
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+
+.resize-handle-x::after {
+  top: 0;
+  bottom: 0;
+  left: -2px;
+  width: 8px;
+}
+
+.resize-handle-y::after {
+  left: 0;
+  right: 0;
+  top: -2px;
+  height: 8px;
+}
+
+.resize-handle:hover::after,
+.resize-handle:active::after {
+  background: var(--ui-border-hover, #45475a);
+}
+
+body.resizing {
+  user-select: none;
+}
+
+body.resizing-x,
+body.resizing-x * {
+  cursor: col-resize !important;
+}
+
+body.resizing-y,
+body.resizing-y * {
+  cursor: row-resize !important;
+}
+
+.terminal-secondary-collapsed {
+  overflow: hidden;
+}
+
+.panel-restore {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--ui-muted-text, #a6adc8);
+  background: var(--ui-chrome, #11111b);
+  border: none;
+  cursor: pointer;
+  font-family: 'Hack Nerd Font Mono', monospace;
+  font-size: 24px;
+}
+
+.panel-restore:hover {
+  color: var(--ui-text, #cdd6f4);
+  background: var(--ui-surface, #1e1e2e);
+}
+
+.panel-restore-git {
+  width: 24px;
+  align-self: stretch;
+  border-left: 1px solid var(--ui-border, #313244);
+}
+
+.panel-restore-git .panel-restore-label {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+
+.panel-restore-bottom {
+  height: 24px;
+  width: 100%;
+  gap: 6px;
+  border-top: 1px solid var(--ui-border, #313244);
+}
+
+.browser-host {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--ui-surface, #1e1e2e);
+}
+
+.browser-chrome {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--ui-background, #181825);
+  border-bottom: 1px solid var(--ui-border, #313244);
+}
+
+.browser-nav {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--ui-muted-text, #a6adc8);
+  background: var(--ui-surface, #1e1e2e);
+  border: 1px solid var(--ui-border, #313244);
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: 'Hack Nerd Font Mono', monospace;
+  font-size: 14px;
+}
+
+.browser-nav:not(:disabled):hover {
+  color: var(--ui-text, #cdd6f4);
+  border-color: var(--ui-border-hover, #45475a);
+}
+
+.browser-nav:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.browser-address-form {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+}
+
+.browser-address {
+  -webkit-app-region: no-drag;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 10px;
+  color: var(--ui-text, #cdd6f4);
+  background: var(--ui-surface, #1e1e2e);
+  border: 1px solid var(--ui-border, #313244);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.browser-address:focus {
+  outline: none;
+  border-color: var(--ui-border-strong, #585b70);
+}
+
+.browser-ports {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 40%;
+  overflow-x: auto;
+}
+
+.browser-ports-label {
+  color: var(--ui-success, #a6e3a1);
+  font-family: 'Hack Nerd Font Mono', monospace;
+  font-size: 11px;
+}
+
+.browser-port {
+  -webkit-app-region: no-drag;
+  height: 26px;
+  padding: 0 8px;
+  color: var(--ui-muted-text, #a6adc8);
+  background: var(--ui-surface, #1e1e2e);
+  border: 1px solid var(--ui-border, #313244);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.browser-port:hover {
+  color: var(--ui-text, #cdd6f4);
+  border-color: var(--ui-border-hover, #45475a);
+}
+
+.browser-port-active {
+  color: var(--ui-accent, #89b4fa);
+  border-color: var(--ui-accent, #89b4fa);
+}
+
+.browser-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.terminal-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+.terminal-split {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.terminal-close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: var(--ui-faint-text, #6c7086);
+  background: var(--ui-surface, #1e1e2e);
+  border: 1px solid var(--ui-border, #313244);
+  border-radius: 3px;
+  font-size: 12px;
+  font-family: 'Hack Nerd Font Mono', monospace;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.terminal-diff-split {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 4px;
+}
+
+.terminal-split:hover .terminal-close {
+  opacity: 1;
+}
+
+.terminal-close:hover {
+  color: var(--ui-text, #cdd6f4);
+  border-color: var(--ui-border-hover, #45475a);
+}
+
+.terminal-secondary {
+  flex: 0 0 15%;
+  min-height: 0;
+}

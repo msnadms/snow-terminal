@@ -14,12 +14,8 @@ const stateByEvent = {
   StopFailure: 'idle'
 }
 
-// The events that mean the turn itself is over, rather than merely that the agent is not running
-// something this instant. Only an `idle` one of these wrote can silence a later busy event.
 const turnEndEvents = new Set(['Stop', 'StopFailure'])
 
-// Claude emits both user-blocking notifications and routine status notices such as auth success.
-// Only the former should make a workspace look like it needs operator attention.
 const attentionNotifications = new Set([
   'permission_prompt',
   'elicitation_dialog',
@@ -30,9 +26,6 @@ const attentionNotifications = new Set([
 const markerPrefix = 'snow-wf:'
 const assignmentPrefix = /^[A-Za-z_][A-Za-z0-9_]*=/
 const shellWrappers = new Set(['sh', 'bash', 'zsh'])
-// Wrappers that run the rest of the line as a command of their own, with operands of their own
-// (`timeout 10 git …`, `nice -n 5 git …`). Their argument shapes differ, so the scan below looks
-// for the git token rather than trying to model each one.
 const commandWrappers = new Set([
   'command',
   'doas',
@@ -47,12 +40,8 @@ const commandWrappers = new Set([
   'timeout',
   'xargs'
 ])
-// A segment can begin mid-construct: `for f in x; do git stash pop; done` splits to ` do git …`.
 const shellKeywords = new Set(['!', '{', '}', 'do', 'elif', 'else', 'if', 'then', 'until', 'while'])
 const safeStashSubcommands = new Set(['list', 'show'])
-// Creating a stash only ever adds to the list; it cannot consume another workspace's parked work,
-// and snow re-lists under the shared lock before every apply so a shifted selector is not a hazard.
-// The one thing an agent must not do is forge a marker snow would later restore as its own.
 const createStashSubcommands = new Set(['push', 'save'])
 const stashProtectionModes = new Set(['warn', 'deny', 'off'])
 const stashLockName = 'snow-stash.lock'
@@ -104,44 +93,27 @@ function detailFor(event) {
   return target ? `${tool} ${target}` : tool
 }
 
-/**
- * `attention` is the one state no later event refreshes - nothing happens until a human acts - so
- * it is also the one this hook must not lose quietly. A notification that reports *no* type is a
- * contract that changed underneath us, and reading it as routine would retire the whole signal
- * fleet-wide with nothing on screen to say so; it fails loud instead. A type Claude Code did report
- * but this list does not name is a notice it has classified as something else, and is believed.
- */
 function stateFor(event, previous) {
   if (event.hook_event_name === 'PermissionRequest') return 'attention'
   if (event.hook_event_name === 'Notification') {
     const type = event.notification_type
+    // `attention` is the one state nothing refreshes, so a notification whose type field is absent
+    // means the contract changed underneath us and must fail loud. A type Claude did report but
+    // this list does not name has been classified as something else, and is believed.
     if (typeof type !== 'string' || !type) return 'attention'
-    // This is a delayed "Claude finished" reminder, not a request that blocked the agent. Writing
-    // idle also repairs a missed Stop event while leaving review readiness to the Git state.
     if (type === 'idle_prompt') return 'idle'
     return attentionNotifications.has(type) ? 'attention' : null
   }
-  // Auto-compaction restarts the session in the middle of a turn, so its SessionStart reports a
-  // context event rather than a lifecycle one: the agent was working before it and is working
-  // after it. Writing `idle` here is what the guard below would then read as a finished turn.
   if (event.hook_event_name === 'SessionStart' && event.source === 'compact') return null
-  // AskUserQuestion is itself the point where Claude yields to the operator. Do not depend on a
-  // separate Notification arriving afterward: clients and Claude Code versions can omit or delay
-  // that notification, while PreToolUse already tells us unambiguously that input is required.
   if (event.hook_event_name === 'PreToolUse' && event.tool_name === 'AskUserQuestion')
     return 'attention'
-  // Claude's away-recap generator runs an internal prompt/fork a few minutes after Stop, retaining
-  // the completed turn's prompt_id. Letting any of its late events raise idle back to busy pins the
-  // status until the next real turn, so the guard belongs to the transition rather than to the two
-  // event names that first showed it: every busy-producing event inherits it, and a genuine prompt
-  // is unaffected because it carries a new correlation id.
-  //
-  // It applies only to an idle the turn's *end* wrote (or an idle prompt that recovered a missed
-  // Stop). An `idle_prompt` after an attention notification can instead be emitted while a
-  // permission prompt sits unanswered; suppressing that prompt's remaining events would pin
-  // `idle` over an agent that resumed working.
   const next = stateByEvent[event.hook_event_name] ?? null
   const promptId = text(event.prompt_id)
+  // Claude's away-recap generator forks minutes after Stop, retaining the finished turn's
+  // prompt_id. The guard belongs to the transition, not to the event names that first showed it:
+  // every busy-producing event inherits it, and a genuine new prompt carries a new id. `turnEnded`
+  // restricts it to an idle the turn's own end wrote, so an `idle_prompt` arriving while a
+  // permission prompt sits unanswered cannot pin `idle` over an agent that resumed working.
   if (
     next === 'busy' &&
     previous?.state === 'idle' &&
@@ -234,18 +206,11 @@ function gitArgs(tokens) {
   return null
 }
 
-/**
- * A direct `git` command is the common case. Recognize the two lightweight wrappers agents use
- * as well, without interpreting an arbitrary string such as `rg stash` as a shell wrapper that
- * might write the shared stash.
- */
 function wrappedGitArgs(tokens) {
   const direct = gitArgs(tokens)
   if (direct) return direct
 
   const { index, name } = commandAt(tokens)
-  // Each wrapper takes its own flags and operands, so scan for the git token rather than modelling
-  // every one. The scan is gated on a recognized wrapper, so `rg stash` is still just a search.
   if (commandWrappers.has(name)) {
     for (let i = index + 1; i < tokens.length; i += 1) {
       if (commandName(tokens[i]) === 'git') return gitArgs(tokens.slice(i))
@@ -253,7 +218,6 @@ function wrappedGitArgs(tokens) {
     return null
   }
   if (shellWrappers.has(name)) {
-    // Shells accept bundled short flags, e.g. `bash -lc "git stash pop"`.
     const flag = tokens.findIndex(
       (token, i) => i > index && (token === '-c' || /^-[^-]*c/.test(token))
     )
@@ -262,38 +226,23 @@ function wrappedGitArgs(tokens) {
   return null
 }
 
-/**
- * A stash whose message carries snow's own marker would be restored later as a workspace's parked
- * work. Nothing else about creating a stash is hazardous, so this is the only thing push has to be
- * checked for - and any token mentioning the marker is enough to ask. Parsing out which of `-m`,
- * `-m<msg>`, `--message=` or a bare `save` message carried it would only re-derive the same answer,
- * and over-blocking is safe here: a real pathspec is not named after the marker.
- */
 function forgesMarker(rest) {
   return rest.some((arg) => arg.includes(markerPrefix))
 }
 
-/**
- * `refs/stash` is shared by every worktree of a repository, so `stash@{0}` in a parallel session is
- * whatever was pushed last anywhere in the repo - which may be another workspace's parked work. An
- * explicit stash selector is not enough either: another worktree can push before the command runs
- * and shift every selector, so agents restore through the helper below, which resolves the marker
- * their own workspace owns under the same lock snow takes.
- *
- * Only the consuming half is refused. Blocking `git stash push` as well would take away an ordinary
- * move ("stash this and try something else") and leave nothing in its place, and creating a stash
- * cannot consume anyone's parked work - it only appends.
- */
+// `refs/stash` is shared by every worktree of a repository, so `stash@{0}` may be another
+// workspace's parked work. Only the consuming half is refused: creating a stash cannot take
+// anyone's parked work, it only appends, and snow re-lists under the shared lock before every
+// apply. The one thing push is checked for is a forged `snow-wf:` marker, which snow would later
+// restore as a workspace's own.
 function takesSharedStash(command) {
   for (const segment of command.split(/&&|\|\||[;\n|()]/)) {
     if (!segment.includes('stash')) continue
     const args = wrappedGitArgs(tokenize(segment))
-    // A mention of "stash" is not itself a stash operation: agents need to search and discuss it.
     if (!args || args[0] !== 'stash') continue
     const rest = args.slice(1)
     if (rest.some((arg) => arg === '--help' || arg === '-h')) continue
     const subcommand = rest.find((arg) => !arg.startsWith('-'))
-    // A bare `git stash`, or one carrying only flags, is a push.
     if (!subcommand || createStashSubcommands.has(subcommand)) {
       if (forgesMarker(rest)) return true
       continue
@@ -325,15 +274,6 @@ function workflowRecords() {
     .filter(Boolean)
 }
 
-/**
- * The two questions the registry answers about a directory, kept apart because they have different
- * answers and different costs. Both cover a repository's *own* checkout as well as a linked
- * worktree: park-mode markers are created in the main worktree, by the pane that left the branch,
- * so guarding only linked worktrees left the guard off where the markers are actually minted.
- *
- * Is anything snow parks reachable from here? A pure path comparison, so the refusal path - which
- * runs on every tool call mentioning "stash" - never spawns Git.
- */
 function guardedScope(cwd) {
   const records = workflowRecords()
   const owned = records.find((record) => record.worktree && inside(cwd, record.worktree))
@@ -343,7 +283,6 @@ function guardedScope(cwd) {
   return null
 }
 
-/** And: whose parked work is it? Only the explicit restore needs this, so only it pays for Git. */
 function ownedBranch(cwd) {
   const records = workflowRecords()
   const owned = records.find((record) => record.worktree && inside(cwd, record.worktree))
@@ -379,8 +318,6 @@ function processIsAlive(pid) {
   }
 }
 
-// `windowsHide` is the easy one to forget, and forgetting it flashes a console window on every
-// tool call this hook runs for.
 function gitOut(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true })
 }
@@ -404,16 +341,25 @@ function sharedStashLock(cwd) {
   }
 }
 
-function releaseStashLock(lock) {
+function attempt(operation) {
   try {
-    fs.unlinkSync(lock.owner)
+    operation()
+    return true
   } catch {
-    // The lock may already have been cleaned after a failed acquire.
+    return false
   }
+}
+
+function releaseStashLock(lock) {
+  attempt(() => fs.unlinkSync(lock.owner))
+  attempt(() => fs.rmdirSync(lock.directory))
+}
+
+function ownerAlive(raw) {
   try {
-    fs.rmdirSync(lock.directory)
+    return processIsAlive(JSON.parse(raw).pid)
   } catch {
-    // Do not remove an unexpected non-empty directory.
+    return false
   }
 }
 
@@ -429,25 +375,9 @@ function clearAbandonedStashLock(lock) {
     }
   }
 
-  let live = false
-  if (raw) {
-    try {
-      live = processIsAlive(JSON.parse(raw).pid)
-    } catch {
-      // A malformed owner record is abandoned and can be recovered below.
-    }
-  }
-  if (live) return
-  try {
-    fs.unlinkSync(lock.owner)
-  } catch {
-    // No owner file is safe to continue with; rmdir below will still verify emptiness.
-  }
-  try {
-    fs.rmdirSync(lock.directory)
-  } catch {
-    // A live owner may have written its record while this stale check was running.
-  }
+  if (raw && ownerAlive(raw)) return
+  attempt(() => fs.unlinkSync(lock.owner))
+  attempt(() => fs.rmdirSync(lock.directory))
 }
 
 function acquireSharedStashLock(cwd) {
@@ -523,8 +453,6 @@ function stashProtection() {
 }
 
 function stashRefusal(event) {
-  // Keyed on the shape rather than a tool name: Bash and PowerShell are two of them today, and
-  // anything else that hands a shell string to the same worktree needs the same guard.
   const command = event.tool_input?.command
   const cwd = event.cwd
   if (typeof command !== 'string' || typeof cwd !== 'string' || !cwd) return null
@@ -604,8 +532,6 @@ async function main() {
     refusal && protection === 'warn'
       ? [detailFor(event), 'shared-stash warning'].filter(Boolean).join(' · ')
       : detailFor(event)
-  // Carried forward, because the events that end a turn do not all re-report the id the guard in
-  // `stateFor` compares against.
   const promptId = text(event.prompt_id) ?? text(previous?.promptId)
   const turnEnded =
     turnEndEvents.has(event.hook_event_name) ||
@@ -620,10 +546,6 @@ async function main() {
   const legacyTerminal = text(process.env.SNOW_AGENT_TERMINAL)
   writeRecord(file, {
     sessionId: event.session_id,
-    // New Snow instances use fields older releases do not recognize. An older app therefore reads
-    // this as an external session instead of deleting it because the binding is absent from that
-    // app's in-memory terminal registry. Keep the legacy field for terminals spawned by an older
-    // Snow release whose environment cannot provide the owner pair.
     ...(terminalBinding && terminalOwner
       ? { terminalBinding, terminalOwner }
       : legacyTerminal
@@ -638,21 +560,14 @@ async function main() {
     updated: Date.now()
   })
 
-  // Anything that throws on the way here leaves the command allowed: a registry snow cannot read
-  // must never block the user's git.
   if (event.hook_event_name !== 'PreToolUse') return
   if (protection === 'deny') decide('deny', refusal)
   else if (protection === 'warn') {
-    // Codex deliberately does not support `permissionDecision: "ask"` on PreToolUse. Its supported
-    // non-blocking equivalent is a visible system warning; Claude keeps its interactive prompt.
     if (process.argv[2] === 'codex') warn(refusal)
     else decide('ask', refusal)
   }
 }
 
-// A hook that fails or hangs degrades the session it is attached to, and a status badge is not
-// worth that: every path here exits 0, the only thing ever written to stdout is a deliberate
-// refusal, and the timer covers a stdin that never closes.
 if (process.argv[2] === 'restore') {
   try {
     restoreMarkedStash()

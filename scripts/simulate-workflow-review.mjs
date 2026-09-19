@@ -46,8 +46,9 @@ try {
     absWorkingDir: root,
     stdin: {
       contents: `
-        export { defaultBranch } from './src/main/git.ts';
-        export { describeSessionComparison, describeWorkflows } from './src/main/workflow.ts';
+        export { defaultBranch } from './src/main/gitCore.ts';
+        export { describeSessionComparison } from './src/main/overlaps.ts';
+        export { describeWorkflows } from './src/main/workflowDescribe.ts';
         export { mergeRuns } from './src/main/mergeCheck.ts';
       `,
       resolveDir: root,
@@ -351,7 +352,7 @@ try {
   await build({
     absWorkingDir: root,
     stdin: {
-      contents: `export { describeSessionComparison } from './src/main/workflow.ts';`,
+      contents: `export { describeSessionComparison } from './src/main/overlaps.ts';`,
       resolveDir: root,
       sourcefile: 'workflow-review-no-merge-tree-entry.ts'
     },
