@@ -2,7 +2,7 @@ import type { GitRepo } from './components/GitPanel'
 import { basename, isInside, normalizePath, shortHash, uniqueBy } from './format'
 import type { Preset } from './useSnowconfig'
 import type { OpenSession, WorkflowReviewTarget } from './workflowRows'
-import { tabStatusFrom, type AgentDir, type SessionStatus } from './agentStatus'
+import { statusRank, tabStatusFrom, type AgentDir, type SessionStatus } from './agentStatus'
 
 export type { SessionStatus } from './agentStatus'
 
@@ -224,8 +224,6 @@ export interface SessionStatuses {
   sessionDirTitles: Record<string, string>
   tabStatuses: Record<number, SessionStatus>
 }
-
-const statusRank: Record<SessionStatus, number> = { attention: 2, busy: 1, idle: 0 }
 
 export function sessionStatusesOf({
   tabs,

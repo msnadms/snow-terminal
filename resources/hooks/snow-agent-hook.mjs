@@ -97,9 +97,6 @@ function stateFor(event, previous) {
   if (event.hook_event_name === 'PermissionRequest') return 'attention'
   if (event.hook_event_name === 'Notification') {
     const type = event.notification_type
-    // `attention` is the one state nothing refreshes, so a notification whose type field is absent
-    // means the contract changed underneath us and must fail loud. A type Claude did report but
-    // this list does not name has been classified as something else, and is believed.
     if (typeof type !== 'string' || !type) return 'attention'
     if (type === 'idle_prompt') return 'idle'
     return attentionNotifications.has(type) ? 'attention' : null
@@ -109,11 +106,6 @@ function stateFor(event, previous) {
     return 'attention'
   const next = stateByEvent[event.hook_event_name] ?? null
   const promptId = text(event.prompt_id)
-  // Claude's away-recap generator forks minutes after Stop, retaining the finished turn's
-  // prompt_id. The guard belongs to the transition, not to the event names that first showed it:
-  // every busy-producing event inherits it, and a genuine new prompt carries a new id. `turnEnded`
-  // restricts it to an idle the turn's own end wrote, so an `idle_prompt` arriving while a
-  // permission prompt sits unanswered cannot pin `idle` over an agent that resumed working.
   if (
     next === 'busy' &&
     previous?.state === 'idle' &&
@@ -230,11 +222,6 @@ function forgesMarker(rest) {
   return rest.some((arg) => arg.includes(markerPrefix))
 }
 
-// `refs/stash` is shared by every worktree of a repository, so `stash@{0}` may be another
-// workspace's parked work. Only the consuming half is refused: creating a stash cannot take
-// anyone's parked work, it only appends, and snow re-lists under the shared lock before every
-// apply. The one thing push is checked for is a forged `snow-wf:` marker, which snow would later
-// restore as a workspace's own.
 function takesSharedStash(command) {
   for (const segment of command.split(/&&|\|\||[;\n|()]/)) {
     if (!segment.includes('stash')) continue
@@ -344,9 +331,8 @@ function sharedStashLock(cwd) {
 function attempt(operation) {
   try {
     operation()
-    return true
   } catch {
-    return false
+    return
   }
 }
 

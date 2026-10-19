@@ -24,13 +24,14 @@ export interface TerminalStatusFallback {
 
 export type AgentDir = { state: SessionStatus; detail: string; updated: number }
 
-const rank: Record<SessionStatus, number> = { attention: 2, busy: 1, idle: 0 }
+export const statusRank: Record<SessionStatus, number> = { attention: 2, busy: 1, idle: 0 }
 
 function better(candidate: AgentDir, current: AgentDir | undefined): boolean {
   return (
     !current ||
-    rank[candidate.state] > rank[current.state] ||
-    (rank[candidate.state] === rank[current.state] && candidate.updated > current.updated)
+    statusRank[candidate.state] > statusRank[current.state] ||
+    (statusRank[candidate.state] === statusRank[current.state] &&
+      candidate.updated > current.updated)
   )
 }
 

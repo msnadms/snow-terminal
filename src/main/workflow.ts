@@ -4,12 +4,13 @@ import {
   defaultBranch,
   errorDetail,
   errorText,
+  fail,
   gitFor,
   mainWorktreeRoot,
   worktreeMap
 } from './gitCore'
 import { describeSessionComparisons } from './overlaps'
-import { markerPrefix, newestStash, stashEntries, switchBranch, unparkBranch } from './park'
+import { markerPrefix, popNewest, switchBranch, unparkBranch } from './park'
 import {
   addRecord,
   readRecords,
@@ -38,10 +39,6 @@ import {
 
 function recordFor(records: WorkflowRecord[], branch: string): WorkflowRecord | undefined {
   return records.find((record) => record.branch === branch)
-}
-
-function failed(error: unknown): WorkflowResult {
-  return { ok: false, error: errorText(error), detail: errorDetail(error) }
 }
 
 export function registerWorkflowHandlers(): void {
@@ -93,7 +90,7 @@ export function registerWorkflowHandlers(): void {
         try {
           name = (await gitFor(cwd).status()).current ?? ''
         } catch (error) {
-          return failed(error)
+          return fail(error)
         }
       }
       if (!name) return { ok: false, error: 'HEAD is detached' }
@@ -136,7 +133,7 @@ export function registerWorkflowHandlers(): void {
       const name = (branch ?? '').trim()
       if (!name) return { ok: false, error: 'Workflow required' }
       return withRepoLock(cwd, () => switchBranch(cwd, name, (git) => git.checkout(name))).catch(
-        failed
+        fail
       )
     }
   )
@@ -155,7 +152,7 @@ export function registerWorkflowHandlers(): void {
           const existing = await gitFor(cwd).branchLocal()
           if (existing.all.includes(name)) return { ok: false, error: 'Branch already exists' }
         } catch (error) {
-          return failed(error)
+          return fail(error)
         }
 
         const destination = worktreeDirectory(repo, name)
@@ -168,7 +165,7 @@ export function registerWorkflowHandlers(): void {
         try {
           await gitFor(cwd).raw(['worktree', 'add', '-b', name, '--no-track', destination, base])
         } catch (error) {
-          return failed(error)
+          return fail(error)
         }
 
         const failure = addRecord(repo, name, destination)
@@ -181,7 +178,7 @@ export function registerWorkflowHandlers(): void {
           }
 
         return { ok: true, branch: name, worktree: destination }
-      }).catch(failed)
+      }).catch(fail)
     }
   )
 
@@ -229,18 +226,9 @@ export function registerWorkflowHandlers(): void {
         try {
           await gitFor(cwd).raw(['worktree', 'add', destination, name])
           created = true
-          await withSharedStashLock(destination, async () => {
-            const entry = newestStash(await stashEntries(destination), name)
-            if (!entry) return
-            try {
-              await gitFor(destination).raw(['stash', 'pop', '--index', entry.selector])
-            } catch (error) {
-              if (!/conflicts in index\. Try without --index/i.test(errorText(error))) throw error
-              await gitFor(destination).raw(['stash', 'pop', entry.selector])
-            }
-          })
+          await popNewest(destination, name)
         } catch (error) {
-          if (!created) return failed(error)
+          if (!created) return fail(error)
           const failure = setWorktree(repo, name, destination)
           return {
             ok: false,
@@ -265,7 +253,7 @@ export function registerWorkflowHandlers(): void {
           }
         }
         return { ok: true, branch: name, worktree: destination }
-      }).catch(failed)
+      }).catch(fail)
     }
   )
 
@@ -354,7 +342,7 @@ export function registerWorkflowHandlers(): void {
             worktree: directory
           }
         return { ok: true, branch: name, worktree: directory }
-      }).catch(failed)
+      }).catch(fail)
     }
   )
 
@@ -419,7 +407,7 @@ export function registerWorkflowHandlers(): void {
           }
         }
         return { ok: true, branch, worktree: target }
-      }).catch(failed)
+      }).catch(fail)
     }
   )
 
@@ -441,7 +429,7 @@ export function registerWorkflowHandlers(): void {
       })
       return { ok: true }
     } catch (error) {
-      return failed(error)
+      return fail(error)
     }
   })
 }

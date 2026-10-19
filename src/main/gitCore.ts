@@ -42,6 +42,13 @@ export function fail(error: unknown): { ok: false; error: string; detail: string
   return { ok: false, error: errorText(error), detail: errorDetail(error) }
 }
 
+export function conflictedIn(git: SimpleGit): Promise<string[]> {
+  return git
+    .status()
+    .then((status) => status.conflicted)
+    .catch((): string[] => [])
+}
+
 export function isStaged(index: string): boolean {
   return index !== ' ' && index !== '?' && index !== '!'
 }

@@ -9,6 +9,7 @@ import { isExternalUrl } from './external'
 import { commitAgentCommand, generateCommitMessage } from './commitMessage'
 import { pullRequestUrl, webUrl } from './forge'
 import {
+  conflictedIn,
   defaultBranch,
   errorDetail,
   errorText,
@@ -116,13 +117,6 @@ async function fileTargets(
   }
 
   return targets.length > 0 ? targets : null
-}
-
-function conflictedIn(git: SimpleGit): Promise<string[]> {
-  return git
-    .status()
-    .then((status) => status.conflicted)
-    .catch((): string[] => [])
 }
 
 async function stagedDiff(

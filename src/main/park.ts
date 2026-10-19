@@ -1,8 +1,10 @@
 import type { SimpleGit, StatusResult } from 'simple-git'
 import { collapseHome, samePath } from './config'
 import {
+  conflictedIn,
   errorDetail,
   errorText,
+  fail,
   gitFor,
   mainWorktreeRoot,
   worktreeMap,
@@ -141,7 +143,7 @@ async function popStash(cwd: string | undefined, selector: string): Promise<void
   }
 }
 
-async function popNewest(cwd: string | undefined, branch: string): Promise<boolean> {
+export async function popNewest(cwd: string | undefined, branch: string): Promise<boolean> {
   return withSharedStashLock(cwd, async () => {
     const entry = newestStash(await stashEntries(cwd), branch)
     if (!entry) return false
@@ -177,10 +179,7 @@ async function restoreOnEnter(
     if (restored === null) return null
     return { ok: true, restored: restored ?? 0 }
   } catch (error) {
-    const conflicted = await gitFor(cwd)
-      .status()
-      .then((status) => status.conflicted)
-      .catch((): string[] => [])
+    const conflicted = await conflictedIn(gitFor(cwd))
     if (conflicted.length > 0) {
       return {
         ok: false,
@@ -212,7 +211,7 @@ async function restoreOnEnter(
         ].join('\n')
       }
     }
-    return { ok: false, error: errorText(error), detail: errorDetail(error) }
+    return fail(error)
   }
 }
 
@@ -267,7 +266,7 @@ export async function carryToNewBranch(
     await gitFor(cwd).checkoutLocalBranch(name)
     return { ok: true, branch: name }
   } catch (error) {
-    return { ok: false, error: errorText(error), detail: errorDetail(error) }
+    return fail(error)
   }
 }
 
@@ -293,17 +292,13 @@ export async function switchBranch(
     if (blocked) return blocked
     departure = await parkOnLeave(cwd, plan)
   } catch (error) {
-    return { ok: false, error: errorText(error), detail: errorDetail(error) }
+    return fail(error)
   }
 
   try {
     await checkout(gitFor(cwd))
   } catch (error) {
-    return rollbackPark(cwd, departure, {
-      ok: false,
-      error: errorText(error),
-      detail: errorDetail(error)
-    })
+    return rollbackPark(cwd, departure, fail(error))
   }
 
   const restored = await restoreOnEnter(cwd, target, departure.registered)

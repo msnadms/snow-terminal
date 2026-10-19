@@ -78,13 +78,50 @@ function attachPopupHandlers(wc: WebContents, parent: BrowserWindow, id: number)
 }
 
 const browserPartition = 'persist:browser'
-const grantedPermissions = new Set(['fullscreen', 'clipboard-sanitized-write'])
+const grantedPermissions = new Set([
+  'fullscreen',
+  'clipboard-sanitized-write',
+  'storage-access',
+  'top-level-storage-access'
+])
+const refusedExternalProtocols = new Set([
+  'file:',
+  'javascript:',
+  'data:',
+  'vbscript:',
+  'ms-msdt:',
+  'search-ms:',
+  'search:',
+  'ms-officecmd:'
+])
+const loggedDenials = new Set<string>()
+
+function opensApp(externalURL: string | undefined): boolean {
+  if (!externalURL || isExternalUrl(externalURL)) return false
+  try {
+    return !refusedExternalProtocols.has(new URL(externalURL).protocol)
+  } catch {
+    return false
+  }
+}
+
+function originOf(raw: string): string {
+  try {
+    return new URL(raw).origin
+  } catch {
+    return raw
+  }
+}
 
 function restrictPermissions(): void {
   const ses = session.fromPartition(browserPartition)
   ses.setPermissionRequestHandler((_wc, permission, callback, details) => {
-    const granted = grantedPermissions.has(permission)
-    if (!granted) {
+    const granted =
+      grantedPermissions.has(permission) ||
+      (permission === 'openExternal' && 'externalURL' in details && opensApp(details.externalURL))
+    const key = `${permission} ${originOf(details.requestingUrl)}`
+    if (!granted && !loggedDenials.has(key)) {
+      loggedDenials.add(key)
       log('warn', 'browser', 'denied permission', { permission, url: details.requestingUrl })
     }
     callback(granted)

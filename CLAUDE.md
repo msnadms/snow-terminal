@@ -85,8 +85,10 @@ panel or workspace manager therefore never unmounts a terminal.
 
 `browser.ts` hosts pages in `WebContentsView`s on the `persist:browser` partition.
 `restrictPermissions()` installs request and check handlers on that session that grant only
-`fullscreen` and `clipboard-sanitized-write` — Electron's default is to grant everything, including
-camera, microphone and geolocation. Denials are logged.
+`fullscreen`, `clipboard-sanitized-write` and storage access — Electron's default is to grant
+everything, including camera, microphone and geolocation. `openExternal` is granted for app protocols
+(`slack://`, `vscode://`, OAuth hand-offs) except the `refusedExternalProtocols` set (`file:`,
+`search-ms:`, `ms-msdt:`, …). Denials are logged once per permission and origin.
 
 ### Terminal data flow
 

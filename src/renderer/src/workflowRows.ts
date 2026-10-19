@@ -1,4 +1,4 @@
-import type { SessionStatus } from './agentStatus'
+import { statusRank, type SessionStatus } from './agentStatus'
 import { normalizePath } from '@renderer/format'
 import { agentSummary, type AgentSession, type AgentSummary } from '@renderer/useAgents'
 import {
@@ -176,8 +176,6 @@ type ActivityBucket = {
   tabSelected: { path: string; status: SessionStatus; sessionId?: number } | null
   cost: number
 }
-
-const statusRank: Record<SessionStatus, number> = { attention: 2, busy: 1, idle: 0 }
 
 export function indexActivity({
   repos,
