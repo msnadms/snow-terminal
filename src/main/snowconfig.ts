@@ -46,6 +46,7 @@ export interface SnowConfig {
   keybinds?: Record<string, string>
   layout?: Layout
   workspaceOrder?: string[]
+  externalProtocols?: string[]
 }
 
 export interface SnowconfigResult {
@@ -87,6 +88,21 @@ function validateWorkspaceOrder(value: unknown): string[] {
 function validateWorkspaceOrderField(raw: unknown, key: string): string[] {
   if (!raw || typeof raw !== 'object') return []
   return validateWorkspaceOrder((raw as Record<string, unknown>)[key])
+}
+
+const protocolPattern = /^[a-z][a-z0-9+.-]*:$/
+
+function validateExternalProtocols(raw: unknown, key: string): string[] {
+  if (!raw || typeof raw !== 'object') return []
+  const value = (raw as Record<string, unknown>)[key]
+  if (!Array.isArray(value)) return []
+  const result: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const protocol = item.trim().toLowerCase()
+    if (protocolPattern.test(protocol) && !result.includes(protocol)) result.push(protocol)
+  }
+  return result
 }
 
 function validateRatios(value: unknown): number[] | null {
@@ -205,6 +221,7 @@ interface RawConfig {
   keybinds: Record<string, string> | null
   layout: Layout | null
   workspaceOrder: string[] | null
+  externalProtocols: string[] | null
   error: string | null
 }
 
@@ -225,6 +242,7 @@ function rawConfig(): RawConfig {
       keybinds: validateKeybinds(raw, 'keybinds'),
       layout: validateLayout(raw, 'layout'),
       workspaceOrder: validateWorkspaceOrderField(raw, 'workspaceOrder'),
+      externalProtocols: validateExternalProtocols(raw, 'externalProtocols'),
       error: null
     }
   } catch (err) {
@@ -243,6 +261,7 @@ function rawConfig(): RawConfig {
         keybinds: null,
         layout: null,
         workspaceOrder: null,
+        externalProtocols: null,
         error: null
       }
     return {
@@ -258,6 +277,7 @@ function rawConfig(): RawConfig {
       keybinds: null,
       layout: null,
       workspaceOrder: null,
+      externalProtocols: null,
       error: e.message
     }
   }
@@ -278,6 +298,7 @@ function readSnowconfig(): SnowconfigResult {
     keybinds,
     layout,
     workspaceOrder,
+    externalProtocols,
     error
   } = rawConfig()
   return {
@@ -293,7 +314,8 @@ function readSnowconfig(): SnowconfigResult {
       ...(workflowStashProtection ? { workflowStashProtection } : {}),
       ...(keybinds ? { keybinds } : {}),
       ...(layout ? { layout } : {}),
-      ...(workspaceOrder?.length ? { workspaceOrder } : {})
+      ...(workspaceOrder?.length ? { workspaceOrder } : {}),
+      ...(externalProtocols?.length ? { externalProtocols } : {})
     },
     path: file,
     error
@@ -312,6 +334,10 @@ export function activeWorkflowStashProtection(): WorkflowStashProtection {
   return rawConfig().workflowStashProtection ?? 'deny'
 }
 
+export function approvedExternalProtocols(): string[] {
+  return rawConfig().externalProtocols ?? []
+}
+
 function writeConfig(next: Omit<RawConfig, 'error'>): SnowconfigResult {
   const file = snowconfigPath()
   try {
@@ -328,6 +354,7 @@ function writeConfig(next: Omit<RawConfig, 'error'>): SnowconfigResult {
     if (next.keybinds) data.keybinds = next.keybinds
     if (next.layout) data.layout = next.layout
     if (next.workspaceOrder?.length) data.workspaceOrder = next.workspaceOrder
+    if (next.externalProtocols?.length) data.externalProtocols = next.externalProtocols
     fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`)
   } catch (err) {
     return { config: { presets: [] }, path: file, error: (err as Error).message }
@@ -349,6 +376,7 @@ function mutateConfig(mutate: (cfg: Omit<RawConfig, 'error'>) => boolean): Snowc
     keybinds,
     layout,
     workspaceOrder,
+    externalProtocols,
     error
   } = rawConfig()
   if (error) return readSnowconfig()
@@ -364,7 +392,8 @@ function mutateConfig(mutate: (cfg: Omit<RawConfig, 'error'>) => boolean): Snowc
     workflowStashProtection,
     keybinds,
     layout,
-    workspaceOrder
+    workspaceOrder,
+    externalProtocols
   }
   if (!mutate(cfg)) return readSnowconfig()
   return writeConfig(cfg)
@@ -380,6 +409,15 @@ export function setActiveTheme(name: string): SnowconfigResult {
 export function setWorkflowStashProtection(protection: WorkflowStashProtection): SnowconfigResult {
   return mutateConfig((cfg) => {
     cfg.workflowStashProtection = protection
+    return true
+  })
+}
+
+export function approveExternalProtocol(protocol: string): SnowconfigResult {
+  return mutateConfig((cfg) => {
+    const current = cfg.externalProtocols ?? []
+    if (!protocolPattern.test(protocol) || current.includes(protocol)) return false
+    cfg.externalProtocols = [...current, protocol]
     return true
   })
 }

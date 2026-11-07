@@ -86,9 +86,20 @@ panel or workspace manager therefore never unmounts a terminal.
 `browser.ts` hosts pages in `WebContentsView`s on the `persist:browser` partition.
 `restrictPermissions()` installs request and check handlers on that session that grant only
 `fullscreen`, `clipboard-sanitized-write` and storage access — Electron's default is to grant
-everything, including camera, microphone and geolocation. `openExternal` is granted for app protocols
-(`slack://`, `vscode://`, OAuth hand-offs) except the `refusedExternalProtocols` set (`file:`,
-`search-ms:`, `ms-msdt:`, …). Denials are logged once per permission and origin.
+everything, including camera, microphone and geolocation.
+
+`openExternal` exists for sign-in hand-offs: an auth popup ends by redirecting to the desktop app's own
+scheme (`slack:`, `figma:`, `zoommtg:`, …), so the set of wanted protocols is open-ended and cannot be an
+allowlist. Instead `approveExternal` refuses `http(s):` (those navigate in place), the
+`refusedExternalProtocols` set (OS and Office handlers that act on page-controlled arguments:
+`ms-msdt:`, `search-ms:`, `ms-appinstaller:`, `ms-word:`, …), and any request not from a main frame.
+Everything else asks with a **native** `dialog.showMessageBox` — a DOM dialog would render beneath the
+`WebContentsView`. `windowFor` parents it: a pane's view is a child of the main window, so
+`BrowserWindow.fromWebContents` alone returns nothing for it and the `views` registry resolves the
+owner; a popup is its own `BrowserWindow`. Concurrent requests for one protocol from one page share a
+prompt. **Always open** appends the protocol to `.snowconfig`'s `externalProtocols`, which is also the
+hand-edit escape hatch; the refusal set is checked first, so a hand-added `file:` stays refused.
+Denials are logged once per permission and origin.
 
 ### Terminal data flow
 
@@ -251,7 +262,7 @@ whenever `blocked` is non-empty (piping an ignored file to the CLI is the exact 
 Session presets and app settings, as JSON:
 `{ presets: { name, cwd, default?, commands?, startupCommand?, splits?, paneRatios?, hidden? }[],
 name?, startupCommand?, commitAgent?, gradients?, theme?, tourSeen?, hooksPrompted?,
-workflowStashProtection?, keybinds?, layout? }`.
+workflowStashProtection?, keybinds?, layout?, externalProtocols? }`.
 
 Entries missing a string `name`/`cwd` are dropped; a leading `~` in `cwd` expands **only on read**.
 
@@ -265,14 +276,18 @@ Entries missing a string `name`/`cwd` are dropped; a leading `~` in `cwd` expand
 - `gradients` — boolean (default true), passed to `GitPanel`.
 - `theme` — active theme base filename, read back by `theme.ts` via `activeThemeName()`.
 - `layout` — `{ gitWidth?, gitCollapsed?, bottomHeight?, bottomCollapsed? }`, persisted pane sizes.
+- `externalProtocols` — schemes (`"slack:"`) the embedded browser may open without asking (see
+  _Embedded browser_). Written by the prompt's **Always open** through `approveExternalProtocol`;
+  entries not matching `^[a-z][a-z0-9+.-]*:$` are dropped on read.
 - `tourSeen` / `hooksPrompted` — one-time flags. They live here **deliberately instead of renderer
   `localStorage`**: a sync `localStorage.getItem` on the startup path was observed blocking the
   renderer for ~5 s while Chromium's DOM-Storage backend opened. No renderer code touches
   `localStorage`. `hooksPrompted` records that snow **asked**, so `snow hooks remove` does not bring
   the offer back.
 
-`theme.ts`'s `activeThemeName()` and `git.ts`'s `activeCommitAgent()` are the two cross-config
-dependencies on `snowconfig.ts`; they stay acyclic because `snowconfig.ts` imports nothing back.
+`theme.ts`'s `activeThemeName()`, `git.ts`'s `activeCommitAgent()` and `browser.ts`'s
+`approvedExternalProtocols()` are the cross-config dependencies on `snowconfig.ts`; they stay acyclic
+because `snowconfig.ts` imports nothing back.
 
 Pane sizing never mirrors config into state with an effect: the shared `useCollapsiblePane`
 (`src/renderer/src/useCollapsiblePane.ts`) derives `size`/`collapsed` as `override ?? saved ?? default`.

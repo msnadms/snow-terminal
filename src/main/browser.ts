@@ -1,6 +1,15 @@
-import { BrowserWindow, ipcMain, session, WebContents, WebContentsView } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  session,
+  WebContents,
+  WebContentsView
+} from 'electron'
 import { isExternalUrl } from './external'
 import { log } from './log'
+import { approvedExternalProtocols, approveExternalProtocol } from './snowconfig'
 
 interface BrowserView {
   view: WebContentsView
@@ -92,17 +101,32 @@ const refusedExternalProtocols = new Set([
   'ms-msdt:',
   'search-ms:',
   'search:',
-  'ms-officecmd:'
+  'ms-officecmd:',
+  'ms-appinstaller:',
+  'ms-word:',
+  'ms-excel:',
+  'ms-powerpoint:',
+  'ms-visio:',
+  'ms-access:',
+  'ms-project:',
+  'ms-publisher:',
+  'ms-its:',
+  'its:',
+  'mk:',
+  'hcp:',
+  'ms-cxh:',
+  'ms-cxh-full:',
+  'smb:',
+  'ldap:',
+  'jar:'
 ])
-const loggedDenials = new Set<string>()
+const loggedOnce = new Set<string>()
+const pendingPrompts = new Map<string, Promise<boolean>>()
 
-function opensApp(externalURL: string | undefined): boolean {
-  if (!externalURL || isExternalUrl(externalURL)) return false
-  try {
-    return !refusedExternalProtocols.has(new URL(externalURL).protocol)
-  } catch {
-    return false
-  }
+function logOnce(key: string, message: string, data: Record<string, unknown>): void {
+  if (loggedOnce.has(key)) return
+  loggedOnce.add(key)
+  log('warn', 'browser', message, data)
 }
 
 function originOf(raw: string): string {
@@ -113,18 +137,97 @@ function originOf(raw: string): string {
   }
 }
 
+function protocolOf(raw: string): string | null {
+  try {
+    return new URL(raw).protocol
+  } catch {
+    return null
+  }
+}
+
+function windowFor(wc: WebContents): BrowserWindow | null {
+  for (const entry of views.values()) {
+    if (entry.view.webContents === wc) return BrowserWindow.fromWebContents(entry.owner)
+  }
+  return BrowserWindow.fromWebContents(wc)
+}
+
+async function promptExternal(
+  wc: WebContents,
+  externalURL: string,
+  protocol: string,
+  origin: string
+): Promise<boolean> {
+  const appName = app.getApplicationNameForProtocol(externalURL) || protocol.slice(0, -1)
+  const options = {
+    type: 'question' as const,
+    message: `Open ${appName}?`,
+    detail: `${origin} wants to open ${appName} on your computer.`,
+    buttons: ['Open', `Always open ${protocol} links`, 'Cancel'],
+    defaultId: 0,
+    cancelId: 2,
+    noLink: true
+  }
+  const parent = windowFor(wc)
+  const { response } = parent
+    ? await dialog.showMessageBox(parent, options)
+    : await dialog.showMessageBox(options)
+  if (response === 1) {
+    const result = approveExternalProtocol(protocol)
+    if (result.error)
+      log('warn', 'browser', 'could not remember protocol', { protocol, error: result.error })
+  }
+  if (response !== 2) log('info', 'browser', 'opened external', { protocol, origin })
+  return response !== 2
+}
+
+function approveExternal(
+  wc: WebContents,
+  externalURL: string,
+  requestingUrl: string
+): Promise<boolean> {
+  const protocol = protocolOf(externalURL)
+  if (!protocol || isExternalUrl(externalURL) || refusedExternalProtocols.has(protocol)) {
+    return Promise.resolve(false)
+  }
+  if (approvedExternalProtocols().includes(protocol)) return Promise.resolve(true)
+  const origin = originOf(requestingUrl)
+  const key = `${wc.id} ${protocol}`
+  const pending = pendingPrompts.get(key)
+  if (pending) return pending
+  const prompt = promptExternal(wc, externalURL, protocol, origin)
+    .catch(() => false)
+    .finally(() => pendingPrompts.delete(key))
+  pendingPrompts.set(key, prompt)
+  return prompt
+}
+
 function restrictPermissions(): void {
   const ses = session.fromPartition(browserPartition)
-  ses.setPermissionRequestHandler((_wc, permission, callback, details) => {
-    const granted =
-      grantedPermissions.has(permission) ||
-      (permission === 'openExternal' && 'externalURL' in details && opensApp(details.externalURL))
-    const key = `${permission} ${originOf(details.requestingUrl)}`
-    if (!granted && !loggedDenials.has(key)) {
-      loggedDenials.add(key)
-      log('warn', 'browser', 'denied permission', { permission, url: details.requestingUrl })
+  ses.setPermissionRequestHandler((wc, permission, callback, details) => {
+    const deny = (): void => {
+      logOnce(`${permission} ${originOf(details.requestingUrl)}`, 'denied permission', {
+        permission,
+        url: details.requestingUrl
+      })
+      callback(false)
     }
-    callback(granted)
+    if (grantedPermissions.has(permission)) {
+      callback(true)
+      return
+    }
+    if (
+      permission !== 'openExternal' ||
+      !('externalURL' in details) ||
+      !details.externalURL ||
+      !details.isMainFrame
+    ) {
+      deny()
+      return
+    }
+    void approveExternal(wc, details.externalURL, details.requestingUrl).then((granted) =>
+      granted ? callback(true) : deny()
+    )
   })
   ses.setPermissionCheckHandler((_wc, permission) => grantedPermissions.has(permission))
 }
