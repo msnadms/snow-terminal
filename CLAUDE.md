@@ -96,10 +96,16 @@ allowlist. Instead `approveExternal` refuses `http(s):` (those navigate in place
 Everything else asks with a **native** `dialog.showMessageBox` — a DOM dialog would render beneath the
 `WebContentsView`. `windowFor` parents it: a pane's view is a child of the main window, so
 `BrowserWindow.fromWebContents` alone returns nothing for it and the `views` registry resolves the
-owner; a popup is its own `BrowserWindow`. Concurrent requests for one protocol from one page share a
-prompt. **Always open** appends the protocol to `.snowconfig`'s `externalProtocols`, which is also the
-hand-edit escape hatch; the refusal set is checked first, so a hand-added `file:` stays refused.
-Denials are logged once per permission and origin.
+owner; a popup is its own `BrowserWindow`. A page holds **at most one prompt at a time**: a request for
+the same protocol shares it, any other is refused, and a Cancel refuses every further request from that
+origin in that page — otherwise a page cycling invented scheme names stacks unlimited native modals over
+the main window. **Always open** (offered only for an `http(s)` origin) appends
+`"<origin> <protocol>"` to `.snowconfig`'s `externalProtocols`, so the approval holds for that site
+alone; a bare `"slack:"` there is the hand-edit escape hatch for every origin. The refusal set is
+checked first, so a hand-added `file:` stays refused. Approvals are read through a `fileStamp`-validated
+cache rather than a parse per request. The log says `allowed external`, not opened — Electron launches
+the handler after the callback, out of sight. Denials are logged once per permission and origin
+(bounded by `boundedCache`).
 
 ### Terminal data flow
 
@@ -276,9 +282,10 @@ Entries missing a string `name`/`cwd` are dropped; a leading `~` in `cwd` expand
 - `gradients` — boolean (default true), passed to `GitPanel`.
 - `theme` — active theme base filename, read back by `theme.ts` via `activeThemeName()`.
 - `layout` — `{ gitWidth?, gitCollapsed?, bottomHeight?, bottomCollapsed? }`, persisted pane sizes.
-- `externalProtocols` — schemes (`"slack:"`) the embedded browser may open without asking (see
-  _Embedded browser_). Written by the prompt's **Always open** through `approveExternalProtocol`;
-  entries not matching `^[a-z][a-z0-9+.-]*:$` are dropped on read.
+- `externalProtocols` — schemes the embedded browser may open without asking (see _Embedded browser_),
+  each either origin-scoped (`"https://app.slack.com slack:"`, what **Always open** writes through
+  `approveExternalProtocol`) or bare (`"slack:"`, any origin, hand-edited). `externalProtocolEntry`
+  normalizes both; anything else is dropped on read.
 - `tourSeen` / `hooksPrompted` — one-time flags. They live here **deliberately instead of renderer
   `localStorage`**: a sync `localStorage.getItem` on the startup path was observed blocking the
   renderer for ~5 s while Chromium's DOM-Storage backend opened. No renderer code touches
@@ -393,8 +400,7 @@ logging API and gets no new privilege.
 
 ## Agents (Claude and Codex)
 
-The commit message runs whichever CLI `commitAgent` names; the usage meter always reports both,
-because cost is observed after the fact. Agent status is hook-fed.
+The commit message runs whichever CLI `commitAgent` names. Agent status is hook-fed.
 
 ### AI commit messages
 
@@ -412,8 +418,10 @@ Three codex flags are load-bearing: `--skip-git-repo-check` (the child runs in `
 seconds and cents per click). Codex gets `timeoutMs * 2`.
 
 On Windows both CLIs are `.cmd` shims, so the child spawns with `shell: true` — and Node does not quote
-arguments in shell mode, so `spawnCommitAgent` quotes any argument containing whitespace
-(`os.tmpdir()` sits under a profile path that may contain a space).
+arguments in shell mode, so `shellQuote` quotes any argument containing whitespace or a cmd
+metacharacter (`os.tmpdir()` sits under a profile path that may contain a space) and refuses one
+containing `"`, which cmd.exe has no escape for. The codex message file is named by `randomUUID()`, so
+two generations in different repos (separate locks, so concurrent) never share it.
 
 ### Agent status
 
@@ -539,36 +547,6 @@ so a repo with no registered workflows is untouched; and every failure **fails o
 `workflowStashProtection` in `.snowconfig` selects `deny` (default), `warn`, or `off`. Claude supports
 an interactive `"ask"` for warn mode; Codex gets a non-blocking `systemMessage` instead. Change it with
 `snow hooks protection <warn|deny|off>`.
-
-### Usage cost
-
-`src/main/usage.ts` estimates spend **since snow started** by reading each CLI's own session logs —
-nothing is sent anywhere to price it. One `sources` table drives everything (agent name, directory,
-parser).
-
-- **claude** — `~/.claude/projects/**/*.jsonl`, priced from `message.usage` (separate 5m/1h cache-write
-  tiers, cache reads at 0.1×).
-- **codex** — `~/.codex/sessions/**/*.jsonl`, priced from `payload.info.last_token_usage`.
-
-Codex needs two things Claude doesn't: its events carry no model, so the parser tracks the most recent
-`payload.model` (emitted by `turn_context`, always preceding that turn's `token_count`) and prices an
-unresolved model at zero; and `last_token_usage` is a **per-turn delta** while `total_token_usage` is
-cumulative, so summing deltas avoids recounting. Codex entries carry the `':'` never-dedup sentinel;
-Claude entries keep `id:requestId` dedup, scoped per source.
-
-Files are cached on `mtimeMs:size` and skipped when older than `sessionStart`. Listing is one recursive
-`readdirSync`, handling both layouts without encoding either depth. A missing root is not an error —
-only non-`ENOENT` failures set `error`.
-
-`UsageResult` reports `agents` (per-agent), `session` (total), and `byDirectory`. Attribution costs no
-extra filesystem work: Claude puts `cwd` on every usage line, Codex in the `session_meta` record.
-`~/.claude/projects/<dashed-cwd>/` is deliberately **not** decoded — that encoding maps separators,
-dots, and underscores all onto `-`. Note the asymmetry: a rollout marks its opening record on the
-**envelope** (`entry.type === 'session_meta'`) while events mark themselves on the **payload**.
-
-Keys are resolved, slash-normalized absolute paths, and the renderer sums a **subtree** (an agent's cwd
-is often a subdirectory of its worktree), case-insensitively. The watcher is per source and never
-creates a root whose parent is absent.
 
 ## The `snow` command
 

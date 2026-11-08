@@ -30,7 +30,6 @@ export type Activity = {
 export type WorkflowRow = {
   entry: WorkflowEntry
   activity: Activity
-  cost: number
   dir: string | undefined
   order: number
   signal: InboxSignal
@@ -49,12 +48,11 @@ export type OpenSession = {
 export type SessionRow = {
   session: OpenSession
   activity: Activity
-  cost: number
   signal: InboxSignal
   comparison?: WorkflowComparison
 }
 
-export type IndexedActivity = { activity: Activity; cost: number }
+export type IndexedActivity = { activity: Activity }
 
 export type WorkflowReviewTarget = { cwd: string; branch: string }
 
@@ -63,7 +61,7 @@ export const emptyActivity: Activity = {
   summary: { waiting: 0, working: 0, names: [] }
 }
 
-const noActivity: IndexedActivity = { activity: emptyActivity, cost: 0 }
+const noActivity: IndexedActivity = { activity: emptyActivity }
 
 export function openDir(repo: WorkflowRepo, entry: WorkflowEntry): string | undefined {
   if (usable(entry) && entry.worktree) return entry.worktree
@@ -168,13 +166,11 @@ interface ActivityInput {
   agentSessions: AgentSession[]
   sessionStatuses: Record<string, SessionStatus>
   sessionTitles: Record<string, string>
-  costs: Record<string, number>
 }
 
 type ActivityBucket = {
   agents: AgentSession[]
   tabSelected: { path: string; status: SessionStatus; sessionId?: number } | null
-  cost: number
 }
 
 export function indexActivity({
@@ -183,13 +179,12 @@ export function indexActivity({
   openSessions,
   agentSessions,
   sessionStatuses,
-  sessionTitles,
-  costs
+  sessionTitles
 }: ActivityInput): Map<string, IndexedActivity> {
   const buckets = new Map<string, ActivityBucket>()
   const open = (dir: string): void => {
     const key = directoryKey(dir)
-    if (!buckets.has(key)) buckets.set(key, { agents: [], tabSelected: null, cost: 0 })
+    if (!buckets.has(key)) buckets.set(key, { agents: [], tabSelected: null })
   }
   for (const repo of repos) {
     for (const entry of repo.workflows) {
@@ -237,20 +232,11 @@ export function indexActivity({
     })
   }
 
-  for (const [path, cost] of Object.entries(costs)) {
-    visitOwners(path, (row) => {
-      row.cost += cost
-    })
-  }
-
   const result = new Map<string, IndexedActivity>()
   for (const [key, row] of buckets) {
     const summary = agentSummary(row.agents)
     const tabTitle = row.tabSelected ? sessionTitles[row.tabSelected.path] : undefined
-    result.set(key, {
-      activity: bucketActivity(row, summary, tabTitle, openSessions),
-      cost: row.cost
-    })
+    result.set(key, { activity: bucketActivity(row, summary, tabTitle, openSessions) })
   }
   return result
 }
@@ -303,7 +289,6 @@ export function activityFor(indexed: Map<string, IndexedActivity>, dir: string):
 export function sessionRowsOf(
   agentSessions: AgentSession[],
   sessions: OpenSession[],
-  indexed: Map<string, IndexedActivity>,
   comparisons: Map<string, WorkflowComparison>
 ): SessionRow[] {
   const agentsByTerminal = new Map<number, AgentSession[]>()
@@ -334,16 +319,12 @@ export function sessionRowsOf(
       return {
         session,
         activity,
-        cost: session.dir ? (indexed.get(directoryKey(session.dir))?.cost ?? 0) : 0,
         signal: activitySignal(activity),
         comparison: session.dir ? comparisons.get(directoryKey(session.dir)) : undefined
       }
     })
     .sort(
-      (left, right) =>
-        right.signal.tier - left.signal.tier ||
-        right.cost - left.cost ||
-        left.session.id - right.session.id
+      (left, right) => right.signal.tier - left.signal.tier || left.session.id - right.session.id
     )
 }
 
@@ -351,11 +332,10 @@ export function repoRows(repo: WorkflowRepo, indexed: Map<string, IndexedActivit
   return repo.workflows
     .map((entry, order) => {
       const dir = openDir(repo, entry)
-      const { activity, cost } = dir ? activityFor(indexed, dir) : noActivity
+      const { activity } = dir ? activityFor(indexed, dir) : noActivity
       return {
         entry,
         activity,
-        cost,
         dir,
         order,
         signal: inboxSignal(
@@ -365,10 +345,7 @@ export function repoRows(repo: WorkflowRepo, indexed: Map<string, IndexedActivit
         )
       }
     })
-    .sort(
-      (left, right) =>
-        right.signal.tier - left.signal.tier || right.cost - left.cost || left.order - right.order
-    )
+    .sort((left, right) => right.signal.tier - left.signal.tier || left.order - right.order)
 }
 
 export function reviewTargetsOf(

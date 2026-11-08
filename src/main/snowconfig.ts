@@ -4,7 +4,7 @@ import { promisify } from 'util'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { collapseHome, configDir, expandHome, samePath } from './config'
+import { collapseHome, configDir, expandHome, fileStamp, samePath } from './config'
 import { log } from './log'
 
 const execFileAsync = promisify(execFile)
@@ -92,6 +92,26 @@ function validateWorkspaceOrderField(raw: unknown, key: string): string[] {
 
 const protocolPattern = /^[a-z][a-z0-9+.-]*:$/
 
+function webOrigin(raw: string): string | null {
+  try {
+    const url = new URL(raw)
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return null
+    return url.origin === raw ? raw : null
+  } catch {
+    return null
+  }
+}
+
+export function externalProtocolEntry(raw: string): string | null {
+  const parts = raw.trim().split(/\s+/)
+  const protocol = parts[parts.length - 1].toLowerCase()
+  if (!protocolPattern.test(protocol)) return null
+  if (parts.length === 1) return protocol
+  if (parts.length !== 2) return null
+  const origin = webOrigin(parts[0])
+  return origin ? `${origin} ${protocol}` : null
+}
+
 function validateExternalProtocols(raw: unknown, key: string): string[] {
   if (!raw || typeof raw !== 'object') return []
   const value = (raw as Record<string, unknown>)[key]
@@ -99,8 +119,8 @@ function validateExternalProtocols(raw: unknown, key: string): string[] {
   const result: string[] = []
   for (const item of value) {
     if (typeof item !== 'string') continue
-    const protocol = item.trim().toLowerCase()
-    if (protocolPattern.test(protocol) && !result.includes(protocol)) result.push(protocol)
+    const entry = externalProtocolEntry(item)
+    if (entry && !result.includes(entry)) result.push(entry)
   }
   return result
 }
@@ -334,8 +354,19 @@ export function activeWorkflowStashProtection(): WorkflowStashProtection {
   return rawConfig().workflowStashProtection ?? 'deny'
 }
 
-export function approvedExternalProtocols(): string[] {
-  return rawConfig().externalProtocols ?? []
+let approvedCache: { stamp: string; entries: string[] } | null = null
+
+function approvedEntries(): string[] {
+  const stamp = fileStamp(snowconfigPath())
+  if (approvedCache?.stamp !== stamp) {
+    approvedCache = { stamp, entries: rawConfig().externalProtocols ?? [] }
+  }
+  return approvedCache.entries
+}
+
+export function externalProtocolApproved(origin: string, protocol: string): boolean {
+  const entries = approvedEntries()
+  return entries.includes(protocol) || entries.includes(`${origin} ${protocol}`)
 }
 
 function writeConfig(next: Omit<RawConfig, 'error'>): SnowconfigResult {
@@ -413,11 +444,12 @@ export function setWorkflowStashProtection(protection: WorkflowStashProtection):
   })
 }
 
-export function approveExternalProtocol(protocol: string): SnowconfigResult {
+export function approveExternalProtocol(origin: string, protocol: string): SnowconfigResult {
   return mutateConfig((cfg) => {
     const current = cfg.externalProtocols ?? []
-    if (!protocolPattern.test(protocol) || current.includes(protocol)) return false
-    cfg.externalProtocols = [...current, protocol]
+    const entry = externalProtocolEntry(`${origin} ${protocol}`)
+    if (!entry || current.includes(entry)) return false
+    cfg.externalProtocols = [...current, entry]
     return true
   })
 }

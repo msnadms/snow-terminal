@@ -27,7 +27,6 @@ import type { AgentsResult } from '../main/agents'
 import type { HooksResult, HooksState } from '../main/hooks'
 import type { SnowignoreResult } from '../main/snowignore'
 import type { SnowconfigResult, Layout, Preset } from '../main/snowconfig'
-import type { UsageResult } from '../main/usage'
 
 function idDispatcher<P extends { id: number }>(
   channel: string
@@ -294,15 +293,6 @@ const snowconfig = {
   }
 }
 
-const usage = {
-  get: (): Promise<UsageResult> => ipcRenderer.invoke('usage:get'),
-  onChanged: (callback: (result: UsageResult) => void): (() => void) => {
-    const listener = (_e: IpcRendererEvent, result: UsageResult): void => callback(result)
-    ipcRenderer.on('usage:changed', listener)
-    return () => ipcRenderer.removeListener('usage:changed', listener)
-  }
-}
-
 const agents = {
   get: (): Promise<AgentsResult> => ipcRenderer.invoke('agents:get'),
   onChanged: (callback: (result: AgentsResult) => void): (() => void) => {
@@ -343,7 +333,6 @@ const api = {
   theme,
   snowignore,
   snowconfig,
-  usage,
   agents,
   hooks,
   cli

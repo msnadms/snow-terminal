@@ -34,7 +34,7 @@ next to the code they touch.
 - **Agent activity** - Snow can read agent activity published by Claude Code,
   Codex hooks, or another tool into its local activity directory. It surfaces
   agents
-  by workspace, attention state, activity detail, cost, and Git review state;
+  by workspace, attention state, activity detail, and Git review state;
   it never dispatches or declares agent tasks complete. Linked worktrees
   created by a reporting agent or orchestrator are automatically registered as
   Snow workspaces.

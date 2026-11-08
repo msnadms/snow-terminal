@@ -12,7 +12,6 @@ import { initRegistry, disposeRegistryWatcher } from './registry'
 import { registerThemeHandlers, disposeThemeWatcher } from './theme'
 import { registerSnowignoreHandlers, disposeSnowignoreWatcher } from './snowignore'
 import { registerSnowconfigHandlers, disposeSnowconfigWatcher } from './snowconfig'
-import { registerUsageHandlers, disposeUsageWatcher } from './usage'
 import { registerAgentHandlers, disposeAgentWatcher } from './agents'
 import { refreshHooks, registerHooksHandlers } from './hooks'
 import { initLogging, closeLogging, log, logPath, watchRenderer } from './log'
@@ -95,7 +94,6 @@ app.whenReady().then(() => {
   registerThemeHandlers()
   registerSnowignoreHandlers()
   registerSnowconfigHandlers()
-  registerUsageHandlers()
   registerAgentHandlers()
   refreshHooks()
   registerHooksHandlers()
@@ -124,7 +122,6 @@ app.on('will-quit', () => {
   disposeThemeWatcher()
   disposeSnowignoreWatcher()
   disposeSnowconfigWatcher()
-  disposeUsageWatcher()
   disposeAgentWatcher()
   closeLogging()
 })

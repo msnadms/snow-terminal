@@ -9,7 +9,12 @@ import {
 } from 'electron'
 import { isExternalUrl } from './external'
 import { log } from './log'
-import { approvedExternalProtocols, approveExternalProtocol } from './snowconfig'
+import { boundedCache } from './cache'
+import {
+  approveExternalProtocol,
+  externalProtocolApproved,
+  externalProtocolEntry
+} from './snowconfig'
 
 interface BrowserView {
   view: WebContentsView
@@ -118,14 +123,21 @@ const refusedExternalProtocols = new Set([
   'ms-cxh-full:',
   'smb:',
   'ldap:',
-  'jar:'
+  'jar:',
+  'shell:',
+  'ms-settings:',
+  'ms-search:',
+  'ms-quick-assist:',
+  'microsoft-edge:',
+  'microsoft-edge-holographic:'
 ])
-const loggedOnce = new Set<string>()
-const pendingPrompts = new Map<string, Promise<boolean>>()
+const loggedOnce = boundedCache<true>(500)
+const pendingPrompts = new Map<number, { protocol: string; prompt: Promise<boolean> }>()
+const declinedOrigins = new WeakMap<WebContents, Set<string>>()
 
 function logOnce(key: string, message: string, data: Record<string, unknown>): void {
-  if (loggedOnce.has(key)) return
-  loggedOnce.add(key)
+  if (loggedOnce.get(key)) return
+  loggedOnce.set(key, true)
   log('warn', 'browser', message, data)
 }
 
@@ -159,26 +171,42 @@ async function promptExternal(
   origin: string
 ): Promise<boolean> {
   const appName = app.getApplicationNameForProtocol(externalURL) || protocol.slice(0, -1)
+  const rememberable = externalProtocolEntry(`${origin} ${protocol}`) !== null
+  const buttons = rememberable
+    ? ['Open', `Always open ${protocol} links from this site`, 'Cancel']
+    : ['Open', 'Cancel']
   const options = {
     type: 'question' as const,
     message: `Open ${appName}?`,
     detail: `${origin} wants to open ${appName} on your computer.`,
-    buttons: ['Open', `Always open ${protocol} links`, 'Cancel'],
+    buttons,
     defaultId: 0,
-    cancelId: 2,
+    cancelId: buttons.length - 1,
     noLink: true
   }
   const parent = windowFor(wc)
   const { response } = parent
     ? await dialog.showMessageBox(parent, options)
     : await dialog.showMessageBox(options)
+  if (response === buttons.length - 1) return false
+  let remembered = false
   if (response === 1) {
-    const result = approveExternalProtocol(protocol)
+    const result = approveExternalProtocol(origin, protocol)
+    remembered = !result.error
     if (result.error)
       log('warn', 'browser', 'could not remember protocol', { protocol, error: result.error })
   }
-  if (response !== 2) log('info', 'browser', 'opened external', { protocol, origin })
-  return response !== 2
+  log('info', 'browser', 'allowed external', { protocol, origin, remembered })
+  return true
+}
+
+function declined(wc: WebContents): Set<string> {
+  let origins = declinedOrigins.get(wc)
+  if (!origins) {
+    origins = new Set()
+    declinedOrigins.set(wc, origins)
+  }
+  return origins
 }
 
 function approveExternal(
@@ -190,15 +218,19 @@ function approveExternal(
   if (!protocol || isExternalUrl(externalURL) || refusedExternalProtocols.has(protocol)) {
     return Promise.resolve(false)
   }
-  if (approvedExternalProtocols().includes(protocol)) return Promise.resolve(true)
   const origin = originOf(requestingUrl)
-  const key = `${wc.id} ${protocol}`
-  const pending = pendingPrompts.get(key)
-  if (pending) return pending
+  if (externalProtocolApproved(origin, protocol)) return Promise.resolve(true)
+  if (declined(wc).has(origin)) return Promise.resolve(false)
+  const pending = pendingPrompts.get(wc.id)
+  if (pending) return pending.protocol === protocol ? pending.prompt : Promise.resolve(false)
   const prompt = promptExternal(wc, externalURL, protocol, origin)
     .catch(() => false)
-    .finally(() => pendingPrompts.delete(key))
-  pendingPrompts.set(key, prompt)
+    .then((granted) => {
+      if (!granted && !wc.isDestroyed()) declined(wc).add(origin)
+      return granted
+    })
+    .finally(() => pendingPrompts.delete(wc.id))
+  pendingPrompts.set(wc.id, { protocol, prompt })
   return prompt
 }
 

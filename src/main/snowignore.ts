@@ -2,7 +2,7 @@ import { ipcMain, BrowserWindow } from 'electron'
 import fs from 'fs'
 import path from 'path'
 import ignore, { Ignore } from 'ignore'
-import { configDir } from './config'
+import { configDir, fileStamp } from './config'
 import { log } from './log'
 
 export interface SnowignoreResult {
@@ -51,15 +51,6 @@ function writeDefaultSnowignore(): void {
     fs.writeFileSync(file, defaultSnowignore, { flag: 'wx' })
   } catch {
     return
-  }
-}
-
-function fileStamp(file: string): string {
-  try {
-    const stat = fs.statSync(file)
-    return `${stat.mtimeMs}:${stat.size}`
-  } catch {
-    return ''
   }
 }
 

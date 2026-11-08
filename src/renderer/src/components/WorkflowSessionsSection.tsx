@@ -1,6 +1,5 @@
 import { Fragment } from 'react'
 import { OverlapBadge, OverlapPanel } from './OverlapBadge'
-import { formatCost } from '@renderer/format'
 import { needsOperator } from '@renderer/workflowText'
 import { signalTitle, statusTitle, type SessionRow } from '@renderer/workflowRows'
 
@@ -44,7 +43,7 @@ function WorkflowSessionsSection({
         <div className="wfm-note wfm-note-muted">No open sessions outside a workspace.</div>
       ) : (
         <div className={`wfm-rows${hasRowStatus ? '' : ' wfm-rows-no-status'}`}>
-          {rows.map(({ session, activity, cost, signal, comparison }) => {
+          {rows.map(({ session, activity, signal, comparison }) => {
             const overlapKey = `session\0${session.id}`
             const panelId = `wfm-overlaps-session-${session.id}`
             const isOpen = expanded.has(overlapKey)
@@ -101,14 +100,6 @@ function WorkflowSessionsSection({
                     {activity.title && (
                       <span className="wfm-activity" title={activity.title}>
                         {activity.title}
-                      </span>
-                    )}
-                    {!!cost && (
-                      <span
-                        className="wfm-cost"
-                        title="Estimated agent spend in this directory since snow started"
-                      >
-                        {formatCost(cost)}
                       </span>
                     )}
                     <span className="wfm-row-actions">

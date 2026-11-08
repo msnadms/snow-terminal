@@ -1,6 +1,5 @@
 import { Fragment } from 'react'
 import { OverlapBadge, OverlapPanel } from './OverlapBadge'
-import { formatCost } from '@renderer/format'
 import { repoColor } from '@renderer/repoColor'
 import type { RepoOrder } from '@renderer/useRepoOrder'
 import {
@@ -128,7 +127,7 @@ function WorkflowRepoCard({
       )}
       {repo.error && <div className="wfm-note">{repo.error}</div>}
       <div className={`wfm-rows${hasRowStatus ? '' : ' wfm-rows-no-status'}`}>
-        {rows.map(({ entry, activity, cost, dir, signal }) => {
+        {rows.map(({ entry, activity, dir, signal }) => {
           const state = stateLabel(entry)
           const { status, title } = activity
           const overlapKey = `${repo.repo}\0${entry.branch}`
@@ -193,14 +192,6 @@ function WorkflowRepoCard({
                   {title && (
                     <span className="wfm-activity" title={title}>
                       {title}
-                    </span>
-                  )}
-                  {!!cost && (
-                    <span
-                      className="wfm-cost"
-                      title="Estimated agent spend in this directory since snow started"
-                    >
-                      {formatCost(cost)}
                     </span>
                   )}
                   {entry.parked && (

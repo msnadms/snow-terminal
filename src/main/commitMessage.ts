@@ -1,4 +1,5 @@
 import { spawn } from 'child_process'
+import { randomUUID } from 'crypto'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -92,8 +93,9 @@ export function commitAgentCommand(agent: CommitAgent): string {
   return commitAgentSpecs[agent].command
 }
 
-function shellQuote(arg: string): string {
-  return `"${arg.replace(/"/g, '\\"')}"`
+export function shellQuote(arg: string): string {
+  if (arg.includes('"')) throw new Error(`Cannot pass an argument containing a quote: ${arg}`)
+  return /[\s&|<>^()]/.test(arg) ? `"${arg}"` : arg
 }
 
 function spawnCommitAgent(spec: CommitAgentSpec, args: string[], input: string): Promise<string> {
@@ -140,7 +142,7 @@ function spawnCommitAgent(spec: CommitAgentSpec, args: string[], input: string):
 export async function generateCommitMessage(agent: CommitAgent, diff: string): Promise<string> {
   const spec = commitAgentSpecs[agent]
   const input = `${commitMessagePrompt}\n\n${truncateDiffForPrompt(diff)}`
-  const messageFile = path.join(os.tmpdir(), `snow-commit-${process.pid}-${Date.now()}.txt`)
+  const messageFile = path.join(os.tmpdir(), `snow-commit-${randomUUID()}.txt`)
   try {
     const stdout = await spawnCommitAgent(spec, spec.args(messageFile), input)
     return cleanCommitMessage(spec.read(stdout, messageFile))

@@ -12,7 +12,6 @@ import { useGitAction } from '@renderer/useGitAction'
 import { useGitColors } from '@renderer/useGitColors'
 import { useMediaQuery } from '@renderer/useMediaQuery'
 import { useRepoOrder } from '@renderer/useRepoOrder'
-import { useUsage } from '@renderer/useUsage'
 import { useWorkflowOverview } from '@renderer/useWorkflowOverview'
 import type { AgentSession } from '@renderer/useAgents'
 import {
@@ -96,7 +95,6 @@ function WorkflowManager({
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const isNarrow = useMediaQuery(narrowWorkspaceQuery)
   const lanes = useGitColors()?.lanes
-  const usage = useUsage()
   const sessionDirectoryKey = useMemo(
     () =>
       [...new Set(openSessions.map((session) => session.dir).filter((dir): dir is string => !!dir))]
@@ -142,25 +140,15 @@ function WorkflowManager({
             openSessions,
             agentSessions,
             sessionStatuses,
-            sessionTitles,
-            costs: usage?.byDirectory ?? {}
+            sessionTitles
           })
         : emptyIndex,
-    [
-      active,
-      overview,
-      agentSessions,
-      sessionStatuses,
-      sessionTitles,
-      usage,
-      nonaffiliated,
-      openSessions
-    ]
+    [active, overview, agentSessions, sessionStatuses, sessionTitles, nonaffiliated, openSessions]
   )
 
   const sessionRows = useMemo(
-    () => sessionRowsOf(agentSessions, nonaffiliated, indexedRows, comparisonsByDirectory),
-    [agentSessions, nonaffiliated, indexedRows, comparisonsByDirectory]
+    () => sessionRowsOf(agentSessions, nonaffiliated, comparisonsByDirectory),
+    [agentSessions, nonaffiliated, comparisonsByDirectory]
   )
 
   const orderedRepos = useMemo(

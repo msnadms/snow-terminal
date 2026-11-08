@@ -41,11 +41,15 @@ export function useTabGroups(
         const owner = (repos ?? []).find((repo) =>
           isInside(normalizePath(dir), normalizePath(repo.path))
         )
-        const root = owner ? owner.common : await window.api.git.mainRoot(dir)
-        return [dir, root] as const
+        try {
+          const root = owner ? owner.common : await window.api.git.mainRoot(dir)
+          return [[dir, root] as const]
+        } catch {
+          return []
+        }
       })
     ).then((resolved) => {
-      if (!cancelled) setRoots((prev) => ({ ...prev, ...Object.fromEntries(resolved) }))
+      if (!cancelled) setRoots((prev) => ({ ...prev, ...Object.fromEntries(resolved.flat()) }))
     })
     return () => {
       cancelled = true

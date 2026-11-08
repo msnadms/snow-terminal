@@ -427,13 +427,6 @@ button.wfm-inbox:focus-visible {
   color: var(--ui-success, #a6e3a1);
 }
 
-.wfm-cost {
-  flex: 0 0 auto;
-  color: var(--ui-muted-text, #a6adc8);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-
 .wfm-conflicts {
   flex: 0 0 auto;
   display: flex;

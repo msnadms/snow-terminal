@@ -34,6 +34,15 @@ export function collapseHome(p: string): string {
   return `~/${resolved.slice(prefix.length).split(path.sep).join('/')}`
 }
 
+export function fileStamp(file: string): string {
+  try {
+    const stat = fs.statSync(file)
+    return `${stat.mtimeMs}:${stat.size}`
+  } catch {
+    return ''
+  }
+}
+
 export function writeDefaultConfig(file: string, contents: string): void {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true })
