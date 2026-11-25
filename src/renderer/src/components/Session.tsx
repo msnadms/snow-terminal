@@ -1,8 +1,9 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Pane, SessionStatus, Split } from '../appModel'
+import type { CodeLinkTarget, Pane, SessionStatus, Split } from '../appModel'
 import { useKeybinds } from '../keybinds'
 import { useCollapsiblePane } from '../useCollapsiblePane'
 import BrowserTab from './BrowserTab'
+import CodeLinkView from './CodeLinkView'
 import CommitView from './CommitView'
 import PanelRestore from './PanelRestore'
 import ResizeHandle from './ResizeHandle'
@@ -22,6 +23,7 @@ interface SessionProps {
   panes: Pane[]
   startupCommand: string
   split?: Split
+  overlay?: CodeLinkTarget
   keybinds: Record<string, string>
   savedBottomHeight?: number
   savedBottomCollapsed?: boolean
@@ -30,6 +32,7 @@ interface SessionProps {
   onPaneRatios: (sessionId: number, ratios: number[]) => void
   onClosePane: (sessionId: number, paneId: number) => void
   onCloseSplit: (sessionId: number) => void
+  onCloseOverlay: (sessionId: number) => void
   onOpenCommit: (cwd: string, hash: string) => void
   onCwd: (sessionId: number, cwd: string) => void
   onStatus: (sessionId: number, terminalStatuses: Record<number, SessionStatus>) => void
@@ -81,6 +84,7 @@ function Session({
   panes,
   startupCommand,
   split,
+  overlay,
   keybinds,
   savedBottomHeight,
   savedBottomCollapsed,
@@ -89,6 +93,7 @@ function Session({
   onPaneRatios,
   onClosePane,
   onCloseSplit,
+  onCloseOverlay,
   onOpenCommit,
   onCwd,
   onStatus,
@@ -184,7 +189,8 @@ function Session({
     })
   }
 
-  const keys = [...panes.map((p) => String(p.id)), ...(split ? ['diff'] : [])]
+  const slot = !!split || !!overlay
+  const keys = [...panes.map((p) => String(p.id)), ...(slot ? ['diff'] : [])]
   const sig = keys.join(',')
   const growValues = grows.sig === sig ? grows.values : savedGrows
 
@@ -288,7 +294,7 @@ function Session({
             </div>
           </Fragment>
         ))}
-        {split && (
+        {slot && (
           <>
             <ResizeHandle
               axis="x"
@@ -297,7 +303,17 @@ function Session({
               onEnd={persistRatios}
             />
             <div className="terminal-diff-split" style={{ flexGrow: growValues['diff'] }}>
-              {renderSplit(split, active, onOpenCommit, () => onCloseSplit(id))}
+              {split &&
+                renderSplit(split, active && !overlay, onOpenCommit, () => onCloseSplit(id))}
+              {overlay && (
+                <CodeLinkView
+                  key={overlay.key}
+                  active={active}
+                  target={overlay}
+                  onOpenCommit={onOpenCommit}
+                  onClose={() => onCloseOverlay(id)}
+                />
+              )}
             </div>
           </>
         )}

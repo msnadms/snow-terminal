@@ -1,6 +1,7 @@
 import type { GitRepo } from './components/GitPanel'
 import { basename, isInside, normalizePath, shortHash, uniqueBy } from './format'
 import type { Preset } from './useSnowconfig'
+import type { AgentSession } from './useAgents'
 import type { OpenSession, WorkflowReviewTarget } from './workflowRows'
 import { statusRank, tabStatusFrom, type AgentDir, type SessionStatus } from './agentStatus'
 
@@ -329,5 +330,53 @@ export function moveTabGroup<T>(ordered: T[], from: number, count: number, to: n
   const moved = next.splice(from, count)
   const target = to > from ? to - count : to
   next.splice(target, 0, ...moved)
+  return next
+}
+
+export type CodeLinks = NonNullable<AgentSession['links']>
+export type CodeLink = CodeLinks['items'][number]
+export type TabCodeLinks = Omit<CodeLinks, 'at'> & { updated: number; signature: string }
+export type CodeLinkTarget = CodeLink & { root: string; key: number }
+export type PanelView = 'git' | 'links'
+export type PanelChoice = { view: PanelView; signature?: string }
+
+export function panelViewFor(choice: PanelChoice | undefined, links?: TabCodeLinks): PanelView {
+  if (links && choice?.signature !== links.signature) return 'links'
+  return choice?.view ?? 'git'
+}
+
+export function tabForTerminal(
+  tabs: Tab[],
+  panes: Record<number, Pane[]>,
+  terminalId: number
+): number | null {
+  const tab = tabs.find(
+    (candidate) =>
+      candidate.kind === 'shell' &&
+      (candidate.bottomTerminalId === terminalId ||
+        (panes[candidate.id] ?? []).some((pane) => pane.id === terminalId))
+  )
+  return tab ? tab.id : null
+}
+
+export function mergeCodeLinks(
+  previous: Record<number, TabCodeLinks>,
+  sessions: AgentSession[],
+  tabs: Tab[],
+  panes: Record<number, Pane[]>
+): Record<number, TabCodeLinks> {
+  let next = previous
+  const ordered = [...sessions].sort((a, b) => (a.links?.at ?? 0) - (b.links?.at ?? 0))
+  for (const session of ordered) {
+    if (!session.links || session.terminalId === undefined) continue
+    const tabId = tabForTerminal(tabs, panes, session.terminalId)
+    if (tabId === null) continue
+    const { root, items } = session.links
+    const signature = JSON.stringify({ root, items })
+    const updated = session.links.at
+    const current = next[tabId]
+    if (current && (current.signature === signature || current.updated > updated)) continue
+    next = { ...next, [tabId]: { root, items, updated, signature } }
+  }
   return next
 }

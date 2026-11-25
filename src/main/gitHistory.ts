@@ -296,7 +296,15 @@ export function registerHistoryHandlers(): void {
       filePath: string
     ): Promise<GitBlameResult> => {
       try {
-        return parseBlame(await gitFor(cwd).raw(['blame', '--line-porcelain', rev, '--', filePath]))
+        return parseBlame(
+          await gitFor(cwd).raw([
+            'blame',
+            '--line-porcelain',
+            ...(rev ? [rev] : []),
+            '--',
+            filePath
+          ])
+        )
       } catch {
         return { lines: {}, source: null }
       }

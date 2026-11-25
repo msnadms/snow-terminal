@@ -3,14 +3,18 @@ import {
   commandItemsOf,
   commandPresetsOf,
   inheritedPreset,
+  mergeCodeLinks,
+  panelViewFor,
   moveTab,
   moveTabGroup,
   presetIndexFor,
   repoEntriesOf,
+  tabForTerminal,
   tabLabels,
   type Tab
 } from '@renderer/appModel'
 import type { Preset } from '@renderer/useSnowconfig'
+import type { AgentSession } from '@renderer/useAgents'
 
 const presets = [
   { name: 'snow', cwd: '/src/snow', commands: ['npm run dev'] },
@@ -126,5 +130,69 @@ describe('tab moves', () => {
     expect(moveTabGroup(['a', 'b', 'c', 'd'], 2, 2, 0)).toEqual(['c', 'd', 'a', 'b'])
     expect(moveTabGroup(['a', 'b', 'c', 'd'], 0, 2, 1)).toBeNull()
     expect(moveTabGroup(['a', 'b', 'c', 'd'], 0, 0, 3)).toBeNull()
+  })
+})
+
+describe('code links', () => {
+  const tabs: Tab[] = [
+    { kind: 'shell', id: 1, bottomTerminalId: 10 },
+    { kind: 'shell', id: 2, bottomTerminalId: 20 }
+  ]
+  const panes = { 1: [{ id: 11 }], 2: [{ id: 21 }, { id: 22 }] }
+  const session = (terminalId: number, updated: number, path: string): AgentSession => ({
+    sessionId: `s${terminalId}`,
+    terminalId,
+    cwd: '/repo',
+    state: 'idle',
+    detail: '',
+    agent: 'claude',
+    updated,
+    links: { root: '/repo', at: updated, items: [{ path, line: 1 }] }
+  })
+
+  it('maps a terminal to the tab that owns it', () => {
+    expect(tabForTerminal(tabs, panes, 22)).toBe(2)
+    expect(tabForTerminal(tabs, panes, 10)).toBe(1)
+    expect(tabForTerminal(tabs, panes, 99)).toBeNull()
+  })
+
+  it('keeps the newest set per tab and ignores unchanged links', () => {
+    const first = mergeCodeLinks({}, [session(11, 5, 'a.ts'), session(22, 6, 'b.ts')], tabs, panes)
+    expect(first[1].items[0].path).toBe('a.ts')
+    expect(first[2].items[0].path).toBe('b.ts')
+
+    expect(mergeCodeLinks(first, [session(11, 9, 'a.ts')], tabs, panes)).toBe(first)
+    const replaced = mergeCodeLinks(first, [session(21, 9, 'c.ts')], tabs, panes)
+    expect(replaced[2]).toMatchObject({ updated: 9, items: [{ path: 'c.ts', line: 1 }] })
+    expect(mergeCodeLinks(replaced, [session(22, 6, 'b.ts')], tabs, panes)).toBe(replaced)
+  })
+
+  it('orders by when the links were extracted, not by the latest status write', () => {
+    const stale = {
+      ...session(21, 300, 'old.ts'),
+      links: { root: '/repo', at: 100, items: [{ path: 'old.ts' }] }
+    }
+    const fresh = {
+      ...session(22, 250, 'new.ts'),
+      links: { root: '/repo', at: 250, items: [{ path: 'new.ts' }] }
+    }
+    const merged = mergeCodeLinks({}, [stale, fresh], tabs, panes)
+    expect(merged[2]).toMatchObject({ updated: 250, items: [{ path: 'new.ts' }] })
+    const rewritten = { ...stale, updated: 400 }
+    expect(mergeCodeLinks(merged, [rewritten], tabs, panes)).toBe(merged)
+  })
+})
+
+describe('panelViewFor', () => {
+  const links = { root: '/repo', items: [], updated: 1, signature: 'a' }
+
+  it('switches to links when a tab gets a new set, then honours the choice', () => {
+    expect(panelViewFor(undefined, undefined)).toBe('git')
+    expect(panelViewFor(undefined, links)).toBe('links')
+    expect(panelViewFor({ view: 'git', signature: 'a' }, links)).toBe('git')
+    expect(panelViewFor({ view: 'git', signature: 'a' }, { ...links, signature: 'b' })).toBe(
+      'links'
+    )
+    expect(panelViewFor({ view: 'links' }, undefined)).toBe('links')
   })
 })

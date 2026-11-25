@@ -30,6 +30,8 @@ import {
   commandItemsOf,
   commandPresetsOf,
   inheritedPreset,
+  mergeCodeLinks,
+  panelViewFor,
   moveTab,
   moveTabGroup,
   openSessionsOf,
@@ -41,11 +43,15 @@ import {
   tabLabels,
   type ActiveId,
   type AppPage,
+  type CodeLinkTarget,
   type CommandItem,
   type Pane,
+  type PanelChoice,
+  type PanelView,
   type RepoEntry,
   type Split,
   type Tab,
+  type TabCodeLinks,
   type TerminalStatuses
 } from './appModel'
 import {
@@ -65,6 +71,9 @@ function App(): React.JSX.Element {
   const [cwds, setCwds] = useState<Record<number, string | undefined>>({})
   const [panes, setPanes] = useState<Record<number, Pane[]>>({})
   const [splits, setSplits] = useState<Record<number, Split>>({})
+  const [overlays, setOverlays] = useState<Record<number, CodeLinkTarget>>({})
+  const [codeLinks, setCodeLinks] = useState<Record<number, TabCodeLinks>>({})
+  const [panelChoices, setPanelChoices] = useState<Record<number, PanelChoice>>({})
   const [browserTitles, setBrowserTitles] = useState<Record<number, string>>({})
   const [terminalStatuses, setTerminalStatuses] = useState<TerminalStatuses>({})
   const [titles, setTitles] = useState<Record<number, string>>({})
@@ -117,6 +126,15 @@ function App(): React.JSX.Element {
   })
 
   const activeTab = tabs.find((t) => t.id === activeId)
+  const panelKey = activeTab?.id ?? -1
+  const activeLinks = activeTab?.kind === 'shell' ? codeLinks[activeTab.id] : undefined
+  const activeSignature = activeLinks?.signature
+  const panelView = panelViewFor(panelChoices[panelKey], activeLinks)
+  const choosePanelView = useCallback(
+    (view: PanelView): void =>
+      setPanelChoices((prev) => ({ ...prev, [panelKey]: { view, signature: activeSignature } })),
+    [panelKey, activeSignature]
+  )
   const cwd =
     activeTab && (activeTab.kind === 'commit' || activeTab.kind === 'diff')
       ? activeTab.cwd
@@ -167,6 +185,19 @@ function App(): React.JSX.Element {
   const tabCwd = useCallback((tab: Tab): string | undefined => tabCwdOf(tab, cwds), [cwds])
 
   const agentSessions = useAgents()
+  const [linkSource, setLinkSource] = useState<{
+    sessions: AgentSession[]
+    tabs: Tab[]
+    panes: Record<number, Pane[]>
+  } | null>(null)
+  if (
+    linkSource?.sessions !== agentSessions ||
+    linkSource.tabs !== tabs ||
+    linkSource.panes !== panes
+  ) {
+    setLinkSource({ sessions: agentSessions, tabs, panes })
+    setCodeLinks((prev) => mergeCodeLinks(prev, agentSessions, tabs, panes))
+  }
   const statusAgentSessions = useMemo(
     () => visibleAgentSessions(agentSessions, interruptedTerminals),
     [agentSessions, interruptedTerminals]
@@ -415,9 +446,19 @@ function App(): React.JSX.Element {
     splitActive()
   }, [splitActive])
 
+  const closeOverlay = useCallback((sessionId: number): void => {
+    setOverlays((prev) => {
+      if (!(sessionId in prev)) return prev
+      const next = { ...prev }
+      delete next[sessionId]
+      return next
+    })
+  }, [])
+
   const openSplit = (split: Split): void => {
     if (!activeTab || activeTab.kind !== 'shell') return
     setSplits((prev) => ({ ...prev, [activeTab.id]: split }))
+    closeOverlay(activeTab.id)
   }
 
   const openCommitSplit = (cwd: string, hash: string): void => {
@@ -433,7 +474,10 @@ function App(): React.JSX.Element {
     openSplit({ kind: 'browser', id, url: 'https://www.google.com' })
   }
 
-  const hasBrowserSplit = activeTab?.kind === 'shell' && splits[activeTab.id]?.kind === 'browser'
+  const hasBrowserSplit =
+    activeTab?.kind === 'shell' &&
+    splits[activeTab.id]?.kind === 'browser' &&
+    !overlays[activeTab.id]
 
   const getSplitMenuPosition = useCallback(
     (button: DOMRect): { x: number; y: number } => {
@@ -453,6 +497,12 @@ function App(): React.JSX.Element {
       delete next[sessionId]
       return next
     })
+  }, [])
+
+  const openCodeLink = useCallback((target: Omit<CodeLinkTarget, 'key'>): void => {
+    const tab = tabsRef.current.find((t) => t.id === activeIdRef.current)
+    if (!tab || tab.kind !== 'shell') return
+    setOverlays((prev) => ({ ...prev, [tab.id]: { ...target, key: Date.now() } }))
   }, [])
 
   const closePane = useCallback((sessionId: number, paneId: number): void => {
@@ -536,6 +586,9 @@ function App(): React.JSX.Element {
     setCwds(dropKeys)
     setPanes(dropKeys)
     setSplits(dropKeys)
+    setOverlays(dropKeys)
+    setCodeLinks(dropKeys)
+    setPanelChoices(dropKeys)
     setBrowserTitles(dropKeys)
     setTerminalStatuses(dropKeys)
     setTitles(dropKeys)
@@ -795,6 +848,7 @@ function App(): React.JSX.Element {
                     panes={panes[tab.id] ?? []}
                     startupCommand={tab.startupCommand ?? startupCommand ?? 'claude'}
                     split={splits[tab.id]}
+                    overlay={overlays[tab.id]}
                     keybinds={keybinds}
                     savedBottomHeight={layout.bottomHeight}
                     savedBottomCollapsed={layout.bottomCollapsed}
@@ -802,6 +856,7 @@ function App(): React.JSX.Element {
                     onBottomLayout={handleBottomLayout}
                     onPaneRatios={handlePaneRatios}
                     onCloseSplit={closeSplit}
+                    onCloseOverlay={closeOverlay}
                     onOpenCommit={openCommit}
                     onClosePane={closePane}
                     onCwd={handleSessionCwd}
@@ -838,6 +893,10 @@ function App(): React.JSX.Element {
             onOpenCommitSplit={activeTab?.kind === 'shell' ? openCommitSplit : undefined}
             onOpenDiff={openDiff}
             onOpenDiffSplit={activeTab?.kind === 'shell' ? openDiffSplit : undefined}
+            links={activeLinks}
+            view={panelView}
+            onViewChange={choosePanelView}
+            onOpenLink={activeTab?.kind === 'shell' ? openCodeLink : undefined}
           />
         </PaneBoundary>
         {gitPane.collapsed && (

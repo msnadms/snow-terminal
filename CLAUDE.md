@@ -430,8 +430,8 @@ from "blocked on a permission prompt", cannot see thinking, and pins `busy` on a
 
 The channel is a **directory of files, not IPC**: the hook is a short-lived child of the user's agent
 process and cannot talk to a running snow. It writes `~/.config/snow/agents/<session_id>.json`
-(`{ sessionId, terminalBinding?, terminalOwner?, cwd, state, detail, promptId?, turnEnded?, agent,
-updated }`; legacy `terminal` accepted), and `src/main/agents.ts` reads and watches that directory.
+(`{ sessionId, terminalBinding?, terminalOwner?, cwd, state, detail, promptId?, turnEnded?, links?, linkedPrompt?, linksFrom?,
+agent, updated }`; legacy `terminal` accepted), and `src/main/agents.ts` reads and watches that directory.
 Snow only reads; only the hook writes.
 
 This is an **observation contract, not an agent-control API**. Other dispatchers may write the same
@@ -515,6 +515,66 @@ folds a tab-less agent directory in only while working or waiting — `idle` is 
 session killed without firing `SessionEnd`. A tab's **own** dot still shows `idle`.
 
 Where two agents share a directory the **loudest state wins, not the newest**.
+
+#### Code links
+
+On `Stop` the hook reads the turn's final reply (`last_assistant_message`, else the transcript tail
+after the last `user` entry) and extracts cited locations: markdown links (`path#L12-L20`,
+`path:12`), bare `path.ext:12[-20][:col]`, and line-less paths containing a separator. Only existing
+files inside `git rev-parse --show-toplevel` survive, compared by **real path** on both sides (git
+reports the resolved root, so a symlinked cwd would otherwise put every file outside it). A relative
+path is tried against the cwd, then against the repo root, since agents cite root-relative paths from
+subdirectories. Each candidate must lie **lexically** inside the root before it is statted — a
+synchronous stat of a cited network path blocks the event loop, which the `setTimeout` watchdog cannot
+interrupt. The same holds for symlinks and junctions: `linkFree` walks each path component with
+`lstat` and follows a link only when its target is itself lexically inside a root. Stored
+root-relative as `links: { root, at, items: [{ path, line?, endLine? }] }` (deduped, capped at 50).
+Extraction runs before the record is written, so it is **bounded** to stay inside the 5 s watchdog:
+500 candidates, 200 distinct stats, a 2 s budget ending no later than 3 s after the hook started. Every other event carries `previous.links` forward
+unchanged, `at` included; a Stop citing nothing drops them, but a Stop whose reply could not be read
+(no `last_assistant_message` and no assistant text after the transcript's last `user` entry), or whose repo root git could not resolve, keeps
+them. Extraction runs before the record is read for the write, so a slow Stop holds no stale read: the
+read-to-write window stays milliseconds. A Stop whose record moved on to a different `promptId` while it
+extracted only contributes its links, leaving the newer turn's state alone — and contributes nothing
+once `linksFrom` (the prompt whose Stop last actually extracted, unlike `linkedPrompt`, which every Stop
+sets) names the newer turn. Every Stop records `linkedPrompt`; the away-recap's `Stop` — already `turnEnded`, with the
+`prompt_id` a Stop already extracted for, and no `stop_hook_active` — carries the links forward rather
+than re-extracting from the recap. Keying on `linkedPrompt` rather than `promptId` is what lets the
+real Stop extract after an `idle_prompt` ended the turn early, and `stop_hook_active` marks a turn a
+Stop hook continued. `parseLinks` in `agents.ts` validates the shape — an absolute `root`, a positive
+`at` (required, since the renderer orders by it), item paths neither absolute nor containing `..`
+segments, items deduped — since other dispatchers write records too; links ride `agents:changed`.
+
+The renderer **holds its own copy**: `mergeCodeLinks` (`appModel.ts`) maps each record's
+`terminalId` to the owning tab and replaces that tab's set only when the links' `{ root, items }`
+signature changes **and** its `at` is not older — `at`, not `updated`, because a busy agent carrying
+an old set forward rewrites `updated` on every event and would otherwise overwrite a sibling pane's
+fresh links. A link set survives record expiry, `SessionEnd` and later linkless turns, and a status
+rewrite never re-flags it as new. `App` re-merges when `tabs` or `panes` change as well, so a record
+landing before its pane commits is picked up. The Git/Links view is **per tab**, held in `App` as
+`panelChoices` (the user's last pick plus the signature it was made against, cleared by `dropKeys`
+with the rest of a closed tab's state). `panelViewFor` derives the view: Links whenever the tab's
+signature differs from the one the choice was made against, so returning to a tab whose links were
+already shown leaves the panel where it is. Under Links the repo sections are hidden, not
+unmounted, so their watchers and loaded state survive the switch.
+
+Clicking a link sets the tab's **overlay** (`overlays` in `App`, distinct from `splits`). `Session`
+renders it in the rightmost slot, reusing the `'diff'` sizing key; the existing split stays mounted
+with `active={false}` (so a browser split's `WebContentsView` hides and keeps its page), and closing
+the overlay restores it. Opening a split clears the overlay, otherwise the new split would mount
+hidden beneath it. `CodeLinkView` tries the working diff, then `git:reviewDiff`, taking one only
+when its parsed patch actually holds the file (a truncated patch may not) and, for a line link, the
+cited range touches a hunk. Otherwise it shows the whole file via `git:blame`'s `source` — an empty
+`rev` blames the working tree, so line numbers match what the agent read — falling back to `HEAD`. No
+new read channel, so a file in none of those (gitignored, or too large for `source`) is explained
+rather than read. "No changes in this file" is claimed only when both diffs actually loaded, and a file
+listed in a diff whose patch was truncated past it still counts as changed. A `git:changed` while the tab is hidden only bumps a counter; the view reloads
+on activation only when that counter, or the target, moved since its last load. The
+whole-file view renders at most `sourceWindowLines` (2000) around the cited range (`sourceWindow`)
+until the user asks for all of it, since it re-renders on every `git:changed` beside xterm. `DiffBody`'s `only`
+restricts it to the one file and `focusLine` becomes react-diff-view
+`selectedChanges` (`selectedKeysFor` in `codeLinks.ts`), scrolled into view **once per mount** so a
+`git:changed` reload never yanks the user back.
 
 #### Blocking shared-stash commands
 

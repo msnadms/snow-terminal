@@ -1,6 +1,8 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import CodeLinksList from './CodeLinksList'
 import DiscardDialog from './DiscardDialog'
 import FailureDialog from './FailureDialog'
+import type { CodeLinkTarget, PanelView, TabCodeLinks } from '../appModel'
 import { shortHash, type Failure } from '../format'
 import { useGitAction } from '../useGitAction'
 import { fallbackLanes, useGitColors } from '../useGitColors'
@@ -560,6 +562,10 @@ interface GitPanelProps {
   onOpenCommitSplit?: OpenCommit
   onOpenDiff?: OpenDiff
   onOpenDiffSplit?: (cwd: string) => void
+  links?: TabCodeLinks
+  view: PanelView
+  onViewChange: (view: PanelView) => void
+  onOpenLink?: (target: Omit<CodeLinkTarget, 'key'>) => void
 }
 
 function GitPanel({
@@ -571,7 +577,11 @@ function GitPanel({
   onOpenCommit,
   onOpenCommitSplit,
   onOpenDiff,
-  onOpenDiffSplit
+  onOpenDiffSplit,
+  links,
+  view,
+  onViewChange,
+  onOpenLink
 }: GitPanelProps): React.JSX.Element {
   const colors = useGitColors()
   const lanes = colors?.lanes ?? fallbackLanes
@@ -581,16 +591,71 @@ function GitPanel({
       ? { flexBasis: width }
       : undefined
 
-  if (!repos) return <div className="git-panel" style={style} ref={panelRef} />
-
-  if (repos.length === 0) {
+  const content = (): React.ReactNode => {
+    if (!repos) return null
+    if (repos.length === 0)
+      return view === 'git' ? <div className="git-empty">Not a git repository</div> : null
     return (
-      <div className="git-panel" style={style} ref={panelRef}>
-        <div className="git-empty">Not a git repository</div>
-      </div>
+      <RepoGroups
+        hidden={view !== 'git'}
+        repos={repos}
+        lanes={lanes}
+        gradients={gradients}
+        onOpenCommit={onOpenCommit}
+        onOpenCommitSplit={onOpenCommitSplit}
+        onOpenDiff={onOpenDiff}
+        onOpenDiffSplit={onOpenDiffSplit}
+      />
     )
   }
 
+  return (
+    <div className="git-panel" style={style} ref={panelRef}>
+      <div className="git-panel-tabs" role="tablist">
+        <button
+          role="tab"
+          aria-selected={view === 'git'}
+          className={`git-panel-tab${view === 'git' ? ' git-panel-tab-active' : ''}`}
+          onClick={() => onViewChange('git')}
+        >
+          
+        </button>
+        <button
+          role="tab"
+          aria-selected={view === 'links'}
+          className={`git-panel-tab${view === 'links' ? ' git-panel-tab-active' : ''}`}
+          onClick={() => onViewChange('links')}
+        >
+          󰌹
+        </button>
+      </div>
+      {view === 'links' && <CodeLinksList links={links} onOpenLink={onOpenLink} />}
+      {content()}
+    </div>
+  )
+}
+
+interface RepoGroupsProps {
+  hidden: boolean
+  repos: GitRepo[]
+  lanes: string[]
+  gradients: boolean
+  onOpenCommit?: OpenCommit
+  onOpenCommitSplit?: OpenCommit
+  onOpenDiff?: OpenDiff
+  onOpenDiffSplit?: (cwd: string) => void
+}
+
+function RepoGroups({
+  hidden,
+  repos,
+  lanes,
+  gradients,
+  onOpenCommit,
+  onOpenCommitSplit,
+  onOpenDiff,
+  onOpenDiffSplit
+}: RepoGroupsProps): React.JSX.Element {
   const groups = Array.from(
     repos.reduce((byCommon, repo) => {
       const group = byCommon.get(repo.common) ?? []
@@ -602,44 +667,42 @@ function GitPanel({
   const grouped = groups.some(([, group]) => group.length > 1)
 
   return (
-    <div className="git-panel" style={style} ref={panelRef}>
-      <div className="git-scroll">
-        {groups.map(([common, group]) => {
-          const title = grouped && (
-            <div className="git-worktree-group-title">
-              {common
-                .replace(/[\\/]+$/, '')
-                .split(/[\\/]/)
-                .pop()}
-            </div>
-          )
-          const sections = group.map((repo) => (
-            <RepoSection
-              key={repo.path}
-              repo={repo}
-              multi={repos.length > 1}
-              lanes={lanes}
-              gradients={gradients}
-              onOpenCommit={onOpenCommit}
-              onOpenCommitSplit={onOpenCommitSplit}
-              onOpenDiff={onOpenDiff}
-              onOpenDiffSplit={onOpenDiffSplit}
-            />
-          ))
+    <div className="git-scroll" style={hidden ? { display: 'none' } : undefined}>
+      {groups.map(([common, group]) => {
+        const title = grouped && (
+          <div className="git-worktree-group-title">
+            {common
+              .replace(/[\\/]+$/, '')
+              .split(/[\\/]/)
+              .pop()}
+          </div>
+        )
+        const sections = group.map((repo) => (
+          <RepoSection
+            key={repo.path}
+            repo={repo}
+            multi={repos.length > 1}
+            lanes={lanes}
+            gradients={gradients}
+            onOpenCommit={onOpenCommit}
+            onOpenCommitSplit={onOpenCommitSplit}
+            onOpenDiff={onOpenDiff}
+            onOpenDiffSplit={onOpenDiffSplit}
+          />
+        ))
 
-          return group.length > 1 ? (
-            <div key={common} className="git-worktree-group">
-              {title}
-              {sections}
-            </div>
-          ) : (
-            <Fragment key={common}>
-              {title}
-              {sections}
-            </Fragment>
-          )
-        })}
-      </div>
+        return group.length > 1 ? (
+          <div key={common} className="git-worktree-group">
+            {title}
+            {sections}
+          </div>
+        ) : (
+          <Fragment key={common}>
+            {title}
+            {sections}
+          </Fragment>
+        )
+      })}
     </div>
   )
 }

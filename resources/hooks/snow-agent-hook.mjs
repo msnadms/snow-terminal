@@ -3,6 +3,8 @@ import os from 'os'
 import path from 'path'
 import { execFileSync } from 'child_process'
 
+const startedAt = Date.now()
+
 const stateByEvent = {
   SessionStart: 'idle',
   UserPromptSubmit: 'busy',
@@ -476,6 +478,303 @@ function warn(reason) {
   fs.writeSync(1, JSON.stringify({ systemMessage: reason }))
 }
 
+const linkCap = 50
+const replyCap = 200_000
+const transcriptTail = 512 * 1024
+const markdownLink = /(?:\[([^[\]\n]*))?\]\((?:<([^>\n]+)>|([^)\s]+))(?:\s+"[^"\n]*")?\)/g
+const fileUrl = /^file:\/\/(?:localhost)?(?=\/)/i
+const pathToken =
+  /(?<![\w./\\:@~+-])(?:[A-Za-z]:[\\/]|~[\\/]|[\\/])?(?:[\w.@+-]+[\\/])*[\w.@+-]*\.[A-Za-z0-9]+(?:#L\d+(?:-L?\d+)?|:\d+(?:[-–]\d+)?(?::\d+)?)?/g
+const linkTarget = /^(.*?)(?:#L(\d+)(?:-L?(\d+))?|:(\d+)(?:[-–](\d+))?(?::\d+)?)?$/
+const urlScheme = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//
+
+function blockText(content) {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('\n')
+}
+
+function transcriptReply(file) {
+  if (typeof file !== 'string' || !file) return null
+  let raw = ''
+  try {
+    const fd = fs.openSync(file, 'r')
+    try {
+      const size = fs.fstatSync(fd).size
+      const length = Math.min(size, transcriptTail)
+      const buffer = Buffer.alloc(length)
+      fs.readSync(fd, buffer, 0, length, size - length)
+      raw = buffer.toString('utf8')
+    } finally {
+      fs.closeSync(fd)
+    }
+  } catch {
+    return null
+  }
+
+  const parts = []
+  for (const line of raw.split('\n').reverse()) {
+    let entry
+    try {
+      entry = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (entry?.type === 'user') break
+    if (entry?.type !== 'assistant') continue
+    const value = blockText(entry.message?.content)
+    if (value) parts.unshift(value)
+  }
+  return parts.length > 0 ? parts.join('\n') : null
+}
+
+function lastReply(event) {
+  const reply =
+    typeof event.last_assistant_message === 'string' && event.last_assistant_message
+      ? event.last_assistant_message
+      : transcriptReply(event.transcript_path)
+  return reply === null ? null : reply.slice(0, replyCap)
+}
+
+function lineNumber(value) {
+  const n = Number(value)
+  return Number.isSafeInteger(n) && n > 0 ? n : undefined
+}
+
+function fromFileUrl(raw) {
+  if (!fileUrl.test(raw)) return raw
+  const local = raw.replace(fileUrl, '')
+  return /^\/[A-Za-z]:/.test(local) ? local.slice(1) : local
+}
+
+function parseTarget(target, explicit) {
+  const raw = fromFileUrl(target)
+  if (urlScheme.test(raw)) return null
+  let decoded = raw
+  try {
+    decoded = decodeURI(raw)
+  } catch {
+    decoded = raw
+  }
+  const match = linkTarget.exec(decoded)
+  if (!match || !match[1]) return null
+  const line = lineNumber(match[2] ?? match[4])
+  const end = lineNumber(match[3] ?? match[5])
+  if (!explicit && !line && !/[\\/]/.test(match[1])) return null
+  return { file: match[1], line, endLine: line && end && end > line ? end : undefined }
+}
+
+function baseName(file) {
+  return file.split(/[\\/]/).pop()
+}
+
+function withLabelLine(target, label) {
+  if (target.line) return target
+  for (const match of label.matchAll(pathToken)) {
+    const cited = parseTarget(match[0], false)
+    if (cited?.line && baseName(cited.file) === baseName(target.file))
+      return { ...target, line: cited.line, endLine: cited.endLine }
+  }
+  return target
+}
+
+function candidates(reply) {
+  const found = []
+  const spans = []
+  for (const match of reply.matchAll(markdownLink)) {
+    const target = parseTarget(match[2] ?? match[3], true)
+    if (!target) continue
+    spans.push([match.index, match.index + match[0].length])
+    found.push({ index: match.index, target: withLabelLine(target, match[1] ?? '') })
+  }
+  for (const match of reply.matchAll(pathToken)) {
+    if (spans.some(([start, end]) => match.index >= start && match.index < end)) continue
+    found.push({ index: match.index, target: parseTarget(match[0], false) })
+  }
+  return found
+    .filter((entry) => entry.target)
+    .sort((a, b) => a.index - b.index)
+    .map((entry) => entry.target)
+}
+
+const candidateCap = 500
+const linkBudgetMs = 2000
+const linkDeadlineMs = 3000
+const statCap = 200
+
+const symlinkHops = 16
+
+function linkFree(file, roots) {
+  let current = file
+  for (let hop = 0; hop < symlinkHops; hop++) {
+    const base = roots.find((root) => inside(current, root))
+    if (!base) return null
+    let walked = path.resolve(base)
+    let redirected = null
+    for (const part of path.relative(walked, current).split(path.sep).filter(Boolean)) {
+      walked = path.join(walked, part)
+      if (!fs.lstatSync(walked).isSymbolicLink()) continue
+      const target = path.resolve(path.dirname(walked), fs.readlinkSync(walked))
+      redirected = path.join(target, path.relative(walked, current))
+      break
+    }
+    if (redirected === null) return current
+    current = redirected
+  }
+  return null
+}
+
+function realPath(file) {
+  try {
+    return fs.realpathSync.native(file)
+  } catch {
+    return fs.realpathSync(file)
+  }
+}
+
+function realFile(file, roots) {
+  try {
+    const resolved = linkFree(file, roots)
+    return resolved && fs.statSync(resolved).isFile() ? realPath(resolved) : null
+  } catch {
+    return null
+  }
+}
+
+function repoRoot(cwd) {
+  try {
+    const [root, cdup = ''] = execFileSync('git', ['rev-parse', '--show-toplevel', '--show-cdup'], {
+      cwd,
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 2000
+    })
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+    if (!root) return null
+    return { root, real: realPath(root), logical: path.resolve(cwd, cdup) }
+  } catch {
+    return null
+  }
+}
+
+function insideRoot(relative) {
+  return (
+    !!relative &&
+    relative !== '..' &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  )
+}
+
+function candidateFiles(file, cwd, repo) {
+  const expanded = expandHome(file)
+  const files = [path.resolve(cwd, expanded)]
+  if (!path.isAbsolute(expanded)) files.push(path.resolve(repo.logical, expanded))
+  return [...new Set(files)].filter(
+    (candidate) =>
+      inside(candidate, repo.logical) ||
+      inside(candidate, repo.root) ||
+      inside(candidate, repo.real)
+  )
+}
+
+function extractLinks(reply, cwd) {
+  if (typeof cwd !== 'string' || !cwd) return undefined
+  if (!reply) return null
+  const targets = candidates(reply).slice(0, candidateCap)
+  if (targets.length === 0) return null
+  const repo = repoRoot(cwd)
+  if (!repo) return undefined
+
+  const roots = [repo.real, repo.root, repo.logical]
+  const deadline = Math.min(Date.now() + linkBudgetMs, startedAt + linkDeadlineMs)
+  const resolved = new Map()
+  const seen = new Set()
+  const items = []
+  for (const target of targets) {
+    if (items.length === linkCap || Date.now() > deadline) break
+    let real = null
+    for (const file of candidateFiles(target.file, cwd, repo)) {
+      if (!resolved.has(file)) {
+        if (resolved.size === statCap) break
+        resolved.set(file, realFile(file, roots))
+      }
+      real = resolved.get(file)
+      if (real) break
+    }
+    if (!real) continue
+    const relative = path.relative(repo.real, real)
+    if (!insideRoot(relative)) continue
+    const item = {
+      path: relative.split(path.sep).join('/'),
+      ...(target.line ? { line: target.line } : {}),
+      ...(target.endLine ? { endLine: target.endLine } : {})
+    }
+    const key = `${item.path}:${item.line ?? ''}-${item.endLine ?? ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    items.push(item)
+  }
+  return items.length > 0 ? { root: repo.root, at: Date.now(), items } : null
+}
+
+function recapStop(event, previous) {
+  const promptId = text(event.prompt_id)
+  return (
+    previous?.turnEnded === true &&
+    event.stop_hook_active !== true &&
+    !!promptId &&
+    promptId === text(previous.linkedPrompt)
+  )
+}
+
+function stopLinks(event, previous) {
+  if (event.hook_event_name !== 'Stop' || recapStop(event, previous)) return undefined
+  try {
+    const reply = lastReply(event)
+    return reply === null ? undefined : extractLinks(reply, event.cwd)
+  } catch {
+    return undefined
+  }
+}
+
+function overtaken(event, before, previous) {
+  const promptId = text(event.prompt_id)
+  const current = text(previous?.promptId)
+  return (
+    event.hook_event_name === 'Stop' &&
+    !!promptId &&
+    !!current &&
+    promptId !== current &&
+    previous?.updated !== before?.updated
+  )
+}
+
+function writeLinksOnly(file, event, previous, links) {
+  if (links === (previous.links ?? null)) return
+  if (text(previous.linksFrom) === text(previous.promptId)) return
+  const rest = { ...previous }
+  delete rest.links
+  writeRecord(file, {
+    ...rest,
+    ...(links ? { links } : {}),
+    linkedPrompt: text(event.prompt_id),
+    linksFrom: text(event.prompt_id)
+  })
+}
+
+function freshLinks(event, previous, extracted) {
+  return event.hook_event_name === 'Stop' && !recapStop(event, previous) && extracted !== undefined
+}
+
+function linksFor(event, previous, extracted) {
+  return freshLinks(event, previous, extracted) ? extracted : (previous?.links ?? null)
+}
+
 async function readStdin() {
   const chunks = []
   for await (const chunk of process.stdin) chunks.push(chunk)
@@ -508,7 +807,13 @@ async function main() {
     return
   }
 
+  const before = event.hook_event_name === 'Stop' ? readRecord(file) : null
+  const extracted = event.hook_event_name === 'Stop' ? stopLinks(event, before) : undefined
   const previous = readRecord(file)
+  if (overtaken(event, before, previous)) {
+    writeLinksOnly(file, event, previous, linksFor(event, previous, extracted))
+    return
+  }
   const state = stateFor(event, previous)
   if (!state) return
 
@@ -526,6 +831,13 @@ async function main() {
       ((previous?.turnEnded === true && promptId === text(previous.promptId)) ||
         previous?.state === 'busy'))
 
+  const links = linksFor(event, previous, extracted)
+  const linkedPrompt =
+    event.hook_event_name === 'Stop' ? text(event.prompt_id) : text(previous?.linkedPrompt)
+  const linksFrom = freshLinks(event, previous, extracted)
+    ? text(event.prompt_id)
+    : text(previous?.linksFrom)
+
   fs.mkdirSync(dir, { recursive: true })
   const terminalBinding = text(process.env.SNOW_AGENT_BINDING)
   const terminalOwner = text(process.env.SNOW_AGENT_OWNER)
@@ -542,6 +854,9 @@ async function main() {
     detail,
     ...(promptId ? { promptId } : {}),
     ...(turnEnded ? { turnEnded: true } : {}),
+    ...(links ? { links } : {}),
+    ...(linkedPrompt ? { linkedPrompt } : {}),
+    ...(linksFrom ? { linksFrom } : {}),
     agent: process.argv[2] === 'codex' ? 'codex' : 'claude',
     updated: Date.now()
   })

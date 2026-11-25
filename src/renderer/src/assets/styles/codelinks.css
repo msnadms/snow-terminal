@@ -1,0 +1,143 @@
+.git-panel-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px 0;
+  border-bottom: 1px solid var(--git-border, #28334c);
+}
+
+.git-panel-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  color: var(--git-muted, #78859c);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font: inherit;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.git-panel-tab:hover {
+  color: var(--git-text, #c5d0e2);
+}
+
+.git-panel-tab-active {
+  color: var(--git-strong-text, #eef2fb);
+  border-bottom-color: var(--git-accent, #c3d9f2);
+}
+
+.code-links {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+
+.code-link-row {
+  display: flex;
+  align-items: baseline;
+  width: 100%;
+  padding: 4px 12px;
+  color: var(--git-text, #c5d0e2);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.code-link-row:hover:not(:disabled) {
+  background: var(--git-diff-hover, #232a3d);
+}
+
+.code-link-row:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.code-link-dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--git-muted, #78859c);
+}
+
+.code-link-name {
+  flex: 0 0 auto;
+  color: var(--git-strong-text, #eef2fb);
+}
+
+.code-link-lines {
+  flex: 0 0 auto;
+  color: var(--git-hash, #a0bce2);
+}
+
+.commit-file-unchanged {
+  flex: 0 0 auto;
+  font-size: 0.85em;
+  color: var(--git-muted, #78859c);
+}
+
+.commit-view .diff {
+  --diff-code-selected-background-color: color-mix(
+    in srgb,
+    var(--git-accent, #c3d9f2) 18%,
+    transparent
+  );
+  --diff-gutter-selected-background-color: color-mix(
+    in srgb,
+    var(--git-accent, #c3d9f2) 30%,
+    transparent
+  );
+}
+
+.code-link-source {
+  padding: 8px 0;
+  font-family: 'Hack Nerd Font Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--git-text, #c5d0e2);
+  user-select: text;
+}
+
+.code-link-line {
+  display: flex;
+  white-space: pre;
+}
+
+.code-link-line-selected {
+  background: color-mix(in srgb, var(--git-accent, #c3d9f2) 18%, transparent);
+}
+
+.code-link-number {
+  flex: 0 0 4em;
+  padding-right: 1em;
+  text-align: right;
+  color: var(--git-muted, #78859c);
+  user-select: none;
+}
+
+.code-link-text {
+  min-width: 0;
+}
+
+.code-link-more {
+  display: block;
+  margin: 0 0 8px 4em;
+  padding: 2px 8px;
+  color: var(--git-muted, #78859c);
+  background: transparent;
+  border: 1px solid var(--git-button-border, #2a3852);
+  font: inherit;
+  cursor: pointer;
+}
+
+.code-link-more:hover {
+  color: var(--git-text, #c5d0e2);
+}

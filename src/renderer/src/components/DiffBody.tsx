@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Diff, Hunk, parseDiff, useTokenizeWorker } from 'react-diff-view'
 import type { FileData, GutterOptions, ViewType } from 'react-diff-view'
+import { fileIndexFor, selectedKeysFor, type LineRange } from '@renderer/codeLinks'
 import { shortHash } from '@renderer/format'
 import { languageFor } from '@renderer/syntax'
 import 'react-diff-view/style/index.css'
@@ -19,6 +20,7 @@ function tokenizeWorker(): Worker {
 }
 
 const noHunks: FileData['hunks'] = []
+const noSelection: string[] = []
 
 export interface DiffStaging {
   busy: boolean
@@ -33,6 +35,7 @@ interface DiffFileProps {
   diff?: FileData
   view: ViewType
   sectionRef: (node: HTMLDivElement | null) => void
+  focusLine?: LineRange
   onOpenCommit?: (cwd: string, hash: string) => void
   staging?: DiffStaging
 }
@@ -44,6 +47,7 @@ function DiffFile({
   diff,
   view,
   sectionRef,
+  focusLine,
   onOpenCommit,
   staging
 }: DiffFileProps): React.JSX.Element {
@@ -94,6 +98,24 @@ function DiffFile({
   )
   const { tokens } = useTokenizeWorker(tokenizeWorker(), payload)
 
+  const selected = useMemo(
+    () => (focusLine && diff ? selectedKeysFor(diff.hunks, focusLine) : noSelection),
+    [focusLine, diff]
+  )
+  const outside = !!focusLine && !!diff && diff.hunks.length > 0 && selected.length === 0
+
+  const scrolledToFocus = useRef(false)
+  useEffect(() => {
+    if (!visible || selected.length === 0 || scrolledToFocus.current) return
+    const frame = requestAnimationFrame(() => {
+      const line = hostRef.current?.querySelector('.diff-code-selected')
+      if (!line) return
+      scrolledToFocus.current = true
+      line.scrollIntoView({ block: 'center' })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [visible, selected])
+
   const lines = blame?.lines
   const hasBlame = lines != null && Object.keys(lines).length > 0
 
@@ -130,6 +152,9 @@ function DiffFile({
           {file.oldPath && <span className="commit-file-old">{file.oldPath} → </span>}
           {file.path}
         </span>
+        {outside && focusLine && (
+          <span className="commit-file-unchanged">line {focusLine.start} is unchanged</span>
+        )}
         {staging && (
           <span className="commit-file-actions">
             <button
@@ -163,6 +188,7 @@ function DiffFile({
             diffType={diff.type}
             hunks={diff.hunks}
             tokens={tokens}
+            selectedChanges={selected}
             renderGutter={renderGutter}
           >
             {(hunks) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}
@@ -186,6 +212,8 @@ interface DiffBodyProps {
   truncatedNote: string
   focus?: string
   focusKey?: number
+  only?: string
+  focusLine?: LineRange
   onOpenCommit?: (cwd: string, hash: string) => void
   staging?: DiffStaging
 }
@@ -193,19 +221,28 @@ interface DiffBodyProps {
 function DiffBody({
   cwd,
   base,
-  files,
+  files: allFiles,
   patch,
   truncated,
   truncatedNote,
   focus,
   focusKey,
+  only,
+  focusLine,
   onOpenCommit,
   staging
 }: DiffBodyProps): React.JSX.Element {
   const [view, setView] = useState<ViewType>('unified')
   const sectionRefs = useRef<(HTMLDivElement | null)[]>([])
   const appliedFocus = useRef<number | null>(null)
-  const parsed = useMemo<FileData[]>(() => (patch ? parseDiff(patch) : []), [patch])
+  const parsedAll = useMemo<FileData[]>(() => (patch ? parseDiff(patch) : []), [patch])
+  const { files, parsed } = useMemo(() => {
+    if (!only) return { files: allFiles, parsed: parsedAll }
+    const index = fileIndexFor(allFiles, only)
+    return index === -1
+      ? { files: [], parsed: [] }
+      : { files: [allFiles[index]], parsed: [parsedAll[index]] }
+  }, [only, allFiles, parsedAll])
 
   useEffect(() => {
     if (focusKey === undefined || focusKey === appliedFocus.current) return
@@ -278,6 +315,7 @@ function DiffBody({
           view={view}
           onOpenCommit={onOpenCommit}
           staging={staging}
+          focusLine={only ? focusLine : undefined}
           sectionRef={(node) => {
             sectionRefs.current[i] = node
           }}

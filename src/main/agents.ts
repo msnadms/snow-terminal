@@ -9,6 +9,18 @@ import { addRecord, recordsFor, workflowsPath } from './registry'
 
 export type AgentState = 'busy' | 'attention' | 'idle'
 
+export interface CodeLink {
+  path: string
+  line?: number
+  endLine?: number
+}
+
+export interface CodeLinks {
+  root: string
+  at: number
+  items: CodeLink[]
+}
+
 export interface AgentSession {
   sessionId: string
   terminal?: string
@@ -19,6 +31,7 @@ export interface AgentSession {
   detail: string
   agent: string
   updated: number
+  links?: CodeLinks
 }
 
 export interface AgentsResult {
@@ -40,6 +53,39 @@ export function agentsDir(): string {
   return path.join(configDir(), 'agents')
 }
 
+function positive(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined
+}
+
+function safeRelative(value: unknown): value is string {
+  if (typeof value !== 'string' || !value) return false
+  if (path.win32.isAbsolute(value) || /^[A-Za-z]:/.test(value)) return false
+  return !value.split(/[\\/]/).includes('..')
+}
+
+export function parseLinks(raw: unknown): CodeLinks | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const o = raw as Record<string, unknown>
+  const at = positive(o.at)
+  if (!at || typeof o.root !== 'string' || !path.isAbsolute(o.root) || !Array.isArray(o.items))
+    return undefined
+  const items: CodeLink[] = []
+  const seen = new Set<string>()
+  for (const item of o.items) {
+    if (!item || typeof item !== 'object') continue
+    const entry = item as Record<string, unknown>
+    if (!safeRelative(entry.path)) continue
+    const line = positive(entry.line)
+    const end = positive(entry.endLine)
+    const endLine = line && end && end > line ? end : undefined
+    const key = `${entry.path}:${line ?? ''}-${endLine ?? ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    items.push({ path: entry.path, ...(line ? { line } : {}), ...(endLine ? { endLine } : {}) })
+  }
+  return items.length > 0 ? { root: o.root, at, items } : undefined
+}
+
 function parseSession(full: string): AgentSession | null {
   let raw: unknown
   try {
@@ -58,6 +104,7 @@ function parseSession(full: string): AgentSession | null {
       : typeof o.terminal === 'string' && o.terminal
         ? o.terminal
         : undefined
+  const links = parseLinks(o.links)
   return {
     sessionId: o.sessionId,
     ...(binding ? { terminal: binding } : {}),
@@ -68,7 +115,8 @@ function parseSession(full: string): AgentSession | null {
     state: o.state as AgentState,
     detail: typeof o.detail === 'string' ? o.detail : '',
     agent: typeof o.agent === 'string' ? o.agent : '',
-    updated: o.updated
+    updated: o.updated,
+    ...(links ? { links } : {})
   }
 }
 
