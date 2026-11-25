@@ -13,6 +13,9 @@ const require = createRequire(import.meta.url)
 const electronFacade = {
   name: 'electron-test-facade',
   setup(buildApi) {
+    buildApi.onResolve({ filter: /^node-pty$/ }, () => ({
+      path: path.join(root, 'tests/support/nodePty.ts')
+    }))
     buildApi.onResolve({ filter: /^electron$/ }, () => ({
       path: 'electron',
       namespace: 'electron-test'

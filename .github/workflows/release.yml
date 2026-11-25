@@ -10,7 +10,34 @@ permissions:
   contents: write
 
 jobs:
+  draft:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.rel.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve tag
+        id: rel
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="v$(node -p "require('./package.json').version")"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.rel.outputs.tag }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "$TAG already has a release"
+            exit 0
+          fi
+          gh release create "$TAG" --draft --title "${TAG#v}" --notes "" --target "${{ github.sha }}"
+
   release:
+    needs: draft
     strategy:
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
@@ -29,23 +56,14 @@ jobs:
         run: npx electron-builder --publish always ${{ matrix.os == 'windows-latest' && '--win' || matrix.os == 'macos-latest' && '--mac' || '--linux' }}
 
   publish:
-    needs: release
+    needs: [draft, release]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Resolve tag
-        id: rel
-        run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            TAG="${{ github.ref_name }}"
-          else
-            TAG="v$(node -p "require('./package.json').version")"
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.rel.outputs.tag }}
+          TAG: ${{ needs.draft.outputs.tag }}
         run: |
           if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != "true" ]; then
             echo "$TAG is already published"
