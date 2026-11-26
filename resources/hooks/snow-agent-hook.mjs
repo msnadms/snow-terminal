@@ -563,7 +563,7 @@ function parseTarget(target, explicit) {
   if (!match || !match[1]) return null
   const line = lineNumber(match[2] ?? match[4])
   const end = lineNumber(match[3] ?? match[5])
-  if (!explicit && !line && !/[\\/]/.test(match[1])) return null
+  if (!explicit && !line) return null
   return { file: match[1], line, endLine: line && end && end > line ? end : undefined }
 }
 
@@ -595,7 +595,7 @@ function candidates(reply) {
     found.push({ index: match.index, target: parseTarget(match[0], false) })
   }
   return found
-    .filter((entry) => entry.target)
+    .filter((entry) => entry.target?.line)
     .sort((a, b) => a.index - b.index)
     .map((entry) => entry.target)
 }
@@ -682,6 +682,42 @@ function candidateFiles(file, cwd, repo) {
   )
 }
 
+function repoFiles(repo, deadline) {
+  const timeout = deadline - Date.now()
+  if (timeout <= 0) return null
+  try {
+    const byName = new Map()
+    const listing = execFileSync('git', ['ls-files', '-co', '--exclude-standard', '-z'], {
+      cwd: repo.logical,
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout,
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }
+    })
+    for (const file of new Set(listing.split('\0'))) {
+      if (!file) continue
+      const name = baseName(file)
+      const paths = byName.get(name)
+      if (paths) paths.push(file)
+      else byName.set(name, [file])
+    }
+    return byName
+  } catch {
+    return null
+  }
+}
+
+function suffixMatch(file, byName) {
+  const wanted = file.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '')
+  if (!wanted || path.isAbsolute(wanted) || wanted.split('/').includes('..')) return null
+  const matches = (byName.get(baseName(wanted)) ?? []).filter(
+    (candidate) => candidate === wanted || candidate.endsWith(`/${wanted}`)
+  )
+  return matches.length === 1 ? matches[0] : null
+}
+
 function extractLinks(reply, cwd) {
   if (typeof cwd !== 'string' || !cwd) return undefined
   if (!reply) return null
@@ -693,6 +729,7 @@ function extractLinks(reply, cwd) {
   const roots = [repo.real, repo.root, repo.logical]
   const deadline = Math.min(Date.now() + linkBudgetMs, startedAt + linkDeadlineMs)
   const resolved = new Map()
+  let byName
   const seen = new Set()
   const items = []
   for (const target of targets) {
@@ -705,6 +742,15 @@ function extractLinks(reply, cwd) {
       }
       real = resolved.get(file)
       if (real) break
+    }
+    if (!real && resolved.size < statCap && !path.isAbsolute(expandHome(target.file))) {
+      if (byName === undefined) byName = repoFiles(repo, deadline)
+      const match = byName && suffixMatch(target.file, byName)
+      if (match) {
+        const file = path.join(repo.logical, match)
+        if (!resolved.has(file)) resolved.set(file, realFile(file, roots))
+        real = resolved.get(file)
+      }
     }
     if (!real) continue
     const relative = path.relative(repo.real, real)
@@ -720,6 +766,142 @@ function extractLinks(reply, cwd) {
     items.push(item)
   }
   return items.length > 0 ? { root: repo.root, at: Date.now(), items } : null
+}
+
+const snapshotBudgetMs = { start: 1500, end: 1500 }
+const maxUntrackedFiles = 2000
+const maxUntrackedBytes = 2 * 1024 * 1024
+const snapshotIdentity = {
+  GIT_AUTHOR_NAME: 'snow',
+  GIT_AUTHOR_EMAIL: 'snow@localhost',
+  GIT_COMMITTER_NAME: 'snow',
+  GIT_COMMITTER_EMAIL: 'snow@localhost'
+}
+const objectId = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/
+
+function treePaths(git, tree, root) {
+  return new Set(
+    git(['ls-tree', '-r', '-z', '--name-only', tree], root).split('\0').filter(Boolean)
+  )
+}
+
+function snapshot(cwd, budget, base) {
+  if (typeof cwd !== 'string' || !cwd) return null
+  const deadline = Date.now() + budget
+  const flags = process.platform === 'win32' ? ['-c', 'core.longpaths=true'] : []
+  const git = (args, dir, env, input) => {
+    const timeout = deadline - Date.now()
+    if (timeout <= 0) throw new Error('snapshot budget spent')
+    return execFileSync('git', [...flags, ...args], {
+      cwd: dir,
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout,
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'ignore'],
+      ...(input === undefined ? {} : { input }),
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', ...env }
+    }).trim()
+  }
+
+  let temp = null
+  try {
+    const [root, index] = git(['rev-parse', '--show-toplevel', '--git-path', 'index'], cwd)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+    if (!root || !index) return null
+    let head = null
+    let headTree = null
+    try {
+      ;[head, headTree] = git(['rev-parse', 'HEAD', 'HEAD^{tree}'], root)
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+      if (!objectId.test(head) || !objectId.test(headTree)) head = null
+    } catch {
+      head = null
+    }
+
+    temp = path.join(os.tmpdir(), `snow-turn-${process.pid}-${Date.now()}`)
+    try {
+      fs.copyFileSync(path.resolve(cwd, index), temp)
+    } catch {
+      if (head) git(['read-tree', head], root, { GIT_INDEX_FILE: temp })
+    }
+    const untracked = git(['ls-files', '-o', '--exclude-standard', '-z'], root)
+      .split('\0')
+      .filter(Boolean)
+    if (!base && untracked.length > maxUntrackedFiles) return null
+    const oversized = untracked.filter((file) => {
+      if (Date.now() >= deadline) throw new Error('snapshot budget spent')
+      try {
+        return fs.statSync(path.join(root, file)).size > maxUntrackedBytes
+      } catch {
+        return false
+      }
+    })
+    const kept = base && oversized.length > 0 ? treePaths(git, base, root) : null
+    const excluded = kept ? oversized.filter((file) => !kept.has(file)) : oversized
+    const pathspecs = ['.', ...excluded.map((file) => `:(exclude,literal)${file}`)]
+    git(
+      ['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'],
+      root,
+      { GIT_INDEX_FILE: temp },
+      `${pathspecs.join('\0')}\0`
+    )
+    const tree = git(['write-tree'], root, { GIT_INDEX_FILE: temp })
+    if (!objectId.test(tree)) return null
+    if (head && tree === headTree) return { root, sha: head }
+    const sha = git(
+      [
+        'commit-tree',
+        '--no-gpg-sign',
+        tree,
+        ...(head ? ['-p', head] : []),
+        '-m',
+        'snow turn snapshot'
+      ],
+      root,
+      snapshotIdentity
+    )
+    return objectId.test(sha) ? { root, sha } : null
+  } catch {
+    return null
+  } finally {
+    if (temp) {
+      attempt(() => fs.rmSync(temp, { force: true }))
+      attempt(() => fs.rmSync(`${temp}.lock`, { force: true }))
+    }
+  }
+}
+
+function startTurn(event, before) {
+  if (event.hook_event_name !== 'UserPromptSubmit') return undefined
+  if (stateFor(event, before) === null) return undefined
+  const taken = snapshot(event.cwd, snapshotBudgetMs.start)
+  if (!taken) return null
+  const promptId = text(event.prompt_id)
+  return { root: taken.root, base: taken.sha, ...(promptId ? { promptId } : {}), at: Date.now() }
+}
+
+function endTurn(event, before) {
+  if (!turnEndEvents.has(event.hook_event_name)) return undefined
+  if (recapStop(event, before)) return undefined
+  const turn = before?.turn
+  if (!turn || typeof turn !== 'object' || typeof turn.root !== 'string') return undefined
+  if (turn.end && event.stop_hook_active !== true) return undefined
+  const promptId = text(event.prompt_id)
+  if (promptId && turn.promptId && promptId !== turn.promptId) return undefined
+  if (typeof turn.base !== 'string' || !objectId.test(turn.base)) return undefined
+  const taken = snapshot(turn.root, snapshotBudgetMs.end, turn.base)
+  return taken ? { base: turn.base, end: taken.sha } : undefined
+}
+
+function turnFor(previous, started, ended) {
+  if (started !== undefined) return started
+  const turn = previous?.turn
+  if (!turn || typeof turn !== 'object') return null
+  if (ended && turn.base === ended.base) return { ...turn, end: ended.end }
+  return turn
 }
 
 function recapStop(event, previous) {
@@ -807,7 +989,12 @@ async function main() {
     return
   }
 
-  const before = event.hook_event_name === 'Stop' ? readRecord(file) : null
+  const before =
+    turnEndEvents.has(event.hook_event_name) || event.hook_event_name === 'UserPromptSubmit'
+      ? readRecord(file)
+      : null
+  const started = startTurn(event, before)
+  const ended = endTurn(event, before)
   const extracted = event.hook_event_name === 'Stop' ? stopLinks(event, before) : undefined
   const previous = readRecord(file)
   if (overtaken(event, before, previous)) {
@@ -837,6 +1024,7 @@ async function main() {
   const linksFrom = freshLinks(event, previous, extracted)
     ? text(event.prompt_id)
     : text(previous?.linksFrom)
+  const turn = turnFor(previous, started, ended)
 
   fs.mkdirSync(dir, { recursive: true })
   const terminalBinding = text(process.env.SNOW_AGENT_BINDING)
@@ -857,6 +1045,7 @@ async function main() {
     ...(links ? { links } : {}),
     ...(linkedPrompt ? { linkedPrompt } : {}),
     ...(linksFrom ? { linksFrom } : {}),
+    ...(turn ? { turn } : {}),
     agent: process.argv[2] === 'codex' ? 'codex' : 'claude',
     updated: Date.now()
   })

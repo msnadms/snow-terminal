@@ -10,6 +10,8 @@ const gitByPath = new Map<string, SimpleGit>()
 export const gitOptions: Partial<SimpleGitOptions> =
   process.platform === 'win32' ? { config: ['core.longpaths=true'] } : {}
 
+export const objectId = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/
+
 export function gitFor(cwd?: string): SimpleGit {
   const dir = cwd || os.homedir()
   let git = gitByPath.get(dir)

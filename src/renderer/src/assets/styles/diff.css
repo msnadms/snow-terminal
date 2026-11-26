@@ -467,72 +467,72 @@
   background: var(--git-panel-bg, #121724);
 }
 
-.commit-file-section .token.comment,
-.commit-file-section .token.prolog,
-.commit-file-section .token.doctype,
-.commit-file-section .token.cdata {
+:is(.commit-file-section, .code-link-source) .token.comment,
+:is(.commit-file-section, .code-link-source) .token.prolog,
+:is(.commit-file-section, .code-link-source) .token.doctype,
+:is(.commit-file-section, .code-link-source) .token.cdata {
   color: var(--syntax-comment, #546882);
 }
 
-.commit-file-section .token.keyword,
-.commit-file-section .token.atrule,
-.commit-file-section .token.important,
-.commit-file-section .token.rule {
+:is(.commit-file-section, .code-link-source) .token.keyword,
+:is(.commit-file-section, .code-link-source) .token.atrule,
+:is(.commit-file-section, .code-link-source) .token.important,
+:is(.commit-file-section, .code-link-source) .token.rule {
   color: var(--syntax-keyword, #9d9ce8);
 }
 
-.commit-file-section .token.string,
-.commit-file-section .token.char,
-.commit-file-section .token.attr-value {
+:is(.commit-file-section, .code-link-source) .token.string,
+:is(.commit-file-section, .code-link-source) .token.char,
+:is(.commit-file-section, .code-link-source) .token.attr-value {
   color: var(--syntax-string, #7fdcc0);
 }
 
-.commit-file-section .token.number,
-.commit-file-section .token.boolean {
+:is(.commit-file-section, .code-link-source) .token.number,
+:is(.commit-file-section, .code-link-source) .token.boolean {
   color: var(--syntax-number, #a6dcf0);
 }
 
-.commit-file-section .token.function {
+:is(.commit-file-section, .code-link-source) .token.function {
   color: var(--syntax-function, #6fb2f0);
 }
 
-.commit-file-section .token.class-name {
+:is(.commit-file-section, .code-link-source) .token.class-name {
   color: var(--syntax-class-name, #7fd8e8);
 }
 
-.commit-file-section .token.variable,
-.commit-file-section .token.builtin,
-.commit-file-section .token.parameter {
+:is(.commit-file-section, .code-link-source) .token.variable,
+:is(.commit-file-section, .code-link-source) .token.builtin,
+:is(.commit-file-section, .code-link-source) .token.parameter {
   color: var(--syntax-variable, #c3d2e8);
 }
 
-.commit-file-section .token.constant,
-.commit-file-section .token.symbol {
+:is(.commit-file-section, .code-link-source) .token.constant,
+:is(.commit-file-section, .code-link-source) .token.symbol {
   color: var(--syntax-constant, #e89aac);
 }
 
-.commit-file-section .token.operator,
-.commit-file-section .token.entity,
-.commit-file-section .token.url {
+:is(.commit-file-section, .code-link-source) .token.operator,
+:is(.commit-file-section, .code-link-source) .token.entity,
+:is(.commit-file-section, .code-link-source) .token.url {
   color: var(--syntax-operator, #93a4c0);
 }
 
-.commit-file-section .token.punctuation {
+:is(.commit-file-section, .code-link-source) .token.punctuation {
   color: var(--syntax-punctuation, #7385a3);
 }
 
-.commit-file-section .token.tag,
-.commit-file-section .token.selector,
-.commit-file-section .token.namespace {
+:is(.commit-file-section, .code-link-source) .token.tag,
+:is(.commit-file-section, .code-link-source) .token.selector,
+:is(.commit-file-section, .code-link-source) .token.namespace {
   color: var(--syntax-tag, #c09ae0);
 }
 
-.commit-file-section .token.attr-name,
-.commit-file-section .token.property {
+:is(.commit-file-section, .code-link-source) .token.attr-name,
+:is(.commit-file-section, .code-link-source) .token.property {
   color: var(--syntax-attr-name, #8fbfe0);
 }
 
-.commit-file-section .token.regex {
+:is(.commit-file-section, .code-link-source) .token.regex {
   color: var(--syntax-regex, #b8a0e8);
 }
 

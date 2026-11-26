@@ -61,6 +61,17 @@
   opacity: 0.6;
 }
 
+.code-link-turn {
+  gap: 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--git-border, #28334c);
+}
+
+.code-link-turn-state {
+  flex: 0 0 auto;
+  color: var(--git-muted, #78859c);
+}
+
 .code-link-dir {
   min-width: 0;
   overflow: hidden;

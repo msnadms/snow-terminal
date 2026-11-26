@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import CodeLinksList from './CodeLinksList'
 import DiscardDialog from './DiscardDialog'
 import FailureDialog from './FailureDialog'
-import type { CodeLinkTarget, PanelView, TabCodeLinks } from '../appModel'
+import type { TabTurn, CodeLinkTarget, PanelView, TabCodeLinks } from '../appModel'
 import { shortHash, type Failure } from '../format'
 import { useGitAction } from '../useGitAction'
 import { fallbackLanes, useGitColors } from '../useGitColors'
@@ -563,9 +563,11 @@ interface GitPanelProps {
   onOpenDiff?: OpenDiff
   onOpenDiffSplit?: (cwd: string) => void
   links?: TabCodeLinks
+  turn?: TabTurn
   view: PanelView
   onViewChange: (view: PanelView) => void
   onOpenLink?: (target: Omit<CodeLinkTarget, 'key'>) => void
+  onOpenTurn?: () => void
 }
 
 function GitPanel({
@@ -579,9 +581,11 @@ function GitPanel({
   onOpenDiff,
   onOpenDiffSplit,
   links,
+  turn,
   view,
   onViewChange,
-  onOpenLink
+  onOpenLink,
+  onOpenTurn
 }: GitPanelProps): React.JSX.Element {
   const colors = useGitColors()
   const lanes = colors?.lanes ?? fallbackLanes
@@ -629,7 +633,9 @@ function GitPanel({
           󰌹
         </button>
       </div>
-      {view === 'links' && <CodeLinksList links={links} onOpenLink={onOpenLink} />}
+      {view === 'links' && (
+        <CodeLinksList links={links} turn={turn} onOpenLink={onOpenLink} onOpenTurn={onOpenTurn} />
+      )}
       {content()}
     </div>
   )

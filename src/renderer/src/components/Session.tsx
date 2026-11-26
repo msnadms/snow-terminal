@@ -1,12 +1,14 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CodeLinkTarget, Pane, SessionStatus, Split } from '../appModel'
+import type { TabTurn, Overlay, Pane, SessionStatus, Split } from '../appModel'
 import { useKeybinds } from '../keybinds'
 import { useCollapsiblePane } from '../useCollapsiblePane'
 import BrowserTab from './BrowserTab'
 import CodeLinkView from './CodeLinkView'
 import CommitView from './CommitView'
+import DiffScroll from './DiffScroll'
 import PanelRestore from './PanelRestore'
 import ResizeHandle from './ResizeHandle'
+import TurnDiffView from './TurnDiffView'
 import WorkingDiffView from './WorkingDiffView'
 import Terminal from './Terminal'
 
@@ -23,7 +25,8 @@ interface SessionProps {
   panes: Pane[]
   startupCommand: string
   split?: Split
-  overlay?: CodeLinkTarget
+  overlay?: Overlay
+  turn?: TabTurn
   keybinds: Record<string, string>
   savedBottomHeight?: number
   savedBottomCollapsed?: boolean
@@ -85,6 +88,7 @@ function Session({
   startupCommand,
   split,
   overlay,
+  turn,
   keybinds,
   savedBottomHeight,
   savedBottomCollapsed,
@@ -305,15 +309,29 @@ function Session({
             <div className="terminal-diff-split" style={{ flexGrow: growValues['diff'] }}>
               {split &&
                 renderSplit(split, active && !overlay, onOpenCommit, () => onCloseSplit(id))}
-              {overlay && (
-                <CodeLinkView
-                  key={overlay.key}
-                  active={active}
-                  target={overlay}
-                  onOpenCommit={onOpenCommit}
-                  onClose={() => onCloseOverlay(id)}
-                />
-              )}
+              {overlay && 'kind' in overlay
+                ? (turn && (
+                    <TurnDiffView
+                      key={overlay.key}
+                      active={active}
+                      turn={turn}
+                      onOpenCommit={onOpenCommit}
+                      onClose={() => onCloseOverlay(id)}
+                    />
+                  )) || (
+                    <DiffScroll active={active} onClose={() => onCloseOverlay(id)}>
+                      <div className="commit-empty">This tab no longer has a recorded turn.</div>
+                    </DiffScroll>
+                  )
+                : overlay && (
+                    <CodeLinkView
+                      key={overlay.key}
+                      active={active}
+                      target={overlay}
+                      onOpenCommit={onOpenCommit}
+                      onClose={() => onCloseOverlay(id)}
+                    />
+                  )}
             </div>
           </>
         )}

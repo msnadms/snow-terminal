@@ -3,7 +3,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { simpleGit } from 'simple-git'
-import { defaultBranch, gitFor, gitOptions, worktreeRoot } from './gitCore'
+import { defaultBranch, gitFor, gitOptions, objectId, worktreeRoot } from './gitCore'
 import type {
   GitBlame,
   GitBlameResult,
@@ -30,6 +30,8 @@ const maxPatchChars = 2_000_000
 
 const maxSourceChars = 400_000
 
+const maxSnapshotBytes = 2 * 1024 * 1024
+
 const emptyTree = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 
 let scratchIndexCount = 0
@@ -37,7 +39,8 @@ let scratchIndexCount = 0
 async function workingTreeDiff(
   cwd?: string,
   baseOverride?: string,
-  includeStaging = true
+  includeStaging = true,
+  excludeOversized = false
 ): Promise<GitWorkingDiff> {
   const git = gitFor(cwd)
   const root = (await worktreeRoot(cwd)) ?? cwd ?? os.homedir()
@@ -64,9 +67,23 @@ async function workingTreeDiff(
         .catch(() => new Set<string>())
     : Promise.resolve(new Set<string>())
 
+  const pathspecFile = `${indexFile}.pathspec`
   try {
     await scratch.raw(['read-tree', base])
-    await scratch.raw(['add', '-A', '-N'])
+    const excluded = excludeOversized ? await oversizedUntracked(root, base) : []
+    if (excluded.length > 0) {
+      const pathspecs = ['.', ...excluded.map((file) => `:(exclude,literal)${file}`)]
+      await fs.promises.writeFile(pathspecFile, `${pathspecs.join('\0')}\0`)
+      await scratch.raw([
+        'add',
+        '-A',
+        '-N',
+        `--pathspec-from-file=${pathspecFile}`,
+        '--pathspec-file-nul'
+      ])
+    } else {
+      await scratch.raw(['add', '-A', '-N'])
+    }
 
     const range = ['diff', base, '-M']
     const [numstat, raw, staged] = await Promise.all([
@@ -89,7 +106,52 @@ async function workingTreeDiff(
     }
   } finally {
     await fs.promises.rm(indexFile, { force: true })
+    await fs.promises.rm(pathspecFile, { force: true })
   }
+}
+
+async function oversizedUntracked(root: string, base: string): Promise<string[]> {
+  const git = gitFor(root)
+  const untracked = (await git.raw(['ls-files', '-o', '--exclude-standard', '-z']))
+    .split('\0')
+    .filter(Boolean)
+  const sizes = await Promise.all(
+    untracked.map((file) =>
+      fs.promises.stat(path.join(root, file)).then(
+        (stat) => stat.size,
+        () => 0
+      )
+    )
+  )
+  const oversized = untracked.filter((_, i) => sizes[i] > maxSnapshotBytes)
+  if (oversized.length === 0) return []
+  const inBase = new Set(
+    (await git.raw(['ls-tree', '-r', '-z', '--name-only', base])).split('\0').filter(Boolean)
+  )
+  return oversized.filter((file) => !inBase.has(file))
+}
+
+async function snapshotsPresent(cwd: string, ids: string[]): Promise<boolean> {
+  const git = gitFor(cwd)
+  try {
+    await Promise.all(ids.map((id) => git.raw(['cat-file', '-e', `${id}^{commit}`])))
+    return true
+  } catch (err) {
+    await git.raw(['rev-parse', '--git-dir']).catch(() => {
+      throw err
+    })
+    return false
+  }
+}
+
+async function snapshotDiff(cwd: string, base: string, end: string): Promise<GitWorkingDiff> {
+  const range = ['diff', base, end, '-M']
+  const git = gitFor(cwd)
+  const [numstat, raw] = await Promise.all([
+    git.raw([...range, '--numstat', '-z']),
+    git.raw([...range, '--patch', '--no-color'])
+  ])
+  return { branch: null, base, files: parseNumstat(numstat), ...capPatch(raw) }
 }
 
 export function capPatch(
@@ -129,18 +191,27 @@ export function parseNumstat(raw: string): GitCommitFile[] {
 
 const blameHeader = /^([0-9a-f]{40}) \d+ (\d+)/
 
+const uncommittedHash = '0'.repeat(40)
+
+const snapshotCommit = { mail: '<snow@localhost>', summary: 'snow turn snapshot' }
+
 export function parseBlame(raw: string): GitBlameResult {
   const lines: GitBlame = {}
   const content: string[] = []
   let hash = ''
   let line = 0
   let author = ''
+  let mail = ''
+  let summary = ''
   let time = 0
 
   for (const text of raw.split('\n')) {
     if (text.startsWith('\t')) {
       if (line > 0) {
-        lines[line] = { hash, author, date: time ? new Date(time * 1000).toISOString() : '' }
+        const snapshot = mail === snapshotCommit.mail && summary === snapshotCommit.summary
+        lines[line] = snapshot
+          ? { hash: uncommittedHash, author: 'Not Committed Yet', date: '' }
+          : { hash, author, date: time ? new Date(time * 1000).toISOString() : '' }
       }
       content.push(text.slice(1))
       line = 0
@@ -153,7 +224,9 @@ export function parseBlame(raw: string): GitBlameResult {
       continue
     }
     if (text.startsWith('author ')) author = text.slice(7)
+    else if (text.startsWith('author-mail ')) mail = text.slice(12)
     else if (text.startsWith('author-time ')) time = Number(text.slice(12))
+    else if (text.startsWith('summary ')) summary = text.slice(8)
   }
 
   const source = content.join('\n')
@@ -286,6 +359,16 @@ export function registerHistoryHandlers(): void {
 
     throw new Error(`Could not find a merge base with ${candidates.join(' or ')}`)
   })
+
+  ipcMain.handle(
+    'git:turnDiff',
+    async (_event, cwd: string, base: string, end?: string): Promise<GitWorkingDiff | null> => {
+      if (!objectId.test(base) || (end !== undefined && !objectId.test(end)))
+        throw new Error('Not a commit id')
+      if (!(await snapshotsPresent(cwd, end ? [base, end] : [base]))) return null
+      return end ? snapshotDiff(cwd, base, end) : workingTreeDiff(cwd, base, false, true)
+    }
+  )
 
   ipcMain.handle(
     'git:blame',

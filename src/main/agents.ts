@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import { broadcast, configDir, expandHome, samePath } from './config'
-import { mainWorktreeRoot, worktreeMap } from './gitCore'
+import { mainWorktreeRoot, objectId, worktreeMap } from './gitCore'
 import { log } from './log'
 import { addRecord, recordsFor, workflowsPath } from './registry'
 
@@ -21,6 +21,14 @@ export interface CodeLinks {
   items: CodeLink[]
 }
 
+export interface AgentTurn {
+  root: string
+  base: string
+  end?: string
+  promptId?: string
+  at: number
+}
+
 export interface AgentSession {
   sessionId: string
   terminal?: string
@@ -31,7 +39,9 @@ export interface AgentSession {
   detail: string
   agent: string
   updated: number
+  promptId?: string
   links?: CodeLinks
+  turn?: AgentTurn
 }
 
 export interface AgentsResult {
@@ -86,6 +96,23 @@ export function parseLinks(raw: unknown): CodeLinks | undefined {
   return items.length > 0 ? { root: o.root, at, items } : undefined
 }
 
+export function parseTurn(raw: unknown): AgentTurn | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const o = raw as Record<string, unknown>
+  const at = positive(o.at)
+  if (!at || typeof o.root !== 'string' || !path.isAbsolute(o.root)) return undefined
+  if (typeof o.base !== 'string' || !objectId.test(o.base)) return undefined
+  const end = typeof o.end === 'string' && objectId.test(o.end) ? o.end : undefined
+  const promptId = typeof o.promptId === 'string' && o.promptId ? o.promptId : undefined
+  return {
+    root: o.root,
+    base: o.base,
+    ...(end ? { end } : {}),
+    ...(promptId ? { promptId } : {}),
+    at
+  }
+}
+
 function parseSession(full: string): AgentSession | null {
   let raw: unknown
   try {
@@ -105,6 +132,7 @@ function parseSession(full: string): AgentSession | null {
         ? o.terminal
         : undefined
   const links = parseLinks(o.links)
+  const turn = parseTurn(o.turn)
   return {
     sessionId: o.sessionId,
     ...(binding ? { terminal: binding } : {}),
@@ -116,7 +144,9 @@ function parseSession(full: string): AgentSession | null {
     detail: typeof o.detail === 'string' ? o.detail : '',
     agent: typeof o.agent === 'string' ? o.agent : '',
     updated: o.updated,
-    ...(links ? { links } : {})
+    ...(typeof o.promptId === 'string' && o.promptId ? { promptId: o.promptId } : {}),
+    ...(links ? { links } : {}),
+    ...(turn ? { turn } : {})
   }
 }
 

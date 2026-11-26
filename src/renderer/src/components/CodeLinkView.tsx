@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { parseDiff } from 'react-diff-view'
+import { parseDiff, useTokenizeWorker } from 'react-diff-view'
+import type { HunkData, TokenNode } from 'react-diff-view'
 import DiffBody from './DiffBody'
 import DiffScroll from './DiffScroll'
 import type { CodeLinkTarget } from '@renderer/appModel'
@@ -11,6 +12,8 @@ import {
   sourceWindow,
   type LineRange
 } from '@renderer/codeLinks'
+import { languageFor } from '@renderer/syntax'
+import { tokenizeWorker } from '@renderer/tokenizeWorker'
 import { useLatestRun } from '@renderer/useLatestRun'
 
 type GitDiff =
@@ -81,10 +84,40 @@ async function loadTarget(root: string, file: string, range?: LineRange): Promis
   return { kind: 'missing', reason: unchanged ? 'untracked' : 'unreadable' }
 }
 
-function SourceFile({ source, range }: { source: string; range?: LineRange }): React.JSX.Element {
+function renderToken(node: TokenNode, i: number): React.ReactNode {
+  if (node.type === 'text') return node.value
+  const names = node.className ?? node.properties?.className
+  return (
+    <span key={i} className={Array.isArray(names) ? names.join(' ') : names}>
+      {node.value ?? node.children?.map(renderToken)}
+    </span>
+  )
+}
+
+function tokenText(nodes: TokenNode[]): string {
+  return nodes.map((node) => node.value ?? tokenText(node.children ?? [])).join('')
+}
+
+const noHunks: HunkData[] = []
+
+function SourceFile({
+  file,
+  source,
+  range
+}: {
+  file: string
+  source: string
+  range?: LineRange
+}): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const [whole, setWhole] = useState(false)
   const lines = useMemo(() => source.replace(/\n$/, '').split('\n'), [source])
+  const payload = useMemo(
+    () => ({ hunks: noHunks, oldSource: source, language: languageFor(file) }),
+    [source, file]
+  )
+  const { tokens } = useTokenizeWorker(tokenizeWorker(), payload)
+  const lineTokens = tokens?.old
   const shown = whole ? { start: 1, end: lines.length } : sourceWindow(lines.length, range)
   const partial = shown.start > 1 || shown.end < lines.length
 
@@ -108,10 +141,13 @@ function SourceFile({ source, range }: { source: string; range?: LineRange }): R
       {lines.slice(shown.start - 1, shown.end).map((text, i) => {
         const n = shown.start + i
         const selected = !!range && n >= range.start && n <= range.end
+        const line = lineTokens?.[n - 1]
         return (
           <div key={n} className={`code-link-line${selected ? ' code-link-line-selected' : ''}`}>
             <span className="code-link-number">{n}</span>
-            <span className="code-link-text">{text}</span>
+            <span className="code-link-text">
+              {line && tokenText(line) === text ? line.map(renderToken) : text}
+            </span>
           </div>
         )
       })}
@@ -185,7 +221,8 @@ function CodeLinkView({
               : `git cannot show ${file}. It may be untracked or gitignored.`}
         </div>
       )
-    if (loaded.kind === 'file') return <SourceFile source={loaded.source} range={range} />
+    if (loaded.kind === 'file')
+      return <SourceFile file={file} source={loaded.source} range={range} />
     return (
       <DiffBody
         cwd={root}

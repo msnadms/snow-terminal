@@ -137,6 +137,8 @@ const git = {
     ipcRenderer.invoke('git:show', cwd, hash),
   diff: (cwd?: string): Promise<GitWorkingDiff> => ipcRenderer.invoke('git:diff', cwd),
   reviewDiff: (cwd?: string): Promise<GitReviewDiff> => ipcRenderer.invoke('git:reviewDiff', cwd),
+  turnDiff: (cwd: string, base: string, end?: string): Promise<GitWorkingDiff | null> =>
+    ipcRenderer.invoke('git:turnDiff', cwd, base, end),
   status: (cwd?: string): Promise<GitStatus> => ipcRenderer.invoke('git:status', cwd),
   branches: (cwd?: string): Promise<GitBranches> => ipcRenderer.invoke('git:branches', cwd),
   defaultBranch: (cwd?: string): Promise<string | null> =>

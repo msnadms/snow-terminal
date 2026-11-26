@@ -31,6 +31,7 @@ import {
   commandPresetsOf,
   inheritedPreset,
   mergeCodeLinks,
+  mergeTurns,
   panelViewFor,
   moveTab,
   moveTabGroup,
@@ -42,9 +43,11 @@ import {
   tabCwdOf,
   tabLabels,
   type ActiveId,
+  type TabTurn,
   type AppPage,
   type CodeLinkTarget,
   type CommandItem,
+  type Overlay,
   type Pane,
   type PanelChoice,
   type PanelView,
@@ -71,8 +74,9 @@ function App(): React.JSX.Element {
   const [cwds, setCwds] = useState<Record<number, string | undefined>>({})
   const [panes, setPanes] = useState<Record<number, Pane[]>>({})
   const [splits, setSplits] = useState<Record<number, Split>>({})
-  const [overlays, setOverlays] = useState<Record<number, CodeLinkTarget>>({})
+  const [overlays, setOverlays] = useState<Record<number, Overlay>>({})
   const [codeLinks, setCodeLinks] = useState<Record<number, TabCodeLinks>>({})
+  const [turns, setTurns] = useState<Record<number, TabTurn>>({})
   const [panelChoices, setPanelChoices] = useState<Record<number, PanelChoice>>({})
   const [browserTitles, setBrowserTitles] = useState<Record<number, string>>({})
   const [terminalStatuses, setTerminalStatuses] = useState<TerminalStatuses>({})
@@ -128,6 +132,7 @@ function App(): React.JSX.Element {
   const activeTab = tabs.find((t) => t.id === activeId)
   const panelKey = activeTab?.id ?? -1
   const activeLinks = activeTab?.kind === 'shell' ? codeLinks[activeTab.id] : undefined
+  const activeTurn = activeTab?.kind === 'shell' ? turns[activeTab.id] : undefined
   const activeSignature = activeLinks?.signature
   const panelView = panelViewFor(panelChoices[panelKey], activeLinks)
   const choosePanelView = useCallback(
@@ -197,6 +202,7 @@ function App(): React.JSX.Element {
   ) {
     setLinkSource({ sessions: agentSessions, tabs, panes })
     setCodeLinks((prev) => mergeCodeLinks(prev, agentSessions, tabs, panes))
+    setTurns((prev) => mergeTurns(prev, agentSessions, tabs, panes))
   }
   const statusAgentSessions = useMemo(
     () => visibleAgentSessions(agentSessions, interruptedTerminals),
@@ -505,6 +511,12 @@ function App(): React.JSX.Element {
     setOverlays((prev) => ({ ...prev, [tab.id]: { ...target, key: Date.now() } }))
   }, [])
 
+  const openTurn = useCallback((): void => {
+    const tab = tabsRef.current.find((t) => t.id === activeIdRef.current)
+    if (!tab || tab.kind !== 'shell') return
+    setOverlays((prev) => ({ ...prev, [tab.id]: { kind: 'turn', key: Date.now() } }))
+  }, [])
+
   const closePane = useCallback((sessionId: number, paneId: number): void => {
     setPanes((prev) => {
       const current = prev[sessionId]
@@ -588,6 +600,7 @@ function App(): React.JSX.Element {
     setSplits(dropKeys)
     setOverlays(dropKeys)
     setCodeLinks(dropKeys)
+    setTurns(dropKeys)
     setPanelChoices(dropKeys)
     setBrowserTitles(dropKeys)
     setTerminalStatuses(dropKeys)
@@ -849,6 +862,7 @@ function App(): React.JSX.Element {
                     startupCommand={tab.startupCommand ?? startupCommand ?? 'claude'}
                     split={splits[tab.id]}
                     overlay={overlays[tab.id]}
+                    turn={turns[tab.id]}
                     keybinds={keybinds}
                     savedBottomHeight={layout.bottomHeight}
                     savedBottomCollapsed={layout.bottomCollapsed}
@@ -894,9 +908,11 @@ function App(): React.JSX.Element {
             onOpenDiff={openDiff}
             onOpenDiffSplit={activeTab?.kind === 'shell' ? openDiffSplit : undefined}
             links={activeLinks}
+            turn={activeTurn}
             view={panelView}
             onViewChange={choosePanelView}
             onOpenLink={activeTab?.kind === 'shell' ? openCodeLink : undefined}
+            onOpenTurn={activeTab?.kind === 'shell' ? openTurn : undefined}
           />
         </PaneBoundary>
         {gitPane.collapsed && (

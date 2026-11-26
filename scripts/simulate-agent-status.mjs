@@ -503,6 +503,7 @@ try {
             'gitCore',
             `
               const state = globalThis.__snowAgentRegistrationTest;
+              export const objectId = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
               export async function mainWorktreeRoot(cwd) {
                 state.rootCalls.push(cwd);
                 if (state.rootCalls.length === 1) await state.firstRegistration;

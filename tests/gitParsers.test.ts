@@ -55,6 +55,28 @@ describe('parseBlame', () => {
     expect(result.lines[1]).toEqual({ hash, author: 'Ada', date: '' })
     expect(result.lines[2].date).toBe(new Date(1700000000 * 1000).toISOString())
   })
+
+  it('reports lines from a turn snapshot commit as uncommitted', () => {
+    const snapshot = 'b'.repeat(40)
+    const real = 'c'.repeat(40)
+    const raw = [
+      `${snapshot} 1 1 1`,
+      'author snow',
+      'author-mail <snow@localhost>',
+      'author-time 1700000000',
+      'summary snow turn snapshot',
+      '\tedited',
+      `${real} 2 2 1`,
+      'author Ada',
+      'author-mail <ada@example.com>',
+      'author-time 1700000000',
+      'summary snow turn snapshot',
+      '\tkept'
+    ].join('\n')
+    const result = parseBlame(raw)
+    expect(result.lines[1]).toEqual({ hash: '0'.repeat(40), author: 'Not Committed Yet', date: '' })
+    expect(result.lines[2].hash).toBe(real)
+  })
 })
 
 describe('layout', () => {

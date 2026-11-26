@@ -4,20 +4,12 @@ import type { FileData, GutterOptions, ViewType } from 'react-diff-view'
 import { fileIndexFor, selectedKeysFor, type LineRange } from '@renderer/codeLinks'
 import { shortHash } from '@renderer/format'
 import { languageFor } from '@renderer/syntax'
+import { tokenizeWorker } from '@renderer/tokenizeWorker'
 import 'react-diff-view/style/index.css'
 
 type GitCommitDetail = Awaited<ReturnType<typeof window.api.git.show>>
 export type DiffFileEntry = GitCommitDetail['files'][number]
 type GitBlameResult = Awaited<ReturnType<typeof window.api.git.blame>>
-
-let worker: Worker | null = null
-
-function tokenizeWorker(): Worker {
-  if (!worker) {
-    worker = new Worker(new URL('../tokenize.worker.ts', import.meta.url), { type: 'module' })
-  }
-  return worker
-}
 
 const noHunks: FileData['hunks'] = []
 const noSelection: string[] = []
@@ -128,7 +120,9 @@ function DiffFile({
       <>
         <span
           className="commit-blame"
-          onClick={() => onOpenCommit?.(cwd, entry.hash)}
+          onClick={() => {
+            if (!/^0+$/.test(entry.hash)) onOpenCommit?.(cwd, entry.hash)
+          }}
           role="presentation"
         >
           <span className="commit-blame-hash">{shortHash(entry.hash)}</span>

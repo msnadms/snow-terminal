@@ -4,6 +4,7 @@ import {
   commandPresetsOf,
   inheritedPreset,
   mergeCodeLinks,
+  mergeTurns,
   panelViewFor,
   moveTab,
   moveTabGroup,
@@ -180,6 +181,60 @@ describe('code links', () => {
     expect(merged[2]).toMatchObject({ updated: 250, items: [{ path: 'new.ts' }] })
     const rewritten = { ...stale, updated: 400 }
     expect(mergeCodeLinks(merged, [rewritten], tabs, panes)).toBe(merged)
+  })
+})
+
+describe('turns', () => {
+  const tabs: Tab[] = [{ kind: 'shell', id: 1, bottomTerminalId: 10 }]
+  const panes = { 1: [{ id: 11 }, { id: 12 }] }
+  const session = (terminalId: number, at: number, end?: string): AgentSession => ({
+    sessionId: `s${terminalId}`,
+    terminalId,
+    cwd: '/repo',
+    state: 'idle',
+    detail: '',
+    agent: 'claude',
+    updated: at,
+    turn: { root: '/repo', base: `base${at}`, at, ...(end ? { end } : {}) }
+  })
+
+  it('keeps the newest turn per tab and picks up its end', () => {
+    const first = mergeTurns({}, [session(11, 5)], tabs, panes)
+    expect(first[1]).toMatchObject({ base: 'base5' })
+    expect(mergeTurns(first, [session(11, 5)], tabs, panes)).toBe(first)
+    const ended = mergeTurns(first, [session(11, 5, 'end5')], tabs, panes)
+    expect(ended[1].end).toBe('end5')
+    expect(mergeTurns(ended, [session(11, 5)], tabs, panes)).toBe(ended)
+    expect(mergeTurns(ended, [session(12, 3, 'old')], tabs, panes)).toBe(ended)
+    expect(mergeTurns(ended, [session(12, 8)], tabs, panes)[1]).toMatchObject({ base: 'base8' })
+  })
+
+  it('tracks whether an unended turn is still running', () => {
+    const busy = { ...session(11, 5), state: 'busy' as const }
+    const running = mergeTurns({}, [busy], tabs, panes)
+    expect(running[1]).toMatchObject({ sessionId: 's11', live: true })
+    expect(mergeTurns(running, [session(11, 5)], tabs, panes)[1].live).toBe(false)
+    expect(mergeTurns(running, [], tabs, panes)[1].live).toBe(false)
+  })
+
+  it('drops the held turn once its session moves to a prompt with no turn', () => {
+    const first = session(11, 5)
+    const tracked = mergeTurns(
+      {},
+      [{ ...first, promptId: 'p1', turn: { ...first.turn!, promptId: 'p1' } }],
+      tabs,
+      panes
+    )
+    const moved = { ...first, promptId: 'p2', turn: undefined }
+    expect(mergeTurns(tracked, [moved], tabs, panes)[1]).toBeUndefined()
+    expect(mergeTurns(tracked, [{ ...moved, sessionId: 'other' }], tabs, panes)[1]).toBeDefined()
+    expect(mergeTurns(tracked, [{ ...moved, updated: 4 }], tabs, panes)[1]).toBeDefined()
+  })
+
+  it('drops the held turn for a session that reports no prompt ids', () => {
+    const tracked = mergeTurns({}, [session(11, 5)], tabs, panes)
+    const failed = { ...session(11, 5), updated: 9, turn: undefined }
+    expect(mergeTurns(tracked, [failed], tabs, panes)[1]).toBeUndefined()
   })
 })
 

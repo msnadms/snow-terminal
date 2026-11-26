@@ -430,7 +430,7 @@ from "blocked on a permission prompt", cannot see thinking, and pins `busy` on a
 
 The channel is a **directory of files, not IPC**: the hook is a short-lived child of the user's agent
 process and cannot talk to a running snow. It writes `~/.config/snow/agents/<session_id>.json`
-(`{ sessionId, terminalBinding?, terminalOwner?, cwd, state, detail, promptId?, turnEnded?, links?, linkedPrompt?, linksFrom?,
+(`{ sessionId, terminalBinding?, terminalOwner?, cwd, state, detail, promptId?, turnEnded?, links?, linkedPrompt?, linksFrom?, turn?,
 agent, updated }`; legacy `terminal` accepted), and `src/main/agents.ts` reads and watches that directory.
 Snow only reads; only the hook writes.
 
@@ -520,11 +520,15 @@ Where two agents share a directory the **loudest state wins, not the newest**.
 
 On `Stop` the hook reads the turn's final reply (`last_assistant_message`, else the transcript tail
 after the last `user` entry) and extracts cited locations: markdown links (`path#L12-L20`,
-`path:12`), bare `path.ext:12[-20][:col]`, and line-less paths containing a separator. Only existing
+`path:12`) and bare `path.ext:12[-20][:col]`. **A citation without a line number is never a link** — a
+markdown link whose target carries none still counts when its label does (`[b.ts:1](b.ts)`). Only existing
 files inside `git rev-parse --show-toplevel` survive, compared by **real path** on both sides (git
 reports the resolved root, so a symlinked cwd would otherwise put every file outside it). A relative
 path is tried against the cwd, then against the repo root, since agents cite root-relative paths from
-subdirectories. Each candidate must lie **lexically** inside the root before it is statted — a
+subdirectories. A relative path neither resolves is matched by **suffix** against one
+`ls-files -co --exclude-standard -z` listing (taken lazily, once per Stop, inside the link budget) and
+taken only when exactly one file matches — agents routinely cite bare basenames (`Session.tsx:311`),
+and an ambiguous name is dropped rather than guessed. Each candidate must lie **lexically** inside the root before it is statted — a
 synchronous stat of a cited network path blocks the event loop, which the `setTimeout` watchdog cannot
 interrupt. The same holds for symlinks and junctions: `linkFree` walks each path component with
 `lstat` and follows a link only when its target is itself lexically inside a root. Stored
@@ -575,6 +579,58 @@ until the user asks for all of it, since it re-renders on every `git:changed` be
 restricts it to the one file and `focusLine` becomes react-diff-view
 `selectedChanges` (`selectedKeysFor` in `codeLinks.ts`), scrolled into view **once per mount** so a
 `git:changed` reload never yanks the user back.
+
+#### Turn diffs
+
+The working diff mixes every turn with the user's own edits; a **turn diff** is what one prompt
+changed. On `UserPromptSubmit` the hook snapshots the whole worktree, untracked files included, and
+stores `turn: { root, base, promptId?, at }`; the turn's own `Stop`/`StopFailure` snapshots again into
+`end`. A snapshot copies the real index to a temp file (so `add -A` keeps its stat cache and rehashes
+only what changed), runs `add -A` + `write-tree` against it, and wraps the tree in a `commit-tree`
+whose parent is HEAD — a commit rather than a bare tree so `DiffBody`'s blame of `base` works and
+attributes unchanged lines to real history. A tree equal to HEAD's reuses HEAD itself. The real index
+is never touched; snapshot commits are unreferenced and left to `git gc`, which is why an old turn
+can report its snapshot gone. `--no-gpg-sign` and a fixed `snow` identity keep it from prompting or
+failing on an unconfigured repo.
+
+Snapshots share the 5 s watchdog: 1.5 s each at the prompt and at Stop (a `UserPromptSubmit` hook
+blocks the prompt, so this is latency the user feels) (taken **before** link
+extraction and before the record is re-read, keeping the read-to-write window short). Any failure
+records no turn — a missing turn is better than a wrong one. A prompt `stateFor` would ignore (the
+recap fork re-submitting an ended turn's `prompt_id`) takes no snapshot at all. Untracked files are
+listed first: more than `maxUntrackedFiles` abandons the **start** snapshot (the end has no count cap,
+since nothing waits on it and the live diff has none either — only its time budget bounds it), and any over `maxUntrackedBytes` is
+excluded by pathspec, since `add -A` would otherwise re-hash a stray dataset on every prompt in front
+of the user's turn. The end snapshot exempts oversized files `base` already holds, so a file that
+grows past the limit mid-turn reads modified, not deleted; the live diff (`workingTreeDiff` with
+`excludeOversized`) applies the identical rule, so a running turn and its ended form list the same
+files. HEAD and its tree come from `rev-parse HEAD HEAD^{tree}` — plumbing, unlike `git log`, which
+`log.showSignature` prefixes with verification lines. Every git call routes stderr to `ignore`,
+including the one fed through stdin, or `add -A`'s CRLF warnings reach the agent on every prompt.
+Blame attributes lines from a snapshot commit (`snow@localhost`, `snow turn snapshot`) as
+`Not Committed Yet` with the all-zero hash, which `DiffBody` does not open. A new prompt always starts a fresh turn; the end is only applied when the Stop's
+`prompt_id` matches and the record still holds the same `base`. A recap Stop (`recapStop`, the same
+test link extraction uses) never takes an end, even when the real Stop's snapshot failed — minutes
+later it would capture the user's own edits. An existing end is replaced only by a Stop carrying
+`stop_hook_active`, so work done after a Stop hook continued the turn is not cut off.
+
+`parseTurn` requires object ids for `base`/`end` and `git:turnDiff` re-checks them, since other
+dispatchers write records and an id reaches `git diff` as an argument. With `end` it diffs the two
+commits; without one (turn still running, or its Stop never came) it diffs `base` against the
+working tree through the same scratch-index `workingTreeDiff` the review diff uses. It returns `null`
+only when `cat-file` cannot find a snapshot in a repo that otherwise resolves, so "garbage-collected"
+is never claimed for a moved repo or a transient failure. The renderer holds its own copy per tab
+(`mergeTurns`, newest `at` wins, an `end` landing on the same turn replaces it) as a `TabTurn`, which
+adds the owning `sessionId` and `live` — no end and the session not `idle`, cleared once the session
+stops reporting — so an interrupted turn reads `unfinished`, not `in progress`. The hook carries a
+turn forward on every event, so when that session's record (updated no earlier than the turn's `at`)
+arrives carrying **no** turn, a newer prompt's snapshot failed and the held turn is dropped rather
+than shown as the last one — keyed on the session, not on `promptId`, which Codex and other
+dispatchers may not send. The turn is the first row of the Links view, and opens `TurnDiffView` as an
+overlay (`{ kind: 'turn' }`); if the turn is dropped while open, `Session` renders a closable
+placeholder rather than an empty slot over the hidden split. The overlay reads the tab's current turn rather than a copy taken at click time so a
+turn that ends while open picks up its end. A live turn reloads on `git:changed`; an ended one never
+does.
 
 #### Blocking shared-stash commands
 

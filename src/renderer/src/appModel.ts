@@ -337,6 +337,9 @@ export type CodeLinks = NonNullable<AgentSession['links']>
 export type CodeLink = CodeLinks['items'][number]
 export type TabCodeLinks = Omit<CodeLinks, 'at'> & { updated: number; signature: string }
 export type CodeLinkTarget = CodeLink & { root: string; key: number }
+export type AgentTurn = NonNullable<AgentSession['turn']>
+export type TabTurn = AgentTurn & { sessionId: string; live: boolean }
+export type Overlay = CodeLinkTarget | { kind: 'turn'; key: number }
 export type PanelView = 'git' | 'links'
 export type PanelChoice = { view: PanelView; signature?: string }
 
@@ -377,6 +380,44 @@ export function mergeCodeLinks(
     const current = next[tabId]
     if (current && (current.signature === signature || current.updated > updated)) continue
     next = { ...next, [tabId]: { root, items, updated, signature } }
+  }
+  return next
+}
+
+export function mergeTurns(
+  previous: Record<number, TabTurn>,
+  sessions: AgentSession[],
+  tabs: Tab[],
+  panes: Record<number, Pane[]>
+): Record<number, TabTurn> {
+  let next = previous
+  const set = (tabId: number, turn: TabTurn | null): void => {
+    const rest = { ...next }
+    if (turn) rest[tabId] = turn
+    else delete rest[tabId]
+    next = rest
+  }
+  for (const session of sessions) {
+    if (session.terminalId === undefined) continue
+    const tabId = tabForTerminal(tabs, panes, session.terminalId)
+    if (tabId === null) continue
+    const current = next[tabId]
+    const turn = session.turn
+    if (!turn) {
+      if (current?.sessionId === session.sessionId && session.updated >= current.at)
+        set(tabId, null)
+      continue
+    }
+    const live = !turn.end && session.state !== 'idle'
+    const same = current?.at === turn.at && current.base === turn.base
+    if (current && current.at > turn.at) continue
+    if (same && turn.end === current.end && live === current.live) continue
+    if (same && !turn.end && current.end) continue
+    set(tabId, { ...turn, sessionId: session.sessionId, live })
+  }
+  const reporting = new Set(sessions.map((session) => session.sessionId))
+  for (const [key, turn] of Object.entries(next)) {
+    if (turn.live && !reporting.has(turn.sessionId)) set(Number(key), { ...turn, live: false })
   }
   return next
 }

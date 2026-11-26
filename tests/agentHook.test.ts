@@ -14,6 +14,7 @@ let outside = ''
 
 interface HookRun {
   stdout: string
+  stderr: string
   status: number | null
 }
 
@@ -23,7 +24,7 @@ function runHook(event: Record<string, unknown>, agent = 'claude'): HookRun {
     env: { ...process.env, XDG_CONFIG_HOME: config },
     encoding: 'utf8'
   })
-  return { stdout: result.stdout, status: result.status }
+  return { stdout: result.stdout, stderr: result.stderr, status: result.status }
 }
 
 function bash(command: string, cwd = repo): HookRun {
@@ -191,9 +192,29 @@ describe('code links', () => {
     expect(path.resolve(result.root)).toBe(path.resolve(project))
     expect(result.items).toEqual([
       { path: 'src/a.ts', line: 3 },
-      { path: 'b.ts', line: 2, endLine: 4 },
-      { path: 'src/a.ts' }
+      { path: 'b.ts', line: 2, endLine: 4 }
     ])
+  })
+
+  it('resolves a bare file name that names exactly one file in the repo', () => {
+    fs.mkdirSync(path.join(project, 'src', 'deep'), { recursive: true })
+    fs.mkdirSync(path.join(project, 'x'))
+    fs.mkdirSync(path.join(project, 'y'))
+    fs.writeFileSync(path.join(project, 'src', 'deep', 'only.ts'), 'one\ntwo\n')
+    fs.writeFileSync(path.join(project, 'x', 'dup.ts'), 'one\n')
+    fs.writeFileSync(path.join(project, 'y', 'dup.ts'), 'one\n')
+    runHook({
+      hook_event_name: 'Stop',
+      cwd: project,
+      last_assistant_message: '`only.ts:2`, deep/only.ts:1, dup.ts:1 and y/dup.ts:1'
+    })
+    expect((links() as { items: unknown[] }).items).toEqual([
+      { path: 'src/deep/only.ts', line: 2 },
+      { path: 'src/deep/only.ts', line: 1 },
+      { path: 'y/dup.ts', line: 1 }
+    ])
+    for (const dir of ['src/deep', 'x', 'y'])
+      fs.rmSync(path.join(project, dir), { recursive: true, force: true })
   })
 
   it('carries links across later events and drops them on a linkless Stop', () => {
@@ -230,11 +251,29 @@ describe('code links', () => {
       cwd: project,
       last_assistant_message: `[a](<my file.ts>) [b](src/a.ts "title") [c](${url}#L3)`
     })
+    expect((links() as { items: unknown[] }).items).toEqual([{ path: 'b.ts', line: 3 }])
+  })
+
+  it('reads angle-bracket and titled markdown links that carry a line', () => {
+    runHook({
+      hook_event_name: 'Stop',
+      cwd: project,
+      last_assistant_message: '[a](<my file.ts#L2>) [b](src/a.ts#L1 "title")'
+    })
     expect((links() as { items: unknown[] }).items).toEqual([
-      { path: 'my file.ts' },
-      { path: 'src/a.ts' },
-      { path: 'b.ts', line: 3 }
+      { path: 'my file.ts', line: 2 },
+      { path: 'src/a.ts', line: 1 }
     ])
+  })
+
+  it('ignores citations without a line number', () => {
+    runHook({ hook_event_name: 'Stop', cwd: project, last_assistant_message: 'See b.ts:2' })
+    runHook({
+      hook_event_name: 'Stop',
+      cwd: project,
+      last_assistant_message: 'See src/a.ts, [b](b.ts) and [the file](src/a.ts).'
+    })
+    expect(links()).toBeUndefined()
   })
 
   it.runIf(process.platform === 'win32')('stores the on-disk case of a cited path', () => {
@@ -377,5 +416,133 @@ describe('code links', () => {
     runHook({ hook_event_name: 'Stop', cwd: project, transcript_path: transcript })
     expect((links() as { items: unknown[] }).items).toEqual([{ path: 'b.ts', line: 4 }])
     runHook({ hook_event_name: 'SessionEnd', cwd: project })
+  })
+})
+
+describe('turn snapshots', () => {
+  let work = ''
+
+  function git(...args: string[]): string {
+    return spawnSync('git', args, { cwd: work, encoding: 'utf8' }).stdout.trim()
+  }
+
+  function turn(): Record<string, string> | undefined {
+    return record().turn as Record<string, string> | undefined
+  }
+
+  beforeAll(() => {
+    work = path.join(scratch, 'turns')
+    fs.mkdirSync(work)
+    git('init', '-q')
+    fs.writeFileSync(path.join(work, 'a.txt'), 'one\n')
+    git('add', '.')
+    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init')
+  })
+
+  it('diffs only what changed between the prompt and the Stop', () => {
+    fs.appendFileSync(path.join(work, 'a.txt'), 'before\n')
+    runHook({ hook_event_name: 'UserPromptSubmit', cwd: work, prompt_id: 't1' })
+    const started = turn()
+    expect(started).toMatchObject({ promptId: 't1' })
+    expect(started?.end).toBeUndefined()
+    expect(path.resolve(started!.root)).toBe(path.resolve(work))
+
+    fs.appendFileSync(path.join(work, 'a.txt'), 'during\n')
+    fs.writeFileSync(path.join(work, 'new.txt'), 'fresh\n')
+    runHook({ hook_event_name: 'Stop', cwd: work, prompt_id: 't1', last_assistant_message: 'ok' })
+    const ended = turn()!
+    expect(ended.base).toBe(started!.base)
+    expect(git('diff', '--numstat', ended.base, ended.end).split('\n')).toEqual([
+      '1\t0\ta.txt',
+      '1\t0\tnew.txt'
+    ])
+    expect(git('status', '--porcelain')).toBe('M a.txt\n?? new.txt')
+  })
+
+  it('reuses HEAD when the tree is clean and keeps the end through later events', () => {
+    git('add', '.')
+    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'second')
+    runHook({ hook_event_name: 'UserPromptSubmit', cwd: work, prompt_id: 't2' })
+    expect(turn()?.base).toBe(git('rev-parse', 'HEAD'))
+    runHook({ hook_event_name: 'Stop', cwd: work, prompt_id: 't2' })
+    const ended = turn()
+    expect(ended?.end).toBe(git('rev-parse', 'HEAD'))
+    runHook({ hook_event_name: 'Stop', cwd: work, prompt_id: 't2' })
+    runHook({ hook_event_name: 'Notification', notification_type: 'idle_prompt', cwd: work })
+    expect(turn()).toEqual(ended)
+  })
+
+  it('leaves the end to the turn it belongs to', () => {
+    runHook({ hook_event_name: 'UserPromptSubmit', cwd: work, prompt_id: 't3' })
+    runHook({ hook_event_name: 'Stop', cwd: work, prompt_id: 'other' })
+    expect(turn()?.end).toBeUndefined()
+  })
+
+  it('moves the end forward when a Stop hook continued the turn', () => {
+    runHook({ hook_event_name: 'UserPromptSubmit', cwd: work, prompt_id: 't5' })
+    fs.writeFileSync(path.join(work, 'first.txt'), 'x\n')
+    runHook({ hook_event_name: 'Stop', cwd: work, prompt_id: 't5' })
+    const first = turn()!
+    fs.writeFileSync(path.join(work, 'second.txt'), 'y\n')
+    runHook({ hook_event_name: 'Stop', cwd: work, prompt_id: 't5', stop_hook_active: true })
+    const ended = turn()!
+    expect(ended.base).toBe(first.base)
+    expect(git('diff', '--name-only', ended.base, ended.end).split('\n')).toEqual([
+      'first.txt',
+      'second.txt'
+    ])
+  })
+
+  it('never takes the end from an away-recap Stop', () => {
+    runHook({ hook_event_name: 'UserPromptSubmit', cwd: work, prompt_id: 't6' })
+    runHook({ hook_event_name: 'Stop', cwd: work, prompt_id: 't6' })
+    const dir = path.join(config, 'snow', 'agents')
+    const [file] = fs.readdirSync(dir)
+    const current = record()
+    const open = { ...(current.turn as Record<string, string>) }
+    delete open.end
+    fs.writeFileSync(path.join(dir, file), JSON.stringify({ ...current, turn: open }))
+    runHook({ hook_event_name: 'Stop', cwd: work, prompt_id: 't6' })
+    expect(turn()?.end).toBeUndefined()
+  })
+
+  it('leaves large untracked files out of the snapshot', () => {
+    const big = path.join(work, 'big.bin')
+    fs.writeFileSync(big, Buffer.alloc(3 * 1024 * 1024))
+    fs.writeFileSync(path.join(work, 'small.txt'), 'z\n')
+    runHook({ hook_event_name: 'UserPromptSubmit', cwd: work, prompt_id: 't7' })
+    runHook({ hook_event_name: 'Stop', cwd: work, prompt_id: 't7' })
+    const files = git('ls-tree', '-r', '--name-only', turn()!.end).split('\n')
+    expect(files).toContain('small.txt')
+    expect(files).not.toContain('big.bin')
+    fs.rmSync(big)
+  })
+
+  it('keeps a file that outgrew the size limit during the turn', () => {
+    const grown = path.join(work, 'grown.bin')
+    fs.writeFileSync(grown, Buffer.alloc(1024))
+    runHook({ hook_event_name: 'UserPromptSubmit', cwd: work, prompt_id: 't8' })
+    fs.writeFileSync(grown, Buffer.alloc(3 * 1024 * 1024))
+    runHook({ hook_event_name: 'Stop', cwd: work, prompt_id: 't8' })
+    const ended = turn()!
+    expect(git('diff', '--name-status', ended.base, ended.end)).toBe('M\tgrown.bin')
+    fs.rmSync(grown)
+  })
+
+  it('prints nothing when git warns while snapshotting', () => {
+    git('config', 'core.autocrlf', 'true')
+    fs.writeFileSync(path.join(work, 'lf.txt'), 'a\nb\n')
+    const run = runHook({ hook_event_name: 'UserPromptSubmit', cwd: work, prompt_id: 't9' })
+    expect(turn()?.promptId).toBe('t9')
+    expect(run.stderr).toBe('')
+    expect(run.stdout).toBe('')
+    git('config', '--unset', 'core.autocrlf')
+    fs.rmSync(path.join(work, 'lf.txt'))
+  })
+
+  it('records no turn outside a repository', () => {
+    runHook({ hook_event_name: 'UserPromptSubmit', cwd: outside, prompt_id: 't4' })
+    expect(turn()).toBeUndefined()
+    runHook({ hook_event_name: 'SessionEnd', cwd: work })
   })
 })
