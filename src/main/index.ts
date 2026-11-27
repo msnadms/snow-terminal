@@ -6,6 +6,7 @@ import icon from '../../resources/icon.png?asset'
 import { registerPtyHandlers, disposeAllPty } from './pty'
 import { registerBrowserHandlers, disposeAllBrowser } from './browser'
 import { registerLocalhostHandlers } from './localhost'
+import { registerFileHandlers, disposeFileWatchers } from './files'
 import { registerGitHandlers, disposeGitWatchers } from './git'
 import { registerWorkflowHandlers } from './workflow'
 import { initRegistry, disposeRegistryWatcher } from './registry'
@@ -88,6 +89,7 @@ app.whenReady().then(() => {
   registerPtyHandlers()
   registerBrowserHandlers()
   registerLocalhostHandlers()
+  registerFileHandlers()
   initRegistry()
   registerGitHandlers()
   registerWorkflowHandlers()
@@ -118,6 +120,7 @@ app.on('will-quit', () => {
   disposeAllPty()
   disposeAllBrowser()
   disposeGitWatchers()
+  disposeFileWatchers()
   disposeRegistryWatcher()
   disposeThemeWatcher()
   disposeSnowignoreWatcher()

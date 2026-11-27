@@ -38,6 +38,7 @@ export type Tab =
       focusKey: number
       review?: { targets: WorkflowReviewTarget[]; index: number }
     }
+  | { kind: 'file'; id: number; cwd: string; path: string; treeCwd?: string }
   | { kind: 'browser'; id: number; url: string }
 
 export type RepoEntry = { cwd: string; presetCwd?: string; presetName?: string }
@@ -87,7 +88,7 @@ export function inheritedPreset(
 
 export function tabCwdOf(tab: Tab, cwds: Record<number, string | undefined>): string | undefined {
   if (tab.kind === 'shell') return cwds[tab.id] ?? tab.cwd
-  if (tab.kind === 'commit' || tab.kind === 'diff') return tab.cwd
+  if (tab.kind === 'commit' || tab.kind === 'diff' || tab.kind === 'file') return tab.cwd
   return undefined
 }
 
@@ -98,7 +99,7 @@ export function repoEntriesOf(
   panes: Record<number, Pane[]>
 ): RepoEntry[] {
   if (!activeTab) return cwd != null ? [{ cwd }] : []
-  if (activeTab.kind === 'commit' || activeTab.kind === 'diff')
+  if (activeTab.kind === 'commit' || activeTab.kind === 'diff' || activeTab.kind === 'file')
     return [{ cwd: activeTab.cwd, presetCwd: activeTab.cwd }]
   if (activeTab.kind === 'browser') return []
   const base = activeTab.cwd ?? cwds[activeTab.id]
@@ -173,6 +174,8 @@ export function tabLabels(
       result[tab.id] = tab.review
         ? `Review ${tab.review.index + 1}/${tab.review.targets.length}`
         : `${tab.branch} ✎`
+    } else if (tab.kind === 'file') {
+      result[tab.id] = basename(tab.path)
     } else if (tab.kind === 'browser') {
       result[tab.id] = browserTitles[tab.id] ?? 'Browser'
     } else {
@@ -340,7 +343,7 @@ export type CodeLinkTarget = CodeLink & { root: string; key: number }
 export type AgentTurn = NonNullable<AgentSession['turn']>
 export type TabTurn = AgentTurn & { sessionId: string; live: boolean }
 export type Overlay = CodeLinkTarget | { kind: 'turn'; key: number }
-export const panelViews = ['git', 'links'] as const
+export const panelViews = ['git', 'files', 'links'] as const
 export type PanelView = (typeof panelViews)[number]
 export type PanelSignals = Partial<Record<PanelView, string>>
 export type PanelChoice = { view: PanelView; seen: PanelSignals }
@@ -424,4 +427,41 @@ export function mergeTurns(
     if (turn.live && !reporting.has(turn.sessionId)) set(Number(key), { ...turn, live: false })
   }
   return next
+}
+
+export function treeRoot(cwd: string): string {
+  const normalized = normalizePath(cwd)
+  if (normalized === '') return '/'
+  return /^[A-Za-z]:$/.test(normalized) ? `${normalized}/` : normalized
+}
+
+export function childPath(dir: string, name: string): string {
+  return dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`
+}
+
+function isBelow(child: string, parent: string): boolean {
+  return child.startsWith(parent.endsWith('/') ? parent : `${parent}/`)
+}
+
+export function fileTarget(
+  repo: { root: string; prefix: string } | null,
+  name: string
+): { root: string; path: string } | null {
+  return repo ? { root: repo.root, path: `${repo.prefix}${name}` } : null
+}
+
+export function collapseDir(expanded: ReadonlySet<string>, dir: string): Set<string> {
+  return new Set([...expanded].filter((path) => path !== dir && !isBelow(path, dir)))
+}
+
+export function changedDirs(
+  expanded: ReadonlySet<string>,
+  dir: string,
+  names: string[] | null
+): string[] {
+  const roots = names ? names.map((name) => childPath(dir, name)) : [dir]
+  return [
+    dir,
+    ...[...expanded].filter((path) => roots.some((root) => path === root || isBelow(path, root)))
+  ].filter((path, index, all) => all.indexOf(path) === index)
 }

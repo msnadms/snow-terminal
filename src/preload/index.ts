@@ -26,6 +26,7 @@ import type { ThemeInstallResult } from '../main/themeInstall'
 import type { AgentsResult } from '../main/agents'
 import type { HooksResult, HooksState } from '../main/hooks'
 import type { SnowignoreResult } from '../main/snowignore'
+import type { DirListing } from '../main/files'
 import type { SnowconfigResult, Layout, Preset } from '../main/snowconfig'
 
 function idDispatcher<P extends { id: number }>(
@@ -200,6 +201,18 @@ const git = {
   }
 }
 
+const files = {
+  list: (dir: string): Promise<DirListing> => ipcRenderer.invoke('files:list', dir),
+  watch: (dir: string): Promise<void> => ipcRenderer.invoke('files:watch', dir),
+  unwatch: (dir: string): Promise<void> => ipcRenderer.invoke('files:unwatch', dir),
+  onChanged: (callback: (dir: string, names: string[] | null) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, dir: string, names: string[] | null): void =>
+      callback(dir, names)
+    ipcRenderer.on('files:changed', listener)
+    return () => ipcRenderer.removeListener('files:changed', listener)
+  }
+}
+
 const workflow = {
   list: (cwd?: string, detail?: boolean): Promise<WorkflowList> =>
     ipcRenderer.invoke('workflow:list', cwd, detail),
@@ -331,6 +344,7 @@ const api = {
   terminal,
   browser,
   git,
+  files,
   workflow,
   theme,
   snowignore,

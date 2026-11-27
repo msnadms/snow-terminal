@@ -5,6 +5,11 @@ import {
   inheritedPreset,
   mergeCodeLinks,
   mergeTurns,
+  changedDirs,
+  childPath,
+  collapseDir,
+  fileTarget,
+  treeRoot,
   panelViewFor,
   moveTab,
   moveTabGroup,
@@ -249,5 +254,55 @@ describe('panelViewFor', () => {
 
   it('ignores a signal that disappeared since the choice', () => {
     expect(panelViewFor({ view: 'git', seen: { links: 'a' } }, {})).toBe('git')
+  })
+})
+
+describe('treeRoot', () => {
+  it('keeps the separator of a filesystem root', () => {
+    expect(treeRoot('/')).toBe('/')
+    expect(treeRoot('C:\\')).toBe('C:/')
+    expect(treeRoot('C:\\work\\app\\')).toBe('C:/work/app')
+  })
+})
+
+describe('childPath', () => {
+  it('joins without doubling the separator at a root', () => {
+    expect(childPath('/', 'etc')).toBe('/etc')
+    expect(childPath('C:/', 'work')).toBe('C:/work')
+    expect(childPath('C:/work', 'app')).toBe('C:/work/app')
+  })
+})
+
+describe('fileTarget', () => {
+  it('resolves a file against the repo its directory reported', () => {
+    expect(fileTarget({ root: 'C:/work/app', prefix: 'src/' }, 'a.ts')).toEqual({
+      root: 'C:/work/app',
+      path: 'src/a.ts'
+    })
+    expect(fileTarget({ root: '/work/app', prefix: '' }, 'README.md')).toEqual({
+      root: '/work/app',
+      path: 'README.md'
+    })
+    expect(fileTarget(null, 'a.ts')).toBeNull()
+  })
+})
+
+describe('collapseDir', () => {
+  it('drops the folder and every expanded folder below it, not siblings sharing a prefix', () => {
+    const expanded = new Set(['/w/a', '/w/a/b', '/w/a/b/c', '/w/ab', '/w/z'])
+    expect([...collapseDir(expanded, '/w/a')]).toEqual(['/w/ab', '/w/z'])
+  })
+})
+
+describe('changedDirs', () => {
+  const expanded = new Set(['/w/dist', '/w/dist/js', '/w/src', '/w/distant'])
+
+  it('re-lists the folder plus expanded folders under the changed names', () => {
+    expect(changedDirs(expanded, '/w', ['dist'])).toEqual(['/w', '/w/dist', '/w/dist/js'])
+    expect(changedDirs(expanded, '/w', ['a.ts'])).toEqual(['/w'])
+  })
+
+  it('re-lists everything expanded below the folder when the names are unknown', () => {
+    expect(changedDirs(expanded, '/w/dist', null)).toEqual(['/w/dist', '/w/dist/js'])
   })
 })

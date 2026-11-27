@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ActionBar from './components/ActionBar'
 import CommitView from './components/CommitView'
+import FileTab from './components/FileTab'
 import SidePanel from './components/SidePanel'
 import Session from './components/Session'
 import BrowserTab from './components/BrowserTab'
@@ -143,9 +144,16 @@ function App(): React.JSX.Element {
     [panelKey, panelSignals]
   )
   const cwd =
-    activeTab && (activeTab.kind === 'commit' || activeTab.kind === 'diff')
+    activeTab &&
+    (activeTab.kind === 'commit' || activeTab.kind === 'diff' || activeTab.kind === 'file')
       ? activeTab.cwd
       : cwds[activeTab?.id ?? -1]
+  const filesCwd =
+    activeTab?.kind === 'file'
+      ? activeTab.treeCwd
+      : activeTab?.kind === 'shell'
+        ? (cwd ?? activeTab.cwd)
+        : cwd
   const repoEntries = useMemo(
     () => repoEntriesOf(activeTab, cwd, cwds, panes),
     [activeTab, cwd, cwds, panes]
@@ -362,6 +370,31 @@ function App(): React.JSX.Element {
       openTab({ kind: 'diff', id: nextIdRef.current++, cwd, branch, focus: file, focusKey: 0 })
     },
     [openTab]
+  )
+
+  const openFile = useCallback(
+    ({ root, path }: { root: string; path: string }): void => {
+      const existing = tabsRef.current.find(
+        (t) => t.kind === 'file' && t.cwd === root && t.path === path
+      )
+      if (existing) {
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.id === existing.id && t.kind === 'file' ? { ...t, treeCwd: filesCwd } : t
+          )
+        )
+        setPanelChoices((prev) => ({
+          ...prev,
+          [existing.id]: { view: 'files', seen: prev[existing.id]?.seen ?? {} }
+        }))
+        setActiveId(existing.id)
+        return
+      }
+      const id = nextIdRef.current++
+      setPanelChoices((prev) => ({ ...prev, [id]: { view: 'files', seen: {} } }))
+      openTab({ kind: 'file', id, cwd: root, path, treeCwd: filesCwd })
+    },
+    [openTab, filesCwd]
   )
 
   const openReview = useCallback(
@@ -840,6 +873,19 @@ function App(): React.JSX.Element {
                     />
                   </PaneBoundary>
                 )
+              if (tab.kind === 'file')
+                return (
+                  <PaneBoundary key={tab.id} label="File" active={active}>
+                    <FileTab
+                      active={active}
+                      id={tab.id}
+                      root={tab.cwd}
+                      path={tab.path}
+                      onOpenCommit={openCommit}
+                      onClose={closeSession}
+                    />
+                  </PaneBoundary>
+                )
               if (tab.kind === 'browser')
                 return (
                   <PaneBoundary key={tab.id} label="Browser" active={active}>
@@ -913,6 +959,7 @@ function App(): React.JSX.Element {
               onOpenDiff: openDiff,
               onOpenDiffSplit: activeTab?.kind === 'shell' ? openDiffSplit : undefined
             }}
+            files={{ cwd: filesCwd, onOpenFile: openFile }}
             links={{
               links: activeLinks,
               turn: activeTurn,

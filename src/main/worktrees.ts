@@ -4,6 +4,7 @@ import path from 'path'
 import { boundedCache } from './cache'
 import { collapseHome, samePath } from './config'
 import { gitFor, worktreeMap } from './gitCore'
+import { suspendFileWatchersIn } from './files'
 import { closePtysInDirectory } from './pty'
 import type { WorkflowOrphan, WorkflowResult } from './workflowTypes'
 
@@ -183,6 +184,9 @@ export async function removeLinkedWorktree(
   branch: string,
   directory: string
 ): Promise<void> {
+  const container = worktreeContainer(repo)
+  const inContainer = samePath(path.dirname(directory), container)
+  const resumeWatchers = await suspendFileWatchersIn(inContainer ? container : directory)
   try {
     await gitFor(repo).raw(['worktree', 'remove', '--force', '--force', directory])
   } catch (first) {
@@ -193,9 +197,10 @@ export async function removeLinkedWorktree(
     } catch (second) {
       throw Object.assign(second as object, { terminalsClosed: true })
     }
+    if (inContainer) await fs.promises.rmdir(container).catch(() => {})
+  } finally {
+    resumeWatchers()
   }
-  if (samePath(path.dirname(directory), worktreeContainer(repo)))
-    await fs.promises.rmdir(worktreeContainer(repo)).catch(() => {})
 }
 
 export function closedTerminals(error: unknown): boolean {

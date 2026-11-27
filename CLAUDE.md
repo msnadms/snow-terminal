@@ -569,6 +569,49 @@ the panel where it is. Choosing a view marks every current signal seen. Git is `
 repo sections are hidden, not unmounted, so their watchers and loaded state survive the switch;
 other views mount only while showing. `GitPanel.tsx` now exports only the Git view (`GitView`).
 
+The **Files** view (`FileTree`, also `keepMounted`) is a lazy tree of the active tab's directory.
+`files:list` (`src/main/files.ts`) reads one directory per expand — `.git` hidden, directories first,
+gitignored entries flagged by one `check-ignore --stdin` and dimmed. The same listing carries that
+directory's own `repo` (`rev-parse --show-toplevel --show-prefix`), so a clicked file maps to
+`{ root, prefix + name }` with no repo scan: a submodule, a nested repo or one several levels below a
+non-repo parent resolves correctly, and git's own prefix survives symlinks and case. A directory in no
+repo disables its files. Every expanded folder re-lists on showing the view and on Refresh; collapsing
+a folder drops every expanded folder below it (`collapseDir`), so nothing invisible stays watched. A
+filesystem root keeps its separator (`treeRoot`, `childPath`) — `C:` alone means the drive's current
+directory.
+
+While the view is showing (and the panel is not collapsed — `SidePanel` passes `collapsed` as
+`hidden`), the root and each expanded folder carry a non-recursive `fs.watch`
+(`files:watch`/`files:unwatch`, refcounted in their own `WatcherRegistry`). Only `rename` events count
+— creates, deletes and renames — so saving a file never re-lists. The debounced `files:changed` carries
+the changed **names** (`null` when the platform withheld one), and `changedDirs` re-lists the folder
+plus any expanded folder under a changed name, since `rm -rf dist && mkdir dist` replaces the very
+directory a watcher sat on. `FileTree` diffs the wanted set against what it already watches, so it
+sends each `files:watch` once; main therefore keeps a watcher's registry entry alive across its fs
+watcher's death and **re-arms it itself**: a watcher records its directory's identity (inode plus birth time, since
+Linux filesystems hand a freed inode to the next `mkdir`), and any successful `files:list` of that
+directory re-arms when the identity differs — compared against the stat the arm started, awaited, so a
+listing racing a fresh watch never re-arms it. A removed and recreated folder thus comes back on the
+parent's re-list. An error **keeps** the armed identity, so a directory whose watcher keeps failing is
+not re-armed by the re-list its own error triggers (an error → list → arm → error loop spawning git
+each turn); a timed retry (`rearmDelayMs`, at most `maxRearms` until the directory is replaced) covers
+a transient error instead. A page reload (`did-navigate`) closes the sender's watchers, since the new
+page re-sends `files:watch` and would otherwise only raise the old refcount. `removeLinkedWorktree`
+suspends watchers inside the directory (`suspendFileWatchersIn`) **before the first attempt**, so a
+watcher alone never costs the user's terminals — the `<repo>-worktrees` container instead when that is
+the parent, so the container's own `rmdir` also runs before anything re-arms. Suspension is a root, not
+a set of handles, matched on both the lexical and the real path of each side (the tree's directories
+come from OSC 7, the worktree's from git, and a junction or subst drive spells them differently): while
+it is held no watcher below it arms, by re-list or by a fresh `files:watch`. Releasing it re-arms them
+and broadcasts `files:changed` whichever way the removal went. Git's stderr is ignored, not piped, so
+a chatty `check-ignore` cannot block on a full pipe until the timeout kills it. The tree tags each listing per folder and keeps only the latest, so a slow
+`check-ignore` cannot land a stale listing over a newer one. Output from git is collected as Buffers and decoded once,
+so a multi-byte name split across chunks still matches. Clicking
+opens a `{ kind: 'file' }` tab (deduped on root + path; reopening an existing one moves its `treeCwd` and panel to Files too) rendering `CodeLinkView` without a line, so it
+shows the file's diff when it has one and the whole file otherwise. A file tab carries `treeCwd` — the
+directory the tree showed — and opens with the panel on Files, so clicking a file neither re-roots the
+tree at the repo nor flips the panel back to Git.
+
 Clicking a link sets the tab's **overlay** (`overlays` in `App`, distinct from `splits`). `Session`
 renders it in the rightmost slot, reusing the `'diff'` sizing key; the existing split stays mounted
 with `active={false}` (so a browser split's `WebContentsView` hides and keeps its page), and closing

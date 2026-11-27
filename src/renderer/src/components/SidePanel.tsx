@@ -1,6 +1,7 @@
 import { Fragment } from 'react'
 import { panelViews, type PanelView } from '../appModel'
 import CodeLinksList, { type CodeLinksListProps } from './CodeLinksList'
+import FileTree, { type FileTreeProps } from './FileTree'
 import GitView, { type GitViewProps } from './GitPanel'
 
 interface PanelTab {
@@ -17,6 +18,7 @@ interface SidePanelProps {
   view: PanelView
   onViewChange: (view: PanelView) => void
   git: GitViewProps
+  files: FileTreeProps
   links: CodeLinksListProps
 }
 
@@ -27,6 +29,7 @@ function SidePanel({
   view,
   onViewChange,
   git,
+  files,
   links
 }: SidePanelProps): React.JSX.Element {
   const tabs: Record<PanelView, PanelTab> = {
@@ -35,6 +38,12 @@ function SidePanel({
       title: 'Git',
       keepMounted: true,
       render: (hidden) => <GitView hidden={hidden} {...git} />
+    },
+    files: {
+      icon: '\u{f07b}',
+      title: 'Files',
+      keepMounted: true,
+      render: (hidden) => <FileTree hidden={hidden} {...files} />
     },
     links: {
       icon: '\u{f0339}',
@@ -67,7 +76,7 @@ function SidePanel({
       </div>
       {panelViews.map((key) =>
         key === view || tabs[key].keepMounted ? (
-          <Fragment key={key}>{tabs[key].render(key !== view)}</Fragment>
+          <Fragment key={key}>{tabs[key].render(collapsed || key !== view)}</Fragment>
         ) : null
       )}
     </div>
