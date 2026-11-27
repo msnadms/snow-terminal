@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { parseDiff } from 'react-diff-view'
 import {
   fileIndexFor,
+  firstChangedLine,
   linkLabel,
   rangeOf,
   selectedKeysFor,
@@ -66,5 +67,25 @@ describe('fileIndexFor', () => {
     expect(fileIndexFor(files, 'b.ts')).toBe(0)
     expect(fileIndexFor(files.slice(0, 1), 'a.ts')).toBe(0)
     expect(fileIndexFor(files, 'c.ts')).toBe(-1)
+  })
+})
+
+describe('firstChangedLine', () => {
+  const hunksOf = (body: string[]): Parameters<typeof firstChangedLine>[0] =>
+    parseDiff(['diff --git a/a.ts b/a.ts', '--- a/a.ts', '+++ b/a.ts', ...body, ''].join('\n'))[0]
+      .hunks
+
+  it('skips leading context to the first insert', () => {
+    expect(
+      firstChangedLine(hunksOf(['@@ -47,6 +47,7 @@', ' a', ' b', ' c', '+new', ' d', ' e', ' f']))
+    ).toBe(50)
+  })
+
+  it('lands where a deletion was', () => {
+    expect(firstChangedLine(hunksOf(['@@ -10,4 +10,3 @@', ' a', ' b', '-gone', ' c']))).toBe(12)
+  })
+
+  it('reports nothing without hunks', () => {
+    expect(firstChangedLine([])).toBeUndefined()
   })
 })

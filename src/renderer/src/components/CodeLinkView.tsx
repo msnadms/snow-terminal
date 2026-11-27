@@ -3,6 +3,7 @@ import { parseDiff, useTokenizeWorker } from 'react-diff-view'
 import type { HunkData, TokenNode } from 'react-diff-view'
 import DiffBody from './DiffBody'
 import DiffScroll from './DiffScroll'
+import OpenInEditor from './OpenInEditor'
 import type { CodeLinkTarget } from '@renderer/appModel'
 import {
   fileIndexFor,
@@ -15,6 +16,7 @@ import {
 import { languageFor } from '@renderer/syntax'
 import { tokenizeWorker } from '@renderer/tokenizeWorker'
 import { useLatestRun } from '@renderer/useLatestRun'
+import { hasEditor, useEditors } from '@renderer/useEditors'
 
 type GitDiff =
   | Awaited<ReturnType<typeof window.api.git.diff>>
@@ -162,6 +164,7 @@ function CodeLinkView({
   onClose
 }: CodeLinkViewProps): React.JSX.Element {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
+  const editors = useEditors()
   const latestRun = useLatestRun()
   const { root, path: file } = target
   const range = useMemo(() => rangeOf(target), [target])
@@ -233,6 +236,7 @@ function CodeLinkView({
         truncatedNote="Diff too large to display in full."
         only={file}
         focusLine={range}
+        worktreeLines
         onOpenCommit={onOpenCommit}
       />
     )
@@ -241,7 +245,14 @@ function CodeLinkView({
   return (
     <DiffScroll active={active} onClose={onClose}>
       <div className="commit-header">
-        <div className="commit-subject">{linkLabel(target)}</div>
+        <div className="commit-subject code-link-subject">
+          <span>{linkLabel(target)}</span>
+          {loaded?.kind === 'file' && hasEditor(editors) && (
+            <span className="code-link-actions">
+              <OpenInEditor editors={editors} cwd={root} path={file} line={range?.start} />
+            </span>
+          )}
+        </div>
         <div className="commit-meta">
           <span className="commit-refs">
             {loaded && loaded.kind !== 'missing' ? loaded.label : ''}

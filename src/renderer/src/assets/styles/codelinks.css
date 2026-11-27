@@ -154,6 +154,18 @@
   min-width: 0;
 }
 
+.code-link-subject {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.code-link-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+}
+
 .code-link-more {
   display: block;
   margin: 0 0 8px 4em;

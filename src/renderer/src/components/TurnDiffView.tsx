@@ -92,6 +92,7 @@ function TurnDiffView({
         truncated={diff.truncated}
         truncatedNote="Diff too large to display in full."
         onOpenCommit={onOpenCommit}
+        worktreeLines={!end}
       />
     )
   }

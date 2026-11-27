@@ -146,6 +146,7 @@ function WorkingDiffView({
             focusKey={focusKey}
             onOpenCommit={onOpenCommit}
             staging={reviewMode ? undefined : staging}
+            worktreeLines
           />
         )}
       </>

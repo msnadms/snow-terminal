@@ -18,6 +18,7 @@ import {
   gitFor,
   isStaged,
   remoteName,
+  strictlyInside,
   worktreeMap,
   worktreeRoot
 } from './gitCore'
@@ -111,7 +112,7 @@ async function fileTargets(
   for (const rel of [filePath, oldPath]) {
     if (!rel) continue
     const full = path.resolve(root, rel)
-    if (full === root || !full.startsWith(root + path.sep)) return null
+    if (!strictlyInside(root, full)) return null
     if (targets.some((t) => t.full === full)) continue
     targets.push({ rel, full })
   }

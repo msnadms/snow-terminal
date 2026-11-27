@@ -161,13 +161,40 @@ Staged state on the diff comes from `git:diff` marking each file `staged` via
 `git diff --cached --name-only` against the same `base` it already resolved — deliberately not
 `git status`. A partially staged file reads as staged.
 
+#### Open in editor
+
+Every file header also carries **Open in VS Code** / **Open in Visual Studio** buttons (hidden for a
+deleted file), opening the worktree copy at the focused line or the first hunk's first changed line
+(`firstChangedLine`, past the leading context). A line is passed
+only when the diff's new side **is** the working tree (`worktreeLines`: the working, review and
+code-link diffs, and a turn with no `end`) — a commit's line numbers would land on unrelated code
+today. `src/main/editors.ts` owns `editor:available` and `editor:open(editor, cwd, path, line?)`,
+resolving the path against the worktree root through the same `strictlyInside` (`gitCore.ts`) that
+`fileTargets` uses — a `path.relative` test, since `root + sep` breaks on a repo at a drive root.
+VS Code goes through a `vscode://file/…:line:1` URL (available when the protocol is registered), so
+no `code` shim and no shell quoting. Visual Studio is win32-only: `vswhere -latest -format json`
+gives `devenv.exe` and the major version naming its `VisualStudio.DTE.<major>.0` ProgID. With a
+line, a running instance is driven through DTE from `powershell.exe` (`GetActiveObject`, then
+`OpenFile` + `GotoLine`), since `devenv /edit` hands the file to a running instance and drops
+`/command`; when no instance answers, `devenv /edit <file> /command "Edit.GoTo <line>"` starts one.
+Only a found Visual Studio is cached in main; a failed or empty `vswhere` asks again next time, and
+a failure reports `visualStudio: false` rather than rejecting, so VS Code's button never depends on
+it. `useEditors` is one `useSyncExternalStore` over a module store that re-asks on window `focus`, so
+an editor installed while snow runs appears without a reload. Failures surface in `FailureDialog`, portalled to
+`body` because the sticky file header is its own stacking context. The buttons are the shared
+`OpenInEditor`, also rendered beside `CodeLinkView`'s file name in its whole-file view.
+
+Collapsed files are held per `cwd` + `base`, so a different commit or turn opens fully expanded. A
+collapsed file counts as not visible: no blame, no tokenizing, and its focus scroll waits for the
+expand.
+
 Dialogs share `GitDialog` (backdrop, Escape, focus of the first action button); `DiscardDialog`,
 `FailureDialog`, and `BlockedCommitDialog` are thin wrappers supplying title, `detail`, and buttons.
 `dismissOnEnter` is the one behavioral knob and only `FailureDialog` sets it — the other two are
 unrecoverable actions.
 
 Layout: file headers are `position: sticky` and `DiffScroll`'s tools row is pinned to the same corner,
-so `.commit-file-actions` takes `margin-right: auto` and `.commit-file-title-staging` reserves
+so `.commit-file-actions` takes `margin-right: auto` and `.commit-file-title-actions` reserves
 `--diff-tools-inset` of right padding. This is unconditional on purpose — a
 `scroll-state(stuck: top)` container query reads as _not_ stuck at exactly the offset
 `scrollIntoView({ block: 'start' })` lands on. `--diff-tools-inset` is measured by a `ResizeObserver`
@@ -613,14 +640,17 @@ substring match on file **and** folder names across the whole tree, not just wha
 as a filtered tree with every ancestor open and the match highlighted (`searchTree`, `matchParts`).
 `files:search` builds an index of root-relative paths — `ls-files -s` plus
 `ls-files -o --exclude-standard` wherever a repo answers (so gitignored files are not searched, and each
-hit carries its `{ root, path }` target), a plain walk elsewhere. It descends into nested repos: an
+hit carries its `{ root, path }` target), a plain walk elsewhere, which follows symlinked folders the way `listDirectory` does (guarded by
+real path against loops). Folders are indexed as `dir` entries — every walked folder, and in a repo
+every untracked one `ls-files -o --directory` reports — so an empty folder is searchable too. It descends into nested repos: an
 untracked one `-o` reports as `dir/`, and a submodule, which only `-s` can tell from a file (mode
 `160000`). `-s` lists a conflicted path once per stage, so paths are deduped. Those two calls get
 `indexGitTimeoutMs`, not the 2 s `check-ignore` budget, and a repo whose listing still fails is skipped
 and marks the index `partial` rather than walked — a walk would surface gitignored files as disabled
-rows. The index is capped at `maxWalkedDirs`/`maxIndexedFiles` (`partial` says so) and cached for
-`indexTtlMs` **from when it finishes**, with the in-flight build shared, so a walk slower than the TTL
-is never started twice. Matching folds case per code point (`foldCase`, mirrored in `appModel.ts`) so
+rows. The index is capped at `maxWalkedDirs`/`maxIndexedFiles` (`partial` says so) and cached per root
+(at most `maxCachedIndexes`) for `indexTtlMs` **from when it finishes**, with the in-flight build
+shared, so a walk slower than the TTL is never started twice. A `files:changed` drops every cached
+index whose root contains, or lies inside, the changed folder. Matching folds case per code point (`foldCase`, mirrored in `appModel.ts`) so
 `matchParts` can map a highlight back onto a name whose lowercase form changes length. Hits are capped at `maxSearchHits` with `total` counting all. A matched
 folder with no matching descendants reveals itself in the ordinary tree on click. Clicking
 opens a `{ kind: 'file' }` tab (deduped on root + path; reopening an existing one moves its `treeCwd` and panel to Files too) rendering `CodeLinkView` without a line, so it

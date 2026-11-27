@@ -355,12 +355,32 @@
   word-break: break-all;
 }
 
-.commit-file-title-staging {
+.commit-file-title-actions {
   padding-right: calc(10px + var(--diff-tools-inset, 0px));
 }
 
 .commit-file-name {
   min-width: 0;
+}
+
+.commit-file-collapse {
+  flex: 0 0 auto;
+  margin: 0 -4px 0 -4px;
+  padding: 0 4px;
+  font: inherit;
+  color: var(--git-muted, #5d6f8f);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.commit-file-collapse:hover {
+  color: var(--git-accent, #a6dcf0);
+}
+
+.commit-file-collapsed .commit-file-title {
+  border-bottom: none;
+  border-radius: 4px;
 }
 
 .commit-file-actions {

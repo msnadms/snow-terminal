@@ -1,10 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Diff, Hunk, parseDiff, useTokenizeWorker } from 'react-diff-view'
 import type { FileData, GutterOptions, ViewType } from 'react-diff-view'
-import { fileIndexFor, selectedKeysFor, type LineRange } from '@renderer/codeLinks'
+import {
+  fileIndexFor,
+  firstChangedLine,
+  selectedKeysFor,
+  type LineRange
+} from '@renderer/codeLinks'
 import { shortHash } from '@renderer/format'
 import { languageFor } from '@renderer/syntax'
 import { tokenizeWorker } from '@renderer/tokenizeWorker'
+import { hasEditor, useEditors, type EditorAvailability } from '@renderer/useEditors'
+import OpenInEditor from './OpenInEditor'
 import 'react-diff-view/style/index.css'
 
 type GitCommitDetail = Awaited<ReturnType<typeof window.api.git.show>>
@@ -13,6 +20,7 @@ type GitBlameResult = Awaited<ReturnType<typeof window.api.git.blame>>
 
 const noHunks: FileData['hunks'] = []
 const noSelection: string[] = []
+const noPaths: ReadonlySet<string> = new Set()
 
 export interface DiffStaging {
   busy: boolean
@@ -30,6 +38,10 @@ interface DiffFileProps {
   focusLine?: LineRange
   onOpenCommit?: (cwd: string, hash: string) => void
   staging?: DiffStaging
+  collapsed: boolean
+  onCollapse: (path: string, collapsed: boolean) => void
+  editors: EditorAvailability
+  worktreeLines: boolean
 }
 
 function DiffFile({
@@ -41,7 +53,11 @@ function DiffFile({
   sectionRef,
   focusLine,
   onOpenCommit,
-  staging
+  staging,
+  collapsed,
+  onCollapse,
+  editors,
+  worktreeLines
 }: DiffFileProps): React.JSX.Element {
   const [cached, setCached] = useState<{ key: string; result: GitBlameResult } | null>(null)
   const [visible, setVisible] = useState(false)
@@ -51,6 +67,7 @@ function DiffFile({
   const blamePath = file.oldPath ?? file.path
   const blameKey = `${cwd} ${base ?? ''} ${blamePath}`
   const blame = cached && cached.key === blameKey ? cached.result : null
+  const shown = visible && !collapsed
 
   useEffect(() => {
     const node = hostRef.current
@@ -63,7 +80,7 @@ function DiffFile({
   }, [visible])
 
   useEffect(() => {
-    if (!visible || !base || !diff || blame) return
+    if (!shown || !base || !diff || blame) return
     let cancelled = false
 
     window.api.git
@@ -78,15 +95,15 @@ function DiffFile({
     return () => {
       cancelled = true
     }
-  }, [visible, base, cwd, blamePath, blameKey, diff, blame])
+  }, [shown, base, cwd, blamePath, blameKey, diff, blame])
 
   const payload = useMemo(
     () => ({
-      hunks: visible ? (diff?.hunks ?? noHunks) : noHunks,
+      hunks: shown ? (diff?.hunks ?? noHunks) : noHunks,
       oldSource: blame?.source ?? null,
       language
     }),
-    [visible, diff, blame, language]
+    [shown, diff, blame, language]
   )
   const { tokens } = useTokenizeWorker(tokenizeWorker(), payload)
 
@@ -98,7 +115,7 @@ function DiffFile({
 
   const scrolledToFocus = useRef(false)
   useEffect(() => {
-    if (!visible || selected.length === 0 || scrolledToFocus.current) return
+    if (!shown || selected.length === 0 || scrolledToFocus.current) return
     const frame = requestAnimationFrame(() => {
       const line = hostRef.current?.querySelector('.diff-code-selected')
       if (!line) return
@@ -106,7 +123,7 @@ function DiffFile({
       line.scrollIntoView({ block: 'center' })
     })
     return () => cancelAnimationFrame(frame)
-  }, [visible, selected])
+  }, [shown, selected])
 
   const lines = blame?.lines
   const hasBlame = lines != null && Object.keys(lines).length > 0
@@ -133,15 +150,34 @@ function DiffFile({
     )
   }
 
+  const toggleCollapsed = (): void => {
+    onCollapse(file.path, !collapsed)
+    if (!collapsed) {
+      requestAnimationFrame(() => hostRef.current?.scrollIntoView({ block: 'nearest' }))
+    }
+  }
+
+  const openable = diff?.type !== 'delete' && hasEditor(editors)
+
   return (
     <div
-      className="commit-file-section"
+      className={`commit-file-section${collapsed ? ' commit-file-collapsed' : ''}`}
       ref={(node) => {
         hostRef.current = node
         sectionRef(node)
       }}
     >
-      <div className={`commit-file-title${staging ? ' commit-file-title-staging' : ''}`}>
+      <div
+        className={`commit-file-title${staging || openable ? ' commit-file-title-actions' : ''}`}
+      >
+        <button
+          className="commit-file-collapse"
+          onClick={toggleCollapsed}
+          aria-expanded={!collapsed}
+          title={collapsed ? 'Expand this file' : 'Collapse this file'}
+        >
+          {collapsed ? '' : ''}
+        </button>
         <span className="commit-file-name">
           {file.oldPath && <span className="commit-file-old">{file.oldPath} → </span>}
           {file.path}
@@ -149,50 +185,68 @@ function DiffFile({
         {outside && focusLine && (
           <span className="commit-file-unchanged">line {focusLine.start} is unchanged</span>
         )}
-        {staging && (
+        {(staging || openable) && (
           <span className="commit-file-actions">
-            <button
-              className={`commit-toggle-button commit-file-action${file.staged ? ' commit-file-action-on' : ''}`}
-              disabled={staging.busy}
-              onClick={() => staging.onSetStaged(file, !file.staged)}
-              title={
-                file.staged
-                  ? 'Unstage this file - leave its changes in the worktree'
-                  : 'Stage this file'
-              }
-            >
-              <div className="commit-action-icon">{file.staged ? '󱟃' : ''}</div>
-            </button>
-            <button
-              className="commit-toggle-button commit-file-action commit-file-action-danger"
-              disabled={staging.busy}
-              onClick={() => staging.onRevert(file)}
-              title="Discard this file's changes"
-            >
-              <div className="commit-action-icon">󰕍</div>
-            </button>
+            {openable && (
+              <OpenInEditor
+                editors={editors}
+                cwd={cwd}
+                path={file.path}
+                line={
+                  worktreeLines
+                    ? (focusLine?.start ?? (diff ? firstChangedLine(diff.hunks) : undefined))
+                    : undefined
+                }
+              />
+            )}
+            {staging && (
+              <>
+                <button
+                  className={`commit-toggle-button commit-file-action${file.staged ? ' commit-file-action-on' : ''}`}
+                  disabled={staging.busy}
+                  onClick={() => staging.onSetStaged(file, !file.staged)}
+                  title={
+                    file.staged
+                      ? 'Unstage this file - leave its changes in the worktree'
+                      : 'Stage this file'
+                  }
+                >
+                  <div className="commit-action-icon">{file.staged ? '󱟃' : ''}</div>
+                </button>
+                <button
+                  className="commit-toggle-button commit-file-action commit-file-action-danger"
+                  disabled={staging.busy}
+                  onClick={() => staging.onRevert(file)}
+                  title="Discard this file's changes"
+                >
+                  <div className="commit-action-icon">󰕍</div>
+                </button>
+              </>
+            )}
           </span>
         )}
       </div>
-      <div className="commit-file-body">
-        {diff && diff.hunks.length > 0 ? (
-          <Diff
-            className={hasBlame ? 'diff-blame' : undefined}
-            viewType={view}
-            diffType={diff.type}
-            hunks={diff.hunks}
-            tokens={tokens}
-            selectedChanges={selected}
-            renderGutter={renderGutter}
-          >
-            {(hunks) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}
-          </Diff>
-        ) : (
-          <div className="commit-file-empty">
-            {file.binary ? 'Binary file not shown' : 'No textual changes'}
-          </div>
-        )}
-      </div>
+      {!collapsed && (
+        <div className="commit-file-body">
+          {diff && diff.hunks.length > 0 ? (
+            <Diff
+              className={hasBlame ? 'diff-blame' : undefined}
+              viewType={view}
+              diffType={diff.type}
+              hunks={diff.hunks}
+              tokens={tokens}
+              selectedChanges={selected}
+              renderGutter={renderGutter}
+            >
+              {(hunks) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}
+            </Diff>
+          ) : (
+            <div className="commit-file-empty">
+              {file.binary ? 'Binary file not shown' : 'No textual changes'}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -210,6 +264,7 @@ interface DiffBodyProps {
   focusLine?: LineRange
   onOpenCommit?: (cwd: string, hash: string) => void
   staging?: DiffStaging
+  worktreeLines?: boolean
 }
 
 function DiffBody({
@@ -224,9 +279,16 @@ function DiffBody({
   only,
   focusLine,
   onOpenCommit,
-  staging
+  staging,
+  worktreeLines = false
 }: DiffBodyProps): React.JSX.Element {
   const [view, setView] = useState<ViewType>('unified')
+  const editors = useEditors()
+  const collapseKey = `${cwd}\n${base ?? ''}`
+  const [collapsedFor, setCollapsedFor] = useState<{ key: string; paths: ReadonlySet<string> }>(
+    () => ({ key: collapseKey, paths: noPaths })
+  )
+  const collapsed = collapsedFor.key === collapseKey ? collapsedFor.paths : noPaths
   const sectionRefs = useRef<(HTMLDivElement | null)[]>([])
   const appliedFocus = useRef<number | null>(null)
   const parsedAll = useMemo<FileData[]>(() => (patch ? parseDiff(patch) : []), [patch])
@@ -237,6 +299,28 @@ function DiffBody({
       ? { files: [], parsed: [] }
       : { files: [allFiles[index]], parsed: [parsedAll[index]] }
   }, [only, allFiles, parsedAll])
+
+  const setFileCollapsed = useCallback(
+    (path: string, value: boolean): void => {
+      setCollapsedFor((prev) => {
+        const paths = prev.key === collapseKey ? prev.paths : noPaths
+        if (paths.has(path) === value) return prev
+        const next = new Set(paths)
+        if (value) next.add(path)
+        else next.delete(path)
+        return { key: collapseKey, paths: next }
+      })
+    },
+    [collapseKey]
+  )
+
+  const allCollapsed = files.length > 0 && files.every((file) => collapsed.has(file.path))
+  const toggleAll = (): void => {
+    setCollapsedFor({
+      key: collapseKey,
+      paths: allCollapsed ? noPaths : new Set(files.map((file) => file.path))
+    })
+  }
 
   useEffect(() => {
     if (focusKey === undefined || focusKey === appliedFocus.current) return
@@ -251,8 +335,9 @@ function DiffBody({
       return
     }
     appliedFocus.current = focusKey
+    setFileCollapsed(files[index].path, false)
     section.scrollIntoView({ block: 'start' })
-  }, [focus, focusKey, files])
+  }, [focus, focusKey, files, setFileCollapsed])
 
   return (
     <>
@@ -261,6 +346,11 @@ function DiffBody({
           {files.length} {files.length === 1 ? 'file' : 'files'}
         </span>
         <div className="commit-toggle">
+          {files.length > 1 && (
+            <button className="commit-toggle-button" onClick={toggleAll}>
+              {allCollapsed ? 'Expand all' : 'Collapse all'}
+            </button>
+          )}
           <button
             className={`commit-toggle-button${view === 'unified' ? ' commit-toggle-active' : ''}`}
             onClick={() => setView('unified')}
@@ -281,7 +371,10 @@ function DiffBody({
           <button
             key={`${file.path}-${i}`}
             className="commit-file-row"
-            onClick={() => sectionRefs.current[i]?.scrollIntoView({ block: 'start' })}
+            onClick={() => {
+              setFileCollapsed(file.path, false)
+              sectionRefs.current[i]?.scrollIntoView({ block: 'start' })
+            }}
           >
             <span className="commit-file-path">
               {file.oldPath && <span className="commit-file-old">{file.oldPath} → </span>}
@@ -309,6 +402,10 @@ function DiffBody({
           view={view}
           onOpenCommit={onOpenCommit}
           staging={staging}
+          collapsed={collapsed.has(file.path)}
+          onCollapse={setFileCollapsed}
+          editors={editors}
+          worktreeLines={worktreeLines}
           focusLine={only ? focusLine : undefined}
           sectionRef={(node) => {
             sectionRefs.current[i] = node

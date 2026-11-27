@@ -7,6 +7,7 @@ import { registerPtyHandlers, disposeAllPty } from './pty'
 import { registerBrowserHandlers, disposeAllBrowser } from './browser'
 import { registerLocalhostHandlers } from './localhost'
 import { registerFileHandlers, disposeFileWatchers } from './files'
+import { registerEditorHandlers } from './editors'
 import { registerGitHandlers, disposeGitWatchers } from './git'
 import { registerWorkflowHandlers } from './workflow'
 import { initRegistry, disposeRegistryWatcher } from './registry'
@@ -90,6 +91,7 @@ app.whenReady().then(() => {
   registerBrowserHandlers()
   registerLocalhostHandlers()
   registerFileHandlers()
+  registerEditorHandlers()
   initRegistry()
   registerGitHandlers()
   registerWorkflowHandlers()

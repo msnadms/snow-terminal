@@ -64,6 +64,16 @@ export async function gitDir(cwd?: string): Promise<string | null> {
   }
 }
 
+export function strictlyInside(root: string, full: string): boolean {
+  const relative = path.relative(root, full)
+  return (
+    relative !== '' &&
+    relative !== '..' &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  )
+}
+
 export async function worktreeRoot(cwd?: string): Promise<string | null> {
   try {
     return (await gitFor(cwd).revparse(['--show-toplevel'])).trim() || null

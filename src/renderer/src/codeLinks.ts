@@ -23,6 +23,17 @@ export function linkLabel(link: CodeLink): string {
   return link.endLine ? `${link.path}:${link.line}-${link.endLine}` : `${link.path}:${link.line}`
 }
 
+export function firstChangedLine(hunks: HunkData[]): number | undefined {
+  const hunk = hunks[0]
+  if (!hunk) return undefined
+  let line = hunk.newStart
+  for (const change of hunk.changes) {
+    if (change.type !== 'normal') return Math.max(1, line)
+    line += 1
+  }
+  return Math.max(1, hunk.newStart)
+}
+
 export function selectedKeysFor(hunks: HunkData[], range: LineRange): string[] {
   const within = (n: number): boolean => n >= range.start && n <= range.end
   const changes = hunks.flatMap((hunk) => hunk.changes)

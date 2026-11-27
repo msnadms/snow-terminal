@@ -27,6 +27,7 @@ import type { AgentsResult } from '../main/agents'
 import type { HooksResult, HooksState } from '../main/hooks'
 import type { SnowignoreResult } from '../main/snowignore'
 import type { DirListing, SearchResult } from '../main/files'
+import type { Editor, EditorAvailability } from '../main/editors'
 import type { SnowconfigResult, Layout, Preset } from '../main/snowconfig'
 
 function idDispatcher<P extends { id: number }>(
@@ -215,6 +216,12 @@ const files = {
   }
 }
 
+const editor = {
+  available: (): Promise<EditorAvailability> => ipcRenderer.invoke('editor:available'),
+  open: (editor: Editor, cwd: string, path: string, line?: number): Promise<void> =>
+    ipcRenderer.invoke('editor:open', editor, cwd, path, line)
+}
+
 const workflow = {
   list: (cwd?: string, detail?: boolean): Promise<WorkflowList> =>
     ipcRenderer.invoke('workflow:list', cwd, detail),
@@ -347,6 +354,7 @@ const api = {
   browser,
   git,
   files,
+  editor,
   workflow,
   theme,
   snowignore,
