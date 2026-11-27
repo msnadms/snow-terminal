@@ -1,8 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import CodeLinksList from './CodeLinksList'
 import DiscardDialog from './DiscardDialog'
 import FailureDialog from './FailureDialog'
-import type { TabTurn, CodeLinkTarget, PanelView, TabCodeLinks } from '../appModel'
 import { shortHash, type Failure } from '../format'
 import { useGitAction } from '../useGitAction'
 import { fallbackLanes, useGitColors } from '../useGitColors'
@@ -552,92 +550,29 @@ function RepoSection({
   )
 }
 
-interface GitPanelProps {
+export interface GitViewProps {
   repos: GitRepo[] | null
-  width?: number
-  collapsed?: boolean
   gradients?: boolean
-  panelRef?: React.RefObject<HTMLDivElement | null>
   onOpenCommit?: OpenCommit
   onOpenCommitSplit?: OpenCommit
   onOpenDiff?: OpenDiff
   onOpenDiffSplit?: (cwd: string) => void
-  links?: TabCodeLinks
-  turn?: TabTurn
-  view: PanelView
-  onViewChange: (view: PanelView) => void
-  onOpenLink?: (target: Omit<CodeLinkTarget, 'key'>) => void
-  onOpenTurn?: () => void
 }
 
-function GitPanel({
+function GitView({
+  hidden,
   repos,
-  width,
-  collapsed = false,
   gradients = true,
-  panelRef,
-  onOpenCommit,
-  onOpenCommitSplit,
-  onOpenDiff,
-  onOpenDiffSplit,
-  links,
-  turn,
-  view,
-  onViewChange,
-  onOpenLink,
-  onOpenTurn
-}: GitPanelProps): React.JSX.Element {
+  ...actions
+}: GitViewProps & { hidden: boolean }): React.ReactNode {
   const colors = useGitColors()
   const lanes = colors?.lanes ?? fallbackLanes
-  const style: React.CSSProperties | undefined = collapsed
-    ? { display: 'none' }
-    : width != null
-      ? { flexBasis: width }
-      : undefined
 
-  const content = (): React.ReactNode => {
-    if (!repos) return null
-    if (repos.length === 0)
-      return view === 'git' ? <div className="git-empty">Not a git repository</div> : null
-    return (
-      <RepoGroups
-        hidden={view !== 'git'}
-        repos={repos}
-        lanes={lanes}
-        gradients={gradients}
-        onOpenCommit={onOpenCommit}
-        onOpenCommitSplit={onOpenCommitSplit}
-        onOpenDiff={onOpenDiff}
-        onOpenDiffSplit={onOpenDiffSplit}
-      />
-    )
-  }
-
+  if (!repos) return null
+  if (repos.length === 0)
+    return hidden ? null : <div className="git-empty">Not a git repository</div>
   return (
-    <div className="git-panel" style={style} ref={panelRef}>
-      <div className="git-panel-tabs" role="tablist">
-        <button
-          role="tab"
-          aria-selected={view === 'git'}
-          className={`git-panel-tab${view === 'git' ? ' git-panel-tab-active' : ''}`}
-          onClick={() => onViewChange('git')}
-        >
-          
-        </button>
-        <button
-          role="tab"
-          aria-selected={view === 'links'}
-          className={`git-panel-tab${view === 'links' ? ' git-panel-tab-active' : ''}`}
-          onClick={() => onViewChange('links')}
-        >
-          󰌹
-        </button>
-      </div>
-      {view === 'links' && (
-        <CodeLinksList links={links} turn={turn} onOpenLink={onOpenLink} onOpenTurn={onOpenTurn} />
-      )}
-      {content()}
-    </div>
+    <RepoGroups hidden={hidden} repos={repos} lanes={lanes} gradients={gradients} {...actions} />
   )
 }
 
@@ -713,4 +648,4 @@ function RepoGroups({
   )
 }
 
-export default GitPanel
+export default GitView

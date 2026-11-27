@@ -239,15 +239,15 @@ describe('turns', () => {
 })
 
 describe('panelViewFor', () => {
-  const links = { root: '/repo', items: [], updated: 1, signature: 'a' }
+  it('raises a view whose signal changed, then honours the choice', () => {
+    expect(panelViewFor(undefined, {})).toBe('git')
+    expect(panelViewFor(undefined, { links: 'a' })).toBe('links')
+    expect(panelViewFor({ view: 'git', seen: { links: 'a' } }, { links: 'a' })).toBe('git')
+    expect(panelViewFor({ view: 'git', seen: { links: 'a' } }, { links: 'b' })).toBe('links')
+    expect(panelViewFor({ view: 'links', seen: {} }, {})).toBe('links')
+  })
 
-  it('switches to links when a tab gets a new set, then honours the choice', () => {
-    expect(panelViewFor(undefined, undefined)).toBe('git')
-    expect(panelViewFor(undefined, links)).toBe('links')
-    expect(panelViewFor({ view: 'git', signature: 'a' }, links)).toBe('git')
-    expect(panelViewFor({ view: 'git', signature: 'a' }, { ...links, signature: 'b' })).toBe(
-      'links'
-    )
-    expect(panelViewFor({ view: 'links' }, undefined)).toBe('links')
+  it('ignores a signal that disappeared since the choice', () => {
+    expect(panelViewFor({ view: 'git', seen: { links: 'a' } }, {})).toBe('git')
   })
 })

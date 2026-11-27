@@ -340,12 +340,16 @@ export type CodeLinkTarget = CodeLink & { root: string; key: number }
 export type AgentTurn = NonNullable<AgentSession['turn']>
 export type TabTurn = AgentTurn & { sessionId: string; live: boolean }
 export type Overlay = CodeLinkTarget | { kind: 'turn'; key: number }
-export type PanelView = 'git' | 'links'
-export type PanelChoice = { view: PanelView; signature?: string }
+export const panelViews = ['git', 'links'] as const
+export type PanelView = (typeof panelViews)[number]
+export type PanelSignals = Partial<Record<PanelView, string>>
+export type PanelChoice = { view: PanelView; seen: PanelSignals }
 
-export function panelViewFor(choice: PanelChoice | undefined, links?: TabCodeLinks): PanelView {
-  if (links && choice?.signature !== links.signature) return 'links'
-  return choice?.view ?? 'git'
+export function panelViewFor(choice: PanelChoice | undefined, signals: PanelSignals): PanelView {
+  const raised = panelViews.find(
+    (view) => signals[view] !== undefined && signals[view] !== choice?.seen[view]
+  )
+  return raised ?? choice?.view ?? panelViews[0]
 }
 
 export function tabForTerminal(

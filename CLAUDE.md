@@ -555,12 +555,19 @@ signature changes **and** its `at` is not older — `at`, not `updated`, because
 an old set forward rewrites `updated` on every event and would otherwise overwrite a sibling pane's
 fresh links. A link set survives record expiry, `SessionEnd` and later linkless turns, and a status
 rewrite never re-flags it as new. `App` re-merges when `tabs` or `panes` change as well, so a record
-landing before its pane commits is picked up. The Git/Links view is **per tab**, held in `App` as
-`panelChoices` (the user's last pick plus the signature it was made against, cleared by `dropKeys`
-with the rest of a closed tab's state). `panelViewFor` derives the view: Links whenever the tab's
-signature differs from the one the choice was made against, so returning to a tab whose links were
-already shown leaves the panel where it is. Under Links the repo sections are hidden, not
-unmounted, so their watchers and loaded state survive the switch.
+landing before its pane commits is picked up.
+
+The side panel's view is **per tab**, held in `App` as `panelChoices` (the user's last pick plus the
+`seen` signals it was made against, cleared by `dropKeys` with the rest of a closed tab's state).
+`panelViews` in `appModel.ts` is the one ordered list of views; `SidePanel` maps it through a
+`Record<PanelView, PanelTab>` (`icon`, `title`, `keepMounted`, `render(hidden)`), so the compiler
+demands an entry for every view, and each view takes its own props group (`git`, `links`) rather
+than one flat prop list. A view may raise itself through `App`'s `panelSignals` (Links signals its
+link-set signature): `panelViewFor` picks the first view, in `panelViews` order, whose signal is set
+and differs from the one the choice saw, so returning to a tab whose links were already shown leaves
+the panel where it is. Choosing a view marks every current signal seen. Git is `keepMounted` — its
+repo sections are hidden, not unmounted, so their watchers and loaded state survive the switch;
+other views mount only while showing. `GitPanel.tsx` now exports only the Git view (`GitView`).
 
 Clicking a link sets the tab's **overlay** (`overlays` in `App`, distinct from `splits`). `Session`
 renders it in the rightmost slot, reusing the `'diff'` sizing key; the existing split stays mounted

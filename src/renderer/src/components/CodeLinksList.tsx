@@ -1,6 +1,6 @@
 import type { TabTurn, CodeLinkTarget, TabCodeLinks } from '@renderer/appModel'
 
-interface CodeLinksListProps {
+export interface CodeLinksListProps {
   links?: TabCodeLinks
   turn?: TabTurn
   onOpenLink?: (target: Omit<CodeLinkTarget, 'key'>) => void

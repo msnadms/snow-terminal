@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ActionBar from './components/ActionBar'
 import CommitView from './components/CommitView'
-import GitPanel from './components/GitPanel'
+import SidePanel from './components/SidePanel'
 import Session from './components/Session'
 import BrowserTab from './components/BrowserTab'
 import TabBar from './components/TabBar'
@@ -50,6 +50,7 @@ import {
   type Overlay,
   type Pane,
   type PanelChoice,
+  type PanelSignals,
   type PanelView,
   type RepoEntry,
   type Split,
@@ -133,12 +134,13 @@ function App(): React.JSX.Element {
   const panelKey = activeTab?.id ?? -1
   const activeLinks = activeTab?.kind === 'shell' ? codeLinks[activeTab.id] : undefined
   const activeTurn = activeTab?.kind === 'shell' ? turns[activeTab.id] : undefined
-  const activeSignature = activeLinks?.signature
-  const panelView = panelViewFor(panelChoices[panelKey], activeLinks)
+  const linksSignal = activeLinks?.signature
+  const panelSignals = useMemo<PanelSignals>(() => ({ links: linksSignal }), [linksSignal])
+  const panelView = panelViewFor(panelChoices[panelKey], panelSignals)
   const choosePanelView = useCallback(
     (view: PanelView): void =>
-      setPanelChoices((prev) => ({ ...prev, [panelKey]: { view, signature: activeSignature } })),
-    [panelKey, activeSignature]
+      setPanelChoices((prev) => ({ ...prev, [panelKey]: { view, seen: panelSignals } })),
+    [panelKey, panelSignals]
   )
   const cwd =
     activeTab && (activeTab.kind === 'commit' || activeTab.kind === 'diff')
@@ -897,22 +899,26 @@ function App(): React.JSX.Element {
           className="git-panel"
           style={{ flexBasis: gitPane.size }}
         >
-          <GitPanel
-            repos={repos}
+          <SidePanel
             width={gitPane.size}
             collapsed={gitPane.collapsed}
-            gradients={gradients}
             panelRef={gitPanelRef}
-            onOpenCommit={openCommit}
-            onOpenCommitSplit={activeTab?.kind === 'shell' ? openCommitSplit : undefined}
-            onOpenDiff={openDiff}
-            onOpenDiffSplit={activeTab?.kind === 'shell' ? openDiffSplit : undefined}
-            links={activeLinks}
-            turn={activeTurn}
             view={panelView}
             onViewChange={choosePanelView}
-            onOpenLink={activeTab?.kind === 'shell' ? openCodeLink : undefined}
-            onOpenTurn={activeTab?.kind === 'shell' ? openTurn : undefined}
+            git={{
+              repos,
+              gradients,
+              onOpenCommit: openCommit,
+              onOpenCommitSplit: activeTab?.kind === 'shell' ? openCommitSplit : undefined,
+              onOpenDiff: openDiff,
+              onOpenDiffSplit: activeTab?.kind === 'shell' ? openDiffSplit : undefined
+            }}
+            links={{
+              links: activeLinks,
+              turn: activeTurn,
+              onOpenLink: activeTab?.kind === 'shell' ? openCodeLink : undefined,
+              onOpenTurn: activeTab?.kind === 'shell' ? openTurn : undefined
+            }}
           />
         </PaneBoundary>
         {gitPane.collapsed && (
