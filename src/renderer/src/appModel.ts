@@ -348,11 +348,31 @@ export type PanelView = (typeof panelViews)[number]
 export type PanelSignals = Partial<Record<PanelView, string>>
 export type PanelChoice = { view: PanelView; seen: PanelSignals }
 
-export function panelViewFor(choice: PanelChoice | undefined, signals: PanelSignals): PanelView {
-  const raised = panelViews.find(
-    (view) => signals[view] !== undefined && signals[view] !== choice?.seen[view]
+export function panelViewFor(choice: PanelChoice | undefined): PanelView {
+  return choice?.view ?? panelViews[0]
+}
+
+export function unseenPanelViews(
+  choice: PanelChoice | undefined,
+  signals: PanelSignals
+): PanelView[] {
+  const showing = panelViewFor(choice)
+  return panelViews.filter(
+    (view) =>
+      view !== showing && signals[view] !== undefined && signals[view] !== choice?.seen[view]
   )
-  return raised ?? choice?.view ?? panelViews[0]
+}
+
+export function choosePanel(
+  choice: PanelChoice | undefined,
+  view: PanelView,
+  signals: PanelSignals
+): PanelChoice {
+  const showing = panelViewFor(choice)
+  return {
+    view,
+    seen: { ...choice?.seen, [showing]: signals[showing], [view]: signals[view] }
+  }
 }
 
 export function tabForTerminal(
@@ -464,4 +484,92 @@ export function changedDirs(
     dir,
     ...[...expanded].filter((path) => roots.some((root) => path === root || isBelow(path, root)))
   ].filter((path, index, all) => all.indexOf(path) === index)
+}
+
+export type SearchHit = {
+  path: string
+  dir: boolean
+  target: { root: string; path: string } | null
+}
+
+export interface SearchNode {
+  name: string
+  path: string
+  dir: boolean
+  match: boolean
+  target: { root: string; path: string } | null
+  children: SearchNode[]
+}
+
+function sortNodes(nodes: SearchNode[]): SearchNode[] {
+  return nodes
+    .sort(
+      (a, b) =>
+        Number(b.dir) - Number(a.dir) ||
+        a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
+    )
+    .map((node) => ({ ...node, children: sortNodes(node.children) }))
+}
+
+export function searchTree(hits: SearchHit[]): SearchNode[] {
+  const top: SearchNode[] = []
+  const nodes = new Map<string, SearchNode>()
+  const nodeAt = (path: string, name: string, siblings: SearchNode[]): SearchNode => {
+    const existing = nodes.get(path)
+    if (existing) return existing
+    const node: SearchNode = { name, path, dir: true, match: false, target: null, children: [] }
+    nodes.set(path, node)
+    siblings.push(node)
+    return node
+  }
+  for (const hit of hits) {
+    const segments = hit.path.split('/')
+    let siblings = top
+    let path = ''
+    segments.forEach((name, i) => {
+      path = path ? `${path}/${name}` : name
+      const node = nodeAt(path, name, siblings)
+      if (i === segments.length - 1)
+        Object.assign(node, { dir: hit.dir, match: true, target: hit.target })
+      siblings = node.children
+    })
+  }
+  return sortNodes(top)
+}
+
+export function foldCase(text: string): string {
+  let folded = ''
+  for (const char of text) folded += char.toLowerCase()
+  return folded
+}
+
+export function matchParts(name: string, query: string): { text: string; match: boolean }[] {
+  const needle = foldCase(query.trim())
+  if (!needle) return [{ text: name, match: false }]
+  let haystack = ''
+  const starts: number[] = []
+  const ends: number[] = []
+  for (let i = 0; i < name.length;) {
+    const char = String.fromCodePoint(name.codePointAt(i)!)
+    const lower = char.toLowerCase()
+    for (let k = 0; k < lower.length; k++) {
+      starts.push(i)
+      ends.push(i + char.length)
+    }
+    haystack += lower
+    i += char.length
+  }
+  const parts: { text: string; match: boolean }[] = []
+  let from = 0
+  let scan = 0
+  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, scan)) {
+    const start = Math.max(starts[at], from)
+    const end = ends[at + needle.length - 1]
+    if (start > from) parts.push({ text: name.slice(from, start), match: false })
+    if (end > start) parts.push({ text: name.slice(start, end), match: true })
+    from = Math.max(from, end)
+    scan = at + needle.length
+  }
+  if (from < name.length) parts.push({ text: name.slice(from), match: false })
+  return parts
 }

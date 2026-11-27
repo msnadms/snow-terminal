@@ -30,6 +30,22 @@
   border-bottom-color: var(--git-accent, #c3d9f2);
 }
 
+.git-panel-tab-icon {
+  position: relative;
+}
+
+.git-panel-tab-unseen::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--git-accent, #c3d9f2);
+  animation: tab-status-pulse 1.2s ease-in-out infinite;
+}
+
 .code-links {
   flex: 1 1 auto;
   min-height: 0;
@@ -165,7 +181,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px 6px 12px;
+  padding: 6px 12px;
   border-bottom: 1px solid var(--git-border, #28334c);
 }
 
@@ -178,18 +194,66 @@
   color: var(--git-strong-text, #eef2fb);
 }
 
-.file-tree-refresh {
+.file-tree-search {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 8px 2px;
   padding: 2px 6px;
+  border: 1px solid var(--git-button-border, #2a3852);
+  border-radius: 3px;
+}
+
+.file-tree-search:focus-within {
+  border-color: var(--git-button-border-hover, #3e5273);
+}
+
+.file-tree-search-icon {
+  flex: 0 0 auto;
+  color: var(--git-muted, #78859c);
+}
+
+.file-tree-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px 0;
+  font: inherit;
+  color: var(--git-strong-text, #eef2fb);
+  background: transparent;
+  border: none;
+  outline: none;
+}
+
+.file-tree-search-clear {
+  flex: 0 0 auto;
+  padding: 0 2px;
+  font: inherit;
+  line-height: 1;
   color: var(--git-muted, #78859c);
   background: transparent;
-  border: 0;
-  font: inherit;
+  border: none;
   cursor: pointer;
 }
 
-.file-tree-refresh:hover {
+.file-tree-search-clear:hover {
   color: var(--git-text, #c5d0e2);
+}
+
+.file-tree-match {
+  color: inherit;
+  background: var(--git-diff-selection, #45475a);
+  border-radius: 2px;
+}
+
+.file-tree-status {
+  padding-left: 12px;
+  padding-bottom: 4px;
+}
+
+.file-tree-row:focus-visible {
+  outline: 1px solid var(--git-accent, #a6dcf0);
+  outline-offset: -1px;
 }
 
 .file-tree-body {

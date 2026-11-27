@@ -34,6 +34,8 @@ import {
   mergeCodeLinks,
   mergeTurns,
   panelViewFor,
+  unseenPanelViews,
+  choosePanel,
   moveTab,
   moveTabGroup,
   openSessionsOf,
@@ -137,10 +139,14 @@ function App(): React.JSX.Element {
   const activeTurn = activeTab?.kind === 'shell' ? turns[activeTab.id] : undefined
   const linksSignal = activeLinks?.signature
   const panelSignals = useMemo<PanelSignals>(() => ({ links: linksSignal }), [linksSignal])
-  const panelView = panelViewFor(panelChoices[panelKey], panelSignals)
+  const panelView = panelViewFor(panelChoices[panelKey])
+  const unseenViews = unseenPanelViews(panelChoices[panelKey], panelSignals)
   const choosePanelView = useCallback(
     (view: PanelView): void =>
-      setPanelChoices((prev) => ({ ...prev, [panelKey]: { view, seen: panelSignals } })),
+      setPanelChoices((prev) => ({
+        ...prev,
+        [panelKey]: choosePanel(prev[panelKey], view, panelSignals)
+      })),
     [panelKey, panelSignals]
   )
   const cwd =
@@ -385,7 +391,7 @@ function App(): React.JSX.Element {
         )
         setPanelChoices((prev) => ({
           ...prev,
-          [existing.id]: { view: 'files', seen: prev[existing.id]?.seen ?? {} }
+          [existing.id]: choosePanel(prev[existing.id], 'files', {})
         }))
         setActiveId(existing.id)
         return
@@ -740,6 +746,15 @@ function App(): React.JSX.Element {
     focusCommit: actionCwd
       ? () => document.querySelector<HTMLInputElement>('.actionbar-input')?.focus()
       : undefined,
+    searchFiles: filesCwd
+      ? () => {
+          choosePanelView('files')
+          if (gitPane.collapsed) gitPane.restore()
+          requestAnimationFrame(() =>
+            document.querySelector<HTMLInputElement>('.file-tree-search-input')?.select()
+          )
+        }
+      : undefined,
     openWorkflows
   })
 
@@ -950,6 +965,7 @@ function App(): React.JSX.Element {
             collapsed={gitPane.collapsed}
             panelRef={gitPanelRef}
             view={panelView}
+            unseen={unseenViews}
             onViewChange={choosePanelView}
             git={{
               repos,

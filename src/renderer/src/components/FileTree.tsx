@@ -1,10 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { changedDirs, childPath, collapseDir, fileTarget, treeRoot } from '@renderer/appModel'
+import {
+  changedDirs,
+  childPath,
+  collapseDir,
+  fileTarget,
+  matchParts,
+  searchTree,
+  treeRoot,
+  type SearchHit,
+  type SearchNode
+} from '@renderer/appModel'
 import { basename } from '@renderer/format'
 
 type DirEntry = { name: string; dir: boolean; ignored: boolean }
 type Listing =
   { entries: DirEntry[]; repo: { root: string; prefix: string } | null } | { error: string }
+type SearchResult = { hits: SearchHit[]; total: number; partial: boolean } | { error: string }
+type Search = { root: string; query: string; result: SearchResult; nodes: SearchNode[] }
 
 export interface FileTreeProps {
   cwd?: string
@@ -12,6 +24,32 @@ export interface FileTreeProps {
 }
 
 const indentPx = 12
+const searchDebounceMs = 150
+
+function Highlighted({ name, query }: { name: string; query: string }): React.JSX.Element {
+  return (
+    <span className="file-tree-name">
+      {matchParts(name, query).map((part, i) =>
+        part.match ? (
+          <mark key={i} className="file-tree-match">
+            {part.text}
+          </mark>
+        ) : (
+          part.text
+        )
+      )}
+    </span>
+  )
+}
+
+function moveFocus(container: HTMLElement | null, from: Element | null, delta: number): boolean {
+  if (!container) return false
+  const rows = [...container.querySelectorAll<HTMLButtonElement>('.file-tree-row:not(:disabled)')]
+  const index = from ? rows.indexOf(from as HTMLButtonElement) : -1
+  const target = rows[index === -1 ? (delta > 0 ? 0 : rows.length - 1) : index + delta]
+  target?.focus()
+  return Boolean(target)
+}
 
 function FileTreeRoot({
   hidden,
@@ -23,6 +61,12 @@ function FileTreeRoot({
   const expandedRef = useRef(expanded)
   const watchedRef = useRef<ReadonlySet<string>>(new Set())
   const loadSeqRef = useRef(new Map<string, number>())
+  const [query, setQuery] = useState('')
+  const [search, setSearch] = useState<Search | null>(null)
+  const [collapsedHits, setCollapsedHits] = useState<ReadonlySet<string>>(() => new Set())
+  const inputRef = useRef<HTMLInputElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const needle = query.trim()
 
   const load = useCallback((dir: string): void => {
     const seq = (loadSeqRef.current.get(dir) ?? 0) + 1
@@ -71,12 +115,58 @@ function FileTreeRoot({
     []
   )
 
+  useEffect(() => {
+    if (!needle || hidden) return
+    let cancelled = false
+    const timer = setTimeout(() => {
+      window.api.files
+        .search(root, needle)
+        .catch((error: unknown): SearchResult => ({ error: String(error) }))
+        .then((result) => {
+          if (cancelled) return
+          const nodes = 'error' in result ? [] : searchTree(result.hits)
+          setSearch({ root, query: needle, result, nodes })
+          setCollapsedHits(new Set())
+        })
+    }, searchDebounceMs)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [needle, root, hidden])
+
   const toggle = (dir: string): void => {
     const opening = !expanded.has(dir)
     const next = opening ? new Set(expanded).add(dir) : collapseDir(expanded, dir)
     if (opening) load(dir)
     expandedRef.current = next
     setExpanded(next)
+  }
+
+  const reveal = (path: string): void => {
+    const dirs: string[] = []
+    for (const name of path.split('/')) dirs.push(childPath(dirs.at(-1) ?? root, name))
+    dirs.forEach(load)
+    const next = new Set([...expanded, ...dirs])
+    expandedRef.current = next
+    setExpanded(next)
+    setQuery('')
+  }
+
+  const onSearchKey = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (e.key === 'Escape' && query) {
+      e.preventDefault()
+      e.stopPropagation()
+      setQuery('')
+    } else if (e.key === 'ArrowDown' && moveFocus(bodyRef.current, null, 1)) e.preventDefault()
+  }
+
+  const onBodyKey = (e: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+    e.preventDefault()
+    const delta = e.key === 'ArrowDown' ? 1 : -1
+    if (!moveFocus(bodyRef.current, document.activeElement, delta) && delta < 0)
+      inputRef.current?.focus()
   }
 
   const rows = (dir: string, depth: number): React.ReactNode => {
@@ -142,18 +232,124 @@ function FileTreeRoot({
     })
   }
 
+  const toggleHit = (path: string): void =>
+    setCollapsedHits((prev) => {
+      const next = new Set(prev)
+      if (!next.delete(path)) next.add(path)
+      return next
+    })
+
+  const hitRows = (nodes: SearchNode[], depth: number, highlight: string): React.ReactNode =>
+    nodes.map((node) => {
+      const path = childPath(root, node.path)
+      const padding = { paddingLeft: 8 + depth * indentPx }
+      const name = node.match ? (
+        <Highlighted name={node.name} query={highlight} />
+      ) : (
+        <span className="file-tree-name">{node.name}</span>
+      )
+      if (node.dir) {
+        const leaf = node.children.length === 0
+        const open = !leaf && !collapsedHits.has(node.path)
+        return (
+          <div key={node.path} role="treeitem" aria-expanded={open}>
+            <button
+              className="file-tree-row"
+              style={padding}
+              title={leaf ? `${path}\nShow in tree` : path}
+              onClick={() => (leaf ? reveal(node.path) : toggleHit(node.path))}
+            >
+              <span className="file-tree-chevron">
+                {leaf ? '' : open ? '\u{f107}' : '\u{f105}'}
+              </span>
+              <span className="file-tree-icon file-tree-folder">
+                {open ? '\u{f07c}' : '\u{f07b}'}
+              </span>
+              {name}
+            </button>
+            {open && <div role="group">{hitRows(node.children, depth + 1, highlight)}</div>}
+          </div>
+        )
+      }
+      const target = node.target
+      return (
+        <button
+          key={node.path}
+          role="treeitem"
+          className="file-tree-row"
+          style={padding}
+          disabled={!target || !onOpenFile}
+          title={target ? path : `${path}\nNot inside a git repository`}
+          onClick={() => target && onOpenFile?.(target)}
+        >
+          <span className="file-tree-chevron" />
+          <span className="file-tree-icon">{'\u{f15b}'}</span>
+          {name}
+        </button>
+      )
+    })
+
+  const searchBody = (): React.ReactNode => {
+    if (!search || search.query !== needle || search.root !== root)
+      return <div className="file-tree-note file-tree-status">Searching…</div>
+    const { result } = search
+    if ('error' in result)
+      return (
+        <div className="file-tree-note file-tree-status" title={result.error}>
+          Search failed
+        </div>
+      )
+    if (result.total === 0)
+      return <div className="file-tree-note file-tree-status">No matches for “{search.query}”</div>
+    const shown = result.hits.length
+    const summary =
+      shown < result.total
+        ? `Showing ${shown} of ${result.total} matches`
+        : `${result.total} ${result.total === 1 ? 'match' : 'matches'}`
+    return (
+      <>
+        <div className="file-tree-note file-tree-status">
+          {summary}
+          {result.partial && ' · folder too large, results incomplete'}
+        </div>
+        {hitRows(search.nodes, 0, search.query)}
+      </>
+    )
+  }
+
   return (
     <div className="file-tree" style={hidden ? { display: 'none' } : undefined}>
       <div className="file-tree-header">
         <span className="file-tree-root" title={root}>
           {basename(root)}
         </span>
-        <button className="file-tree-refresh" title="Refresh" onClick={refresh}>
-          {'\u{f021}'}
-        </button>
       </div>
-      <div className="file-tree-body" role="tree">
-        {rows(root, 0)}
+      <div className="file-tree-search">
+        <span className="file-tree-search-icon">{'\u{f002}'}</span>
+        <input
+          ref={inputRef}
+          className="file-tree-search-input"
+          placeholder="Search files"
+          spellCheck={false}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={onSearchKey}
+        />
+        {query && (
+          <button
+            className="file-tree-search-clear"
+            title="Clear search (Esc)"
+            onClick={() => {
+              setQuery('')
+              inputRef.current?.focus()
+            }}
+          >
+            {'\u{f00d}'}
+          </button>
+        )}
+      </div>
+      <div className="file-tree-body" role="tree" ref={bodyRef} onKeyDown={onBodyKey}>
+        {needle ? searchBody() : rows(root, 0)}
       </div>
     </div>
   )

@@ -179,14 +179,11 @@ export async function mergedInto(
   return mergedCache.set(key, await evaluateMerged(cwd, branch, base))
 }
 
-export async function removeLinkedWorktree(
+async function removeWorktreeOrCloseTerminals(
   repo: string,
   branch: string,
   directory: string
 ): Promise<void> {
-  const container = worktreeContainer(repo)
-  const inContainer = samePath(path.dirname(directory), container)
-  const resumeWatchers = await suspendFileWatchersIn(inContainer ? container : directory)
   try {
     await gitFor(repo).raw(['worktree', 'remove', '--force', '--force', directory])
   } catch (first) {
@@ -197,6 +194,19 @@ export async function removeLinkedWorktree(
     } catch (second) {
       throw Object.assign(second as object, { terminalsClosed: true })
     }
+  }
+}
+
+export async function removeLinkedWorktree(
+  repo: string,
+  branch: string,
+  directory: string
+): Promise<void> {
+  const container = worktreeContainer(repo)
+  const inContainer = samePath(path.dirname(directory), container)
+  const resumeWatchers = await suspendFileWatchersIn(inContainer ? container : directory)
+  try {
+    await removeWorktreeOrCloseTerminals(repo, branch, directory)
     if (inContainer) await fs.promises.rmdir(container).catch(() => {})
   } finally {
     resumeWatchers()

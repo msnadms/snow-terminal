@@ -16,6 +16,7 @@ interface SidePanelProps {
   collapsed?: boolean
   panelRef?: React.RefObject<HTMLDivElement | null>
   view: PanelView
+  unseen?: PanelView[]
   onViewChange: (view: PanelView) => void
   git: GitViewProps
   files: FileTreeProps
@@ -27,6 +28,7 @@ function SidePanel({
   collapsed = false,
   panelRef,
   view,
+  unseen = [],
   onViewChange,
   git,
   files,
@@ -70,7 +72,11 @@ function SidePanel({
             className={`git-panel-tab${view === key ? ' git-panel-tab-active' : ''}`}
             onClick={() => onViewChange(key)}
           >
-            {tabs[key].icon}
+            <span
+              className={`git-panel-tab-icon${unseen.includes(key) ? ' git-panel-tab-unseen' : ''}`}
+            >
+              {tabs[key].icon}
+            </span>
           </button>
         ))}
       </div>

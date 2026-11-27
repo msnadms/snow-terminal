@@ -3,7 +3,9 @@ import {
   identityOf,
   isWithin,
   parseIgnored,
+  parseLsFiles,
   parseRepoLocation,
+  searchFiles,
   sortEntries
 } from '../src/main/files'
 
@@ -69,5 +71,64 @@ describe('parseRepoLocation', () => {
     })
     expect(parseRepoLocation('/work/app\n\n')).toEqual({ root: '/work/app', prefix: '' })
     expect(parseRepoLocation('')).toBeNull()
+  })
+})
+
+describe('parseLsFiles', () => {
+  it('maps files to repo targets and reports nested repositories', () => {
+    const parsed = parseLsFiles(
+      `100644 ${'a'.repeat(40)} 0\ta.ts\0`,
+      'lib/b.ts\0nested/\0',
+      'sub/',
+      { root: '/r', prefix: 'x/' }
+    )
+    expect(parsed.files).toEqual([
+      { path: 'sub/a.ts', target: { root: '/r', path: 'x/a.ts' } },
+      { path: 'sub/lib/b.ts', target: { root: '/r', path: 'x/lib/b.ts' } }
+    ])
+    expect(parsed.nested).toEqual(['nested'])
+  })
+
+  it('descends into submodules instead of listing them as files', () => {
+    const parsed = parseLsFiles(`160000 ${'b'.repeat(40)} 0\tvendor/lib\0`, '', '', {
+      root: '/r',
+      prefix: ''
+    })
+    expect(parsed.files).toEqual([])
+    expect(parsed.nested).toEqual(['vendor/lib'])
+  })
+
+  it('lists a conflicted path once across its stages', () => {
+    const stages = [1, 2, 3].map((n) => `100644 ${'c'.repeat(40)} ${n}\tapp.ts\0`).join('')
+    expect(parseLsFiles(stages, '', '', { root: '/r', prefix: '' }).files).toHaveLength(1)
+  })
+})
+
+describe('searchFiles', () => {
+  const files = [
+    { path: 'src/main/files.ts', target: null },
+    { path: 'src/renderer/FileTree.tsx', target: null },
+    { path: 'tests/files.test.ts', target: null },
+    { path: 'README.md', target: null }
+  ]
+
+  it('matches file and folder names case-insensitively, each folder once', () => {
+    expect(searchFiles(files, 'FILE', 10).hits.map((hit) => hit.path)).toEqual([
+      'src/main/files.ts',
+      'src/renderer/FileTree.tsx',
+      'tests/files.test.ts'
+    ])
+    expect(searchFiles(files, 'src', 10).hits).toEqual([{ path: 'src', dir: true, target: null }])
+  })
+
+  it('caps hits but counts every match', () => {
+    expect(searchFiles(files, 'file', 1)).toMatchObject({
+      total: 3,
+      hits: [{ path: 'src/main/files.ts' }]
+    })
+  })
+
+  it('matches nothing for a blank query', () => {
+    expect(searchFiles(files, '  ', 10).total).toBe(0)
   })
 })

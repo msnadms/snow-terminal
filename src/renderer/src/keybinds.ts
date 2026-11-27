@@ -17,6 +17,7 @@ export type KeybindAction =
   | 'focusDown'
   | 'focusUp'
   | 'focusRight'
+  | 'searchFiles'
 
 export const defaultKeybinds: Record<KeybindAction, string> = {
   newTab: 'Mod+Shift+T',
@@ -34,7 +35,8 @@ export const defaultKeybinds: Record<KeybindAction, string> = {
   focusLeft: 'Mod+Shift+H',
   focusDown: 'Mod+Shift+J',
   focusUp: 'Mod+Shift+K',
-  focusRight: 'Mod+Shift+L'
+  focusRight: 'Mod+Shift+L',
+  searchFiles: 'Mod+;'
 }
 
 export type PresetDigitAction = 'splitPreset' | 'openPreset'

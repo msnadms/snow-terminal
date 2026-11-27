@@ -369,7 +369,8 @@ Named actions: `newTab`, `closeTab`, `nextTab`/`prevTab` (defaults `Mod+Shift+}`
 characters, since `e.key` reports `}`), `newSplit`, `diffSplit`, `runCommand` (toggles
 `commandItems[0]`), `switchRepo`, `openWorkflows`, `focusCommit` (resolved by `.actionbar-input`),
 `pushRemote` (registered inside **`ActionBar`**, since `ahead`/`sync` live there; handler undefined
-unless `ahead > 0` or `!tracking`).
+unless `ahead > 0` or `!tracking`), `searchFiles` (`Mod+;`, Visual Studio's binding: switches the panel to Files and focuses its
+search box).
 
 `focusLeft`/`focusDown`/`focusUp`/`focusRight` (`Mod+Shift+H/J/K/L`) are owned by **`Session`**, where
 the geometry lives: `H`/`L` step through top panes, `J` drops to the bottom shell, `K` returns to the
@@ -562,10 +563,11 @@ The side panel's view is **per tab**, held in `App` as `panelChoices` (the user'
 `panelViews` in `appModel.ts` is the one ordered list of views; `SidePanel` maps it through a
 `Record<PanelView, PanelTab>` (`icon`, `title`, `keepMounted`, `render(hidden)`), so the compiler
 demands an entry for every view, and each view takes its own props group (`git`, `links`) rather
-than one flat prop list. A view may raise itself through `App`'s `panelSignals` (Links signals its
-link-set signature): `panelViewFor` picks the first view, in `panelViews` order, whose signal is set
-and differs from the one the choice saw, so returning to a tab whose links were already shown leaves
-the panel where it is. Choosing a view marks every current signal seen. Git is `keepMounted` — its
+than one flat prop list. A view never raises itself: it flags itself through `App`'s `panelSignals`
+(Links signals its link-set signature), and `unseenPanelViews` marks every view other than the one
+showing whose signal is set and differs from the one the choice saw, drawn as a dot on that tab's
+icon. `choosePanel` marks seen only the view being left and the view chosen, so switching Git → Files
+keeps the Links dot. Git is `keepMounted` — its
 repo sections are hidden, not unmounted, so their watchers and loaded state survive the switch;
 other views mount only while showing. `GitPanel.tsx` now exports only the Git view (`GitView`).
 
@@ -575,7 +577,7 @@ gitignored entries flagged by one `check-ignore --stdin` and dimmed. The same li
 directory's own `repo` (`rev-parse --show-toplevel --show-prefix`), so a clicked file maps to
 `{ root, prefix + name }` with no repo scan: a submodule, a nested repo or one several levels below a
 non-repo parent resolves correctly, and git's own prefix survives symlinks and case. A directory in no
-repo disables its files. Every expanded folder re-lists on showing the view and on Refresh; collapsing
+repo disables its files. Every expanded folder re-lists on showing the view (there is no Refresh button — the watchers below cover it); collapsing
 a folder drops every expanded folder below it (`collapseDir`), so nothing invisible stays watched. A
 filesystem root keeps its separator (`treeRoot`, `childPath`) — `C:` alone means the drive's current
 directory.
@@ -606,7 +608,21 @@ it is held no watcher below it arms, by re-list or by a fresh `files:watch`. Rel
 and broadcasts `files:changed` whichever way the removal went. Git's stderr is ignored, not piped, so
 a chatty `check-ignore` cannot block on a full pipe until the timeout kills it. The tree tags each listing per folder and keeps only the latest, so a slow
 `check-ignore` cannot land a stale listing over a newer one. Output from git is collected as Buffers and decoded once,
-so a multi-byte name split across chunks still matches. Clicking
+so a multi-byte name split across chunks still matches. The search box above the tree works like Visual Studio's Solution Explorer: a case-insensitive
+substring match on file **and** folder names across the whole tree, not just what is expanded, shown
+as a filtered tree with every ancestor open and the match highlighted (`searchTree`, `matchParts`).
+`files:search` builds an index of root-relative paths — `ls-files -s` plus
+`ls-files -o --exclude-standard` wherever a repo answers (so gitignored files are not searched, and each
+hit carries its `{ root, path }` target), a plain walk elsewhere. It descends into nested repos: an
+untracked one `-o` reports as `dir/`, and a submodule, which only `-s` can tell from a file (mode
+`160000`). `-s` lists a conflicted path once per stage, so paths are deduped. Those two calls get
+`indexGitTimeoutMs`, not the 2 s `check-ignore` budget, and a repo whose listing still fails is skipped
+and marks the index `partial` rather than walked — a walk would surface gitignored files as disabled
+rows. The index is capped at `maxWalkedDirs`/`maxIndexedFiles` (`partial` says so) and cached for
+`indexTtlMs` **from when it finishes**, with the in-flight build shared, so a walk slower than the TTL
+is never started twice. Matching folds case per code point (`foldCase`, mirrored in `appModel.ts`) so
+`matchParts` can map a highlight back onto a name whose lowercase form changes length. Hits are capped at `maxSearchHits` with `total` counting all. A matched
+folder with no matching descendants reveals itself in the ordinary tree on click. Clicking
 opens a `{ kind: 'file' }` tab (deduped on root + path; reopening an existing one moves its `treeCwd` and panel to Files too) rendering `CodeLinkView` without a line, so it
 shows the file's diff when it has one and the whole file otherwise. A file tab carries `treeCwd` — the
 directory the tree showed — and opens with the panel on Files, so clicking a file neither re-roots the

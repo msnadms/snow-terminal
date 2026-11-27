@@ -10,7 +10,11 @@ import {
   collapseDir,
   fileTarget,
   treeRoot,
+  matchParts,
+  searchTree,
   panelViewFor,
+  unseenPanelViews,
+  choosePanel,
   moveTab,
   moveTabGroup,
   presetIndexFor,
@@ -244,16 +248,37 @@ describe('turns', () => {
 })
 
 describe('panelViewFor', () => {
-  it('raises a view whose signal changed, then honours the choice', () => {
-    expect(panelViewFor(undefined, {})).toBe('git')
-    expect(panelViewFor(undefined, { links: 'a' })).toBe('links')
-    expect(panelViewFor({ view: 'git', seen: { links: 'a' } }, { links: 'a' })).toBe('git')
-    expect(panelViewFor({ view: 'git', seen: { links: 'a' } }, { links: 'b' })).toBe('links')
-    expect(panelViewFor({ view: 'links', seen: {} }, {})).toBe('links')
+  it('honours the choice and never raises a view on its own', () => {
+    expect(panelViewFor(undefined)).toBe('git')
+    expect(panelViewFor({ view: 'git', seen: {} })).toBe('git')
+    expect(panelViewFor({ view: 'links', seen: {} })).toBe('links')
+  })
+})
+
+describe('unseenPanelViews', () => {
+  it('marks a hidden view whose signal changed', () => {
+    expect(unseenPanelViews(undefined, {})).toEqual([])
+    expect(unseenPanelViews(undefined, { links: 'a' })).toEqual(['links'])
+    expect(unseenPanelViews({ view: 'git', seen: { links: 'a' } }, { links: 'a' })).toEqual([])
+    expect(unseenPanelViews({ view: 'git', seen: { links: 'a' } }, { links: 'b' })).toEqual([
+      'links'
+    ])
+    expect(unseenPanelViews({ view: 'git', seen: { links: 'a' } }, {})).toEqual([])
   })
 
-  it('ignores a signal that disappeared since the choice', () => {
-    expect(panelViewFor({ view: 'git', seen: { links: 'a' } }, {})).toBe('git')
+  it('never marks the view showing', () => {
+    expect(unseenPanelViews({ view: 'links', seen: {} }, { links: 'a' })).toEqual([])
+  })
+})
+
+describe('choosePanel', () => {
+  it('marks only the left and chosen views seen', () => {
+    const signals = { links: 'b' }
+    const toFiles = choosePanel({ view: 'git', seen: { links: 'a' } }, 'files', signals)
+    expect(unseenPanelViews(toFiles, signals)).toEqual(['links'])
+    const toLinks = choosePanel(toFiles, 'links', signals)
+    const back = choosePanel(toLinks, 'git', { links: 'c' })
+    expect(unseenPanelViews(back, { links: 'c' })).toEqual([])
   })
 })
 
@@ -304,5 +329,53 @@ describe('changedDirs', () => {
 
   it('re-lists everything expanded below the folder when the names are unknown', () => {
     expect(changedDirs(expanded, '/w/dist', null)).toEqual(['/w/dist', '/w/dist/js'])
+  })
+})
+
+describe('searchTree', () => {
+  it('nests hits under their ancestors, sorted directories first', () => {
+    const target = { root: '/r', path: 'src/b.ts' }
+    const tree = searchTree([
+      { path: 'src/b.ts', dir: false, target },
+      { path: 'src/lib', dir: true, target: null },
+      { path: 'src/lib/a.ts', dir: false, target: null },
+      { path: 'a.ts', dir: false, target: null }
+    ])
+    expect(tree.map((node) => node.name)).toEqual(['src', 'a.ts'])
+    const [src] = tree
+    expect(src.match).toBe(false)
+    expect(src.children.map((node) => [node.name, node.match])).toEqual([
+      ['lib', true],
+      ['b.ts', true]
+    ])
+    expect(src.children[0].children.map((node) => node.path)).toEqual(['src/lib/a.ts'])
+    expect(src.children[1].target).toBe(target)
+  })
+})
+
+describe('matchParts', () => {
+  it('splits every case-insensitive occurrence', () => {
+    expect(matchParts('FileTree.tsx', 'tree')).toEqual([
+      { text: 'File', match: false },
+      { text: 'Tree', match: true },
+      { text: '.tsx', match: false }
+    ])
+    expect(matchParts('aXa', 'a').filter((part) => part.match)).toHaveLength(2)
+  })
+
+  it('leaves the name whole for an empty query', () => {
+    expect(matchParts('a.ts', '  ')).toEqual([{ text: 'a.ts', match: false }])
+  })
+
+  it('highlights a name whose lowercase form changes length', () => {
+    expect(matchParts('İndex.ts', 'ndex')).toEqual([
+      { text: 'İ', match: false },
+      { text: 'ndex', match: true },
+      { text: '.ts', match: false }
+    ])
+    expect(matchParts('İndex.ts', 'i')).toEqual([
+      { text: 'İ', match: true },
+      { text: 'ndex.ts', match: false }
+    ])
   })
 })
